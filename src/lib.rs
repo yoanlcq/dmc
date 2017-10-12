@@ -11,14 +11,29 @@
 #![doc(test(attr(deny(warnings))))]
 #![cfg_attr(feature="cargo-clippy", allow(doc_markdown))]
 
-// TODO "log!" everything
+extern crate num_traits;
+extern crate uuid;
+extern crate vek;
+#[macro_use]
+extern crate log;
+
+
+// Main plan for today:
+// - Review the architecture of Display and events;
+// - log! everything
+// - Have the basics of CI
+
+pub use vek::vec::repr_c::{
+    Xyz, Xy, Extent2, Rgba,
+};
+pub type Rgba32 = Rgba<u8>;
 
 pub mod semver;
 pub use semver::Semver;
 pub mod display;
 pub use display::Display;
-pub mod game_input_device;
-pub use game_input_device::{GameInputDevice, Dpad, Minmax, SignedAxis, UnsignedAxis};
+pub mod hid;
+pub use hid::{GameInputDevice, Dpad, Minmax, SignedAxis, UnsignedAxis};
 pub mod event;
 pub use event::{EventQueue, Clipboard, TextInput};
 pub mod battery;
@@ -30,5 +45,3 @@ pub use option_alternatives::Decision;
 pub use option_alternatives::Knowledge;
 pub use option_alternatives::Decision::*;
 pub use option_alternatives::Knowledge::*;
-pub mod vec;
-pub use vec::*;

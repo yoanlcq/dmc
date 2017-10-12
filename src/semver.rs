@@ -1,4 +1,10 @@
-//! The Semver (Semantic versioning) struct.
+//! Stripped-down Semver (Semantic versioning) struct.
+//!
+//! We don't use the `semver` crate because its `Version` structure has
+//! `Vec`s in it and therefore assumes `std` (also `Version` is not `Copy`).
+//!
+//! We actually use versions only for OpenGL and such, which just requires
+//! a triplet of integers and super basic functionality.
 
 /// Semantic versioning structure ([semver.org](http://semver.org)): 
 /// that is, a version number in the `major.minor.patch` format.

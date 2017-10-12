@@ -60,7 +60,7 @@
 //! 
 //! Here, `settings` represents the absolute minimum information
 //! that needs to be known at window creation time (here, we use its
-//! From implementation which takes a fixed size and set all other fields
+//! `From` implementation which takes a fixed size and set all other fields
 //! to their target-specific default values, but if you want, you can
 //! initialize all of the fields one-by-one yourself).  
 //! Anything else, such as the window's title, is optional and can be 
@@ -153,23 +153,18 @@ mod backend;
 // - Get DPI
 // - Get Grabbed window
 // - More feature-complete messageboxes
+// - Set cursor
 
 use std::path::Path;
-use std::os::raw::{c_void, c_char};
-use Decision;
-use Extent2;
-use Rgba32;
-use Semver;
+use std::time::Duration;
+use std::os::raw::{c_char};
+use super::{Decision, Semver, Rgba32, Extent2, Xy};
 
 pub mod window {
 
     //! Module related to window initialization and management.
 
-    use super::Extent2;
-    use super::Rgba32;
-    use super::backend;
-    use super::Error;
-    use super::Decision;
+    use super::*;
 
     /// Full screen, or fixed-size.
     #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -189,15 +184,17 @@ pub mod window {
     /// The `Default` implementation picks the most permissive values, except
     /// for `fully_opaque` which is set to `true`, because people seldom
     /// need semi-transparent windows.
-    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-    pub struct Settings {
+    #[derive(Debug, PartialEq)]
+    pub struct Settings<'dpy> {
         /// Specifies whether you want a full-screen or fixed-size window.
         /// The default value is a `FixedSize` obtained by a heuristic
         /// based on the desktop's available size, which picks a size
         /// that leaves reasonable space around the window.
         pub mode: Mode,
-        /// Support OpenGL contexts ? (defaults to `true`)
-        pub opengl: bool,
+        /// Support OpenGL ? (defaults to `None`).
+        /// The settings need to be known beforehand so that the window
+        /// can use the proper pixel format at the time of its creation.
+        pub opengl: Option<&'dpy GLPixelFormat<'dpy>>,
         /// `true` by default -
         /// If `false`, the window won't be resizable, not even manually by
         /// the user. Also keep in mind that some targets (other than 
@@ -225,10 +222,10 @@ pub mod window {
         }
     }
 
-    impl Default for Settings {
+    impl<'dpy> Default for Settings<'dpy> {
         fn default() -> Self {
             Self {
-                opengl: true,
+                opengl: None,
                 resizable: true,
                 allow_high_dpi: true,
                 fully_opaque: true,
@@ -282,7 +279,7 @@ pub mod window {
         }
     }
 
-    impl<T: Into<Extent2<u32>>> From<T> for Settings {
+    impl<'dpy, T: Into<Extent2<u32>>> From<T> for Settings<'dpy> {
         fn from(size: T) -> Self {
             Self {
                 mode: Mode::from(size),
@@ -302,9 +299,9 @@ pub mod window {
     // docs beforehand, in which case they know.
     //#[must_use = "Window operations often succeed, but might fail on some platforms, or if you did not opt-in for the relevant capabilities."]
     #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-    pub enum WindowOpResult {
+    pub enum WindowOpResult<T> {
         #[allow(missing_docs)]
-        Success,
+        Success(T),
         #[allow(missing_docs)]
         Failed { reason: Option<&'static str> },
         /// An operation on a `Window` might be unsupported by the
@@ -321,19 +318,19 @@ pub mod window {
         Unimplemented,
     }
 
-    impl WindowOpResult {
+    impl<T> WindowOpResult<T> {
         /// Purposefully ignore this result.
         /// 
         /// This is equivalent to `let _ = window.some_method();`.
         pub fn ignore(self) {}
         /// Assert a value of `Success`, trigerring a panic if it is not.
-        pub fn unwrap(self) {
+        pub fn unwrap(self) -> T where T: ::std::fmt::Debug {
             self.into_result().unwrap()
         }
         /// Consume this value by converting it to a standard `Result`.
-        pub fn into_result(self) -> Result<(),Self> {
+        pub fn into_result(self) -> Result<T,Self> {
             match self {
-                WindowOpResult::Success => Ok(()),
+                WindowOpResult::Success(x) => Ok(x),
                 _ => Err(self),
             }
         }
@@ -348,25 +345,25 @@ pub mod window {
     #[allow(missing_docs)]
     #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
     pub struct Capabilities {
-        pub hide: WindowOpResult,
-        pub show: WindowOpResult,
-        pub set_title: WindowOpResult,
-        pub set_icon: WindowOpResult,
-        pub set_style: WindowOpResult,
-        pub recenter: WindowOpResult,
-        pub set_opacity: WindowOpResult,
-        pub maximize: WindowOpResult,
-        pub minimize: WindowOpResult,
-        pub restore: WindowOpResult,
-        pub raise: WindowOpResult,
-        pub enter_fullscreen: WindowOpResult,
-        pub leave_fullscreen: WindowOpResult,
-        pub set_minimum_size: WindowOpResult,
-        pub set_maximum_size: WindowOpResult,
-        pub move_absolute: WindowOpResult,
-        pub move_relative_to_parent: WindowOpResult,
-        pub move_relative_to_self: WindowOpResult,
-        pub resize: WindowOpResult,
+        pub hide: WindowOpResult<()>,
+        pub show: WindowOpResult<()>,
+        pub set_title: WindowOpResult<()>,
+        pub set_icon: WindowOpResult<()>,
+        pub set_style: WindowOpResult<()>,
+        pub recenter: WindowOpResult<()>,
+        pub set_opacity: WindowOpResult<()>,
+        pub maximize: WindowOpResult<()>,
+        pub minimize: WindowOpResult<()>,
+        pub restore: WindowOpResult<()>,
+        pub raise: WindowOpResult<()>,
+        pub enter_fullscreen: WindowOpResult<()>,
+        pub leave_fullscreen: WindowOpResult<()>,
+        pub set_minimum_size: WindowOpResult<()>,
+        pub set_maximum_size: WindowOpResult<()>,
+        pub move_absolute: WindowOpResult<()>,
+        pub move_relative_to_parent: WindowOpResult<()>,
+        pub move_relative_to_self: WindowOpResult<()>,
+        pub resize: WindowOpResult<()>,
     }
 
     /// The closest possible representation of a desktop window.
@@ -385,25 +382,25 @@ pub mod window {
         }
 
         /// A window won't appear until this method is called.
-        pub fn show(&self) -> WindowOpResult { self.0.show() }
+        pub fn show(&self) -> WindowOpResult<()> { self.0.show() }
         /// The obvious reciprocal of `show()`.
-        pub fn hide(&self) -> WindowOpResult { self.0.hide() }
+        pub fn hide(&self) -> WindowOpResult<()> { self.0.hide() }
 
         /// Sets the window's title.
-        pub fn set_title(&self, title: &str) -> WindowOpResult {
+        pub fn set_title(&self, title: &str) -> WindowOpResult<()> {
             self.0.set_title(title)
         }
         #[allow(missing_docs)]
-        pub fn set_icon<I: Into<Option<Icon>>>(&self, icon: I) -> WindowOpResult {
+        pub fn set_icon<I: Into<Option<Icon>>>(&self, icon: I) -> WindowOpResult<()> {
             self.0.set_icon(icon.into())
         }
         /// Attempts to set the window's borders.
-        pub fn set_style(&self, style: &Style) -> WindowOpResult {
+        pub fn set_style(&self, style: &Style) -> WindowOpResult<()> {
             self.0.set_style(style)
         }
         /// Centers a window relatively to the space it is in, with regards to
         /// its size.
-        pub fn recenter(&self) -> WindowOpResult {
+        pub fn recenter(&self) -> WindowOpResult<()> {
             self.0.recenter()
         }
 
@@ -412,7 +409,7 @@ pub mod window {
         /// 
         /// Valid values for `opacity` range from 0 to 1 (both inclusive).  
         /// You're expected to clamp the value yourself if needed.
-        pub fn set_opacity(&self, opacity: f32) -> WindowOpResult {
+        pub fn set_opacity(&self, opacity: f32) -> WindowOpResult<()> {
             self.0.set_opacity(opacity)
         }
 
@@ -471,13 +468,13 @@ pub mod window {
 
         /// Attempts to maximize the window (as in, take as much space as
         /// possible).
-        pub fn maximize(&self) -> WindowOpResult { self.0.maximize() }
+        pub fn maximize(&self) -> WindowOpResult<()> { self.0.maximize() }
         /// Attempts to minimize the window (as in, minimize to task bar).
-        pub fn minimize(&self) -> WindowOpResult { self.0.minimize() }
+        pub fn minimize(&self) -> WindowOpResult<()> { self.0.minimize() }
         /// The reciprocal of `minimize()`.
-        pub fn restore(&self) -> WindowOpResult { self.0.restore() }
+        pub fn restore(&self) -> WindowOpResult<()> { self.0.restore() }
         /// Attempts to set the window on top of the stack and request focus.
-        pub fn raise(&self) -> WindowOpResult { self.0.raise() }
+        pub fn raise(&self) -> WindowOpResult<()> { self.0.raise() }
         /// Attempts to go full-screen.
         /// 
         /// The `Window` struct doesn't keep track of an `is_fullscreen`
@@ -485,47 +482,60 @@ pub mod window {
         /// won't perform the checks for you.
         /// However, for convenience, it saves the window's current size
         /// to automatically restore it whenever leaving full-screen mode.
-        pub fn enter_fullscreen(&self) -> WindowOpResult { self.0.enter_fullscreen() }
+        pub fn enter_fullscreen(&self) -> WindowOpResult<()> { self.0.enter_fullscreen() }
         /// Attempts to leave full-screen mode.
         /// 
         /// See `enter_fullscreen()`.
-        pub fn leave_fullscreen(&self) -> WindowOpResult { self.0.leave_fullscreen() }
+        pub fn leave_fullscreen(&self) -> WindowOpResult<()> { self.0.leave_fullscreen() }
 
         /// Unconditionnally prevents the window's size from going below the
         /// given threshold.
-        pub fn set_minimum_size(&self, size: Extent2<u32>) -> WindowOpResult {
+        pub fn set_minimum_size(&self, size: Extent2<u32>) -> WindowOpResult<()> {
             self.0.set_minimum_size(size)
         }
         /// Unconditionnally prevents the window's size from going above the
         /// given threshold.
-        pub fn set_maximum_size(&self, size: Extent2<u32>) -> WindowOpResult {
+        pub fn set_maximum_size(&self, size: Extent2<u32>) -> WindowOpResult<()> {
             self.0.set_maximum_size(size)
         }
         /// Moves the window to the given absolute position in 
         /// desktop-space.  
         /// 
         /// The anchor is the window's top-left corner.
-        pub fn move_absolute(&self, pos: Extent2<u32>) -> WindowOpResult {
+        pub fn move_absolute(&self, pos: Extent2<u32>) -> WindowOpResult<()> {
             self.0.move_absolute(pos)
         }
         /// Moves the window relatively to itself in 
         /// desktop-space.  
         /// 
         /// The anchor is the window's top-left corner.
-        pub fn move_relative_to_self(&self, pos: Extent2<u32>) -> WindowOpResult {
+        pub fn move_relative_to_self(&self, pos: Extent2<u32>) -> WindowOpResult<()> {
             self.0.move_relative_to_self(pos)
         }
         /// Moves the window relatively to its parent, if any.  
-        /// Otherwise, this is resolves to `move_absolute()`.
+        /// Otherwise, this resolves to `move_absolute()`.
         /// 
         /// The anchor is the window's top-left corner.
-        pub fn move_relative_to_parent(&self, pos: Extent2<u32>) -> WindowOpResult {
+        pub fn move_relative_to_parent(&self, pos: Extent2<u32>) -> WindowOpResult<()> {
             self.0.move_relative_to_parent(pos)
         }
         /// Attempts to set the window's screen-space size.
-        pub fn resize(&self, size: Extent2<u32>) -> WindowOpResult {
+        pub fn resize(&self, size: Extent2<u32>) -> WindowOpResult<()> {
             self.0.resize(size)
         }
+
+        // XQueryBestCursor
+        // XCreatePixmapCursor
+        // XDefineCursor, XUndefineCursor
+        // XRecolorCursor
+        // XFreeCursor
+        pub fn is_cursor_shown(&self) -> WindowOpResult<bool> { unimplemented!{} }
+        pub fn show_cursor(&self) -> WindowOpResult<()> { unimplemented!{} }
+        pub fn hide_cursor(&self) -> WindowOpResult<()> { unimplemented!{} }
+        pub fn set_cursor(&self, cursor: &Cursor) -> WindowOpResult<()> { unimplemented!{} }
+        pub fn cursor(&self) -> WindowOpResult<&Cursor> { unimplemented!{} }
+        pub fn move_cursor(&self, pos: Xy<u32>) -> WindowOpResult<()> { unimplemented!{} }
+        pub fn get_cursor_position(&self) -> WindowOpResult<Xy<u32>> { unimplemented!{} }
     }
 }
 use self::window::{Window, Settings, Style, Icon};
@@ -540,6 +550,42 @@ pub enum Error {
     /// Backend-specific error.
     Backend(backend::Error)
 }
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct Cursor<'dpy>(backend::Cursor<'dpy>);
+
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+pub enum SystemCursor {
+    Arrow,
+    Hand,
+    Ibeam,
+    Wait,
+    Crosshair,
+    WaitArrow,
+    SizeNorthWestToSouthEast,
+    SizeNorthEastToSouthWest,
+    SizeVertical,
+    SizeHorizontal,
+    SizeAll,
+    Deny,
+}
+
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct CursorImage; // TODO
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct CursorFrameBuilder {
+    pub hotspot: Xy<u32>,
+    pub image: CursorImage,
+    pub duration: Duration,
+}
+
+#[derive(Debug)]
+pub struct CursorBuilder<'a> {
+    pub frames: &'a [CursorFrameBuilder],
+}
+
 
 /// A handle to the platform-specific display backend.
 /// 
@@ -562,6 +608,16 @@ impl<'dpy> Display {
         backend::Display::open_x11_display_name(name).map(Display)
     }
     
+    /// Attempts to retrieve the best pixel format for OpenGL-enabled windows
+    /// and OpenGL contexts, given relevant settings.
+    ///
+    /// In the future, this might be improved by directly providing you
+    /// with a list of candidates from which you can choose.
+    pub fn choose_gl_pixel_format(&'dpy self, settings: &GLPixelFormatSettings)
+        -> Result<GLPixelFormat<'dpy>, Error>
+    {
+        self.0.choose_gl_pixel_format(settings).map(GLPixelFormat)
+    }
 
     /// Attempts to create a `Window` with the given settings.
     pub fn create_window(&'dpy self, settings: &Settings) -> Result<Window<'dpy>, Error> {
@@ -575,8 +631,8 @@ impl<'dpy> Display {
         Ok(w)
     }
     /// Attempts to create a backend-specific OpenGL context.
-    pub fn create_gl_context(&'dpy self, settings: &GLContextSettings) -> Result<GLContext<'dpy>,Error> {
-        self.0.create_gl_context(settings).map(GLContext)
+    pub fn create_gl_context(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) -> Result<GLContext<'dpy>,Error> {
+        self.0.create_gl_context(&pf.0, cs).map(GLContext)
     }
     /// Sames as `create_gl_context()`, but attempts to get a
     /// context that is not hardware-accelerated (on some platforms, this
@@ -588,15 +644,19 @@ impl<'dpy> Display {
     /// other words, this will succeed only if it is certain that there
     /// is a software implementation available AND a context could be created
     /// out of it.
-    pub fn create_software_gl_context(&'dpy self, settings: &GLContextSettings) -> Result<GLContext<'dpy>,Error> {
-        self.0.create_software_gl_context(settings).map(GLContext)
+    pub fn create_software_gl_context(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) -> Result<GLContext<'dpy>,Error> {
+        self.0.create_software_gl_context(&pf.0, cs).map(GLContext)
     }
 
     /// Attempts to create an OpenGL context from a dynamically-loaded 
     /// library.
-    pub fn create_gl_context_from_lib<P: AsRef<Path>>(&'dpy self, _settings: &GLContextSettings, _path: P) -> Result<GLContext<'dpy>,Error> {
+    pub fn create_gl_context_from_lib<P: AsRef<Path>>(&'dpy self, _pf: &GLPixelFormat, _cs: &GLContextSettings, _path: P) -> Result<GLContext<'dpy>,Error> {
         unimplemented!()
     }
+
+    pub fn best_cursor_size(&'dpy self, size_hint: Extent2<u32>) -> Extent2<u32> { unimplemented!{} }
+    pub fn create_cursor(&'dpy self, anim: CursorBuilder) -> Result<Cursor<'dpy>, Error> { unimplemented!{} }
+    pub fn system_cursor(&'dpy self, s: SystemCursor) -> Result<Cursor<'dpy>, Error> { unimplemented!{} }
 }
 
 
@@ -636,6 +696,19 @@ pub struct GLSwapChain<'win,'gl:'win,'dpy:'gl> {
 pub enum GLVariant {
     Desktop,
     ES,
+}
+
+#[allow(missing_docs)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GLContextResetNotificationStrategy {
+    NoResetNotification,
+    LoseContextOnReset,
+}
+
+#[allow(missing_docs)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct GLRobustAccess {
+    pub context_reset_notification_strategy: GLContextResetNotificationStrategy,
 }
 
 /// Known OpenGL version numbers.
@@ -743,50 +816,42 @@ impl GLVersion {
     }
 }
 
-#[allow(missing_docs)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum Requirement<'a, T: 'a> {
-    /// The default.
-    HighestAvailable,
-    LowestAvailable,
-    AtLeast(T),
-    AtMost(T),
-    Exactly(T),
-    TryInOrder(&'a [T]),
-}
-
-#[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct GLMsaa {
-    /// Number of MSAA buffers Should be 1.
-    buffer_count: u8,
-    /// Nmber of samples per pixel. Should be a power of two.
-    sample_count: u8,
-}
-
 /// Settings requested for an OpenGL context.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct GLContextSettings<'a> {
-    /// MultiSample AntiAliasing setting.
-    pub msaa: Requirement<'a, GLMsaa>,
-    /// Strategy to adopt regarding the OpenGL version when attempting
-    /// to crate the OpenGL context.  
-    /// The implementation will attempt to honor this in a best-effort
-    /// basis, but cannot guarantee anything (some backends simply don't
-    /// provide that level of control).
-    /// This does not change the requested OpenGL profile.
-    pub version: Requirement<'a, GLVersion>,
-    /// Requirements (or not) a debug context.
-    pub debug : bool,
+pub struct GLContextSettings {
+    /// Hints the OpenGL version to use. Setting it to `Auto` will try to
+    /// pick the highest possible or a reasonably modern one.
+    pub version: Decision<GLVersion>,
+    /// Do we want a debug context ?
+    pub debug: bool,
     /// Only used when the requested OpenGL version is 3.0 or 
     /// greater.
     pub forward_compatible: bool, // 3.0+
+    /// Enables the "robust access" bit in context flags, if the backend
+    /// supports the extension.
+    pub robust_access: Option<GLRobustAccess>,
     /// Only used vhen the requested OpenGL version is 3.2 or
     /// greater.
     /// 
     /// If you set it to Auto, the implementation will
     /// attempt to open a Compatibility profile, and if
     /// it fails, open a Core profile.
-    pub profile : Decision<GLProfile>,
+    pub profile: Decision<GLProfile>,
+}
+
+#[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct GLMsaa {
+    /// Number of MSAA buffers. If it's zero, no MSAA takes place.
+    pub buffer_count: u32,
+    /// Number of samples per pixel. Should be a power of two.
+    pub sample_count: u32,
+}
+
+/// Settings requested for an OpenGL pixel format.
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct GLPixelFormatSettings {
+    /// MultiSample AntiAliasing setting.
+    pub msaa: GLMsaa,
     /// Number of bits used for storing per-fragment depth values.  
     /// Often set to 24.
     pub depth_bits: u8,
@@ -826,14 +891,10 @@ pub struct GLContextSettings<'a> {
 }
 
 
-impl<'a> Default for GLContextSettings<'a> {
+impl Default for GLPixelFormatSettings {
     fn default() -> Self {
         Self {
-            msaa: Requirement::HighestAvailable,
-            version: Requirement::HighestAvailable,
-            debug: true,
-            forward_compatible: true, // 3.0+
-            profile : Default::default(),
+            msaa: Default::default(),
             depth_bits: 24,
             stencil_bits: 8,
             double_buffer: true,
@@ -851,31 +912,58 @@ impl<'a> Default for GLContextSettings<'a> {
     }
 }
 
-impl<'a> GLContextSettings<'a> {
+impl Default for GLContextSettings {
+    fn default() -> Self {
+        Self {
+            version: Decision::Auto,
+            debug: true,
+            forward_compatible: true, // 3.0+
+            profile: Default::default(),
+            robust_access: None,
+        }
+    }
+}
+
+impl GLContextSettings {
     /// TODO this function checks the correctness of these settings.
     /// For instance, it reports that not using double buffering is 
     /// deprecated.
-    pub fn sanitize(&self) -> GLContextSettings<'static> {
+    pub fn sanitize(&self) -> GLContextSettings {
         unimplemented!()
     }
 }
+
+
+#[derive(Debug, PartialEq)]
+pub struct GLPixelFormat<'dpy>(backend::GLPixelFormat<'dpy>);
 
 impl<'win,'gl:'win,'dpy:'gl> GLContext<'dpy> {
     /// Lowers to the plaftorm-specific "<xxglxx>ContextMakeCurrent()",
     /// and handles back a "Swap Chain" object which lives as long as both
     /// the target window and the OpenGL context.
+    ///
+    /// FIXME: There's no way to prevent SwapChains from co-existing.
+    /// There's no mechanism to prevent users from using a SwapChain that was
+    /// created before another "make_current".
     pub fn make_current(&'gl self, window: &'win Window<'dpy>) -> GLSwapChain<'win,'gl,'dpy> {
         self.0.make_current(&window.0);
         let out = GLSwapChain { window, gl_context: self };
+        /*
         if out.set_interval(Default::default()).is_err() {
             out.set_interval(GLSwapInterval::LimitFps(60)).unwrap();
         }
+        */
         out
     }
 
     /// Retrieves the OpenGL function pointer for the given name.
-    pub unsafe fn get_proc_address(&self, name: *const c_char) -> Option<*const c_void> {
+    // XXX Will the "C" calling convention be correct in all cases ?
+    pub fn get_proc_address(&self, name: &str) -> Option<unsafe extern "C" fn()> {
         self.0.get_proc_address(name)
+    }
+    /// Retrieves the OpenGL function pointer for the given name (C-string version).
+    pub unsafe fn get_proc_address_raw(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
+        self.0.get_proc_address_raw(name)
     }
 }
 
@@ -893,7 +981,7 @@ impl<'win,'gl:'win,'dpy:'gl> GLSwapChain<'win, 'gl, 'dpy> {
     }
 
     /// Attempts to set the chain's swap interval. 
-    // FIXME: This doesn't need a GLSwapInterval enum
+    // FIXME: This doesn't need a GLSwapInterval enum when passing it internally ??
     pub fn set_interval(&self, interval: GLSwapInterval) -> Result<(),Error> {
         self.window.0.gl_set_swap_interval(interval)
     }

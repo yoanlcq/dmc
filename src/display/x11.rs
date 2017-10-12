@@ -20,10 +20,9 @@
 // Missing features:
 // - Copy contexts
 // - Share contexts (at glXCreateContext)
-// - Destroy contexts
 // - Off-screen rendering
 //
-// TODO: Talk a bit about how X11 UsefulAtoms are like Keys or Values for 
+// TODO: Talk a bit about how X11 PreparedAtoms are like Keys or Values for 
 // Properties.
 //
 // The plan:
@@ -59,72 +58,85 @@
 
 extern crate x11;
 use self::x11::xlib as x;
-use self::x11::glx;
-
-// Extra definitions that the x11 crate doesn't have
-// (yet ? the crate version is 2.14.0 right now)
-mod xx {
-    pub const NONE: i32 = 0;
-
-    pub const GLX_VENDOR: i32 = 1;
-    pub const GLX_VERSION: i32 = 2;
-    pub const GLX_EXTENSIONS: i32 = 3;
-
-    // See https://dri.freedesktop.org/wiki/glXGetProcAddressNeverReturnsNULL/
-    // for a rationale.
-    // Worth noting that it mentions Linux, but Linux is not the only OS
-    // which X11 can run on.
-    // SDL2 settles this by calling dlopen(DEFAULT_OPENGL), given:
-    //     #if defined(__IRIX__)
-    //     /* IRIX doesn't have a GL library versioning system */
-    //     #define DEFAULT_OPENGL  "libGL.so"
-    //     #elif defined(__MACOSX__)
-    //     #define DEFAULT_OPENGL  "/usr/X11R6/lib/libGL.1.dylib"
-    //     #elif defined(__QNXNTO__)
-    //     #define DEFAULT_OPENGL  "libGL.so.3"
-    //     #else
-    //     #define DEFAULT_OPENGL  "libGL.so.1"
-    //     #endif
-    // then a bunch of glX functions are loaded from it.
-    // 
-    // But it's 2017 now, so I _really_ don't want to handle the 
-    // 0.0001% of people whose libGL doesn't export GLX 1.4 functions 
-    // (it's been around since 2011).
-    // At some point you've gotta be sane.
-    //
-    // This _might_ cause issues later, but then it's the x11 crate which
-    // would require some adjustments (i.e features to disable linking against
-    // GLX 1.4 APIs).
-    // OR define function types and load them all ourself.
-    //
-    // extern {
-    //     pub fn glXGetProcAddressARB(name: *const c_uchar) -> Option<unsafe extern fn()>;
-    // }
-}
-
+use self::x11::glx::*;
+use self::x11::glx::arb::*;
 use std::fmt::{self, Formatter};
 use std::ptr;
 use std::mem;
 use std::ffi::*;
-use std::os::raw::{c_void, c_char, c_int};
+use std::os::raw::{c_char, c_int};
+use std::sync::atomic::{AtomicBool, ATOMIC_BOOL_INIT, Ordering};
 
-use Extent2;
+use super::Extent2;
 
-use super::{
-    Semver,
-    GLSwapInterval,
-    GLContextSettings,
-    Settings,
-    Icon,
-    Style,
-};
+use Semver;
+
+use super::*;
 use super::window::{
     Capabilities,
     WindowOpResult,
 };
 
 
+mod types {
+    #![allow(non_camel_case_types)]
+    use super::*;
+    pub type glXGetProcAddress = unsafe extern fn(*const u8) -> Option<unsafe extern fn()>;
+    pub type glXSwapIntervalMESA = unsafe extern fn(interval: c_int) -> c_int;
+    pub type glXGetSwapIntervalMESA = unsafe extern fn() -> c_int;
+    pub type glXSwapIntervalSGI = unsafe extern fn(interval: c_int) -> c_int;
+    pub type glXSwapIntervalEXT = unsafe extern fn(
+        *mut x::Display, GLXDrawable, interval: c_int
+    );
+    pub type glXCreateContextAttribsARB = unsafe extern fn(
+        *mut x::Display, GLXFBConfig, share_context: GLXContext, 
+        direct: x::Bool, attrib_list: *const c_int) -> GLXContext;
+}
 
+
+// NOTE: Most structs and fields are not pub(super) because we want them to
+// be accessible from the outside world if they opt-in.
+// Users do have to use `get_internal()` on their window already.
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct Display {
+    pub x_dpy: *mut x::Display,
+    pub atoms: PreparedAtoms,
+    pub screen: *mut x::Screen, // NOTE: Nothing says it needs to be freed, so we don't.
+    pub screen_num: c_int,
+    pub root: x::Window,
+    pub glx: Option<Glx>,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct Glx {
+    pub version: Semver,
+    pub get_proc_address: types::glXGetProcAddress,
+    pub ext: GlxExt,
+    pub error_base: c_int,
+    pub event_base: c_int,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct Window<'dpy> {
+    pub dpy: &'dpy Display,
+    pub x_window: x::Window,
+    pub colormap: x::Colormap,
+    pub glx_window: Option<GLXWindow>,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub(super) struct GLContext<'dpy> {
+    pub dpy: &'dpy Display,
+    pub glx_context: GLXContext,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct GLPixelFormat<'dpy> {
+    pub dpy: &'dpy Display,
+    pub visual_info: *mut x::XVisualInfo,
+    pub fbconfig: Option<GLXFBConfig>, // GLX >= 1.3
+}
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -133,6 +145,53 @@ pub enum Error {
     UnsupportedGLContextSettings,
     FunctionName(&'static str),
 }
+
+// TODO
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct Cursor<'dpy> {
+    pub dpy: &'dpy Display,
+}
+
+impl Drop for Display {
+    fn drop(&mut self) {
+        unsafe {
+            x::XCloseDisplay(self.x_dpy);
+        } 
+    }
+}
+
+impl<'dpy> Drop for Window<'dpy> {
+    fn drop(&mut self) {
+        unsafe {
+            match self.glx_window {
+                Some(w) => glXDestroyWindow(self.dpy.x_dpy, w),
+                None => (),
+            };
+            x::XDestroyWindow(self.dpy.x_dpy, self.x_window);
+            x::XFreeColormap(self.dpy.x_dpy, self.colormap);
+        }
+    }
+}
+
+impl<'dpy> Drop for GLPixelFormat<'dpy> {
+    fn drop(&mut self) {
+        unsafe {
+            x::XFree(self.visual_info as *mut _); // NOTE: Fine to do on NULL.
+        }
+    }
+}
+
+impl<'dpy> Drop for GLContext<'dpy> {
+    fn drop(&mut self) {
+        unsafe {
+            // Defers destruction until it's not current to any thread.
+            glXDestroyContext(self.dpy.x_dpy, self.glx_context);
+        }
+    }
+}
+
+
+
 
 
 impl fmt::Display for Error {
@@ -162,31 +221,30 @@ impl fmt::Display for Error {
 }
 
 
-
-
-// DISPLAY
-
-
-
-
-
-/// Generate this module's `UsefulAtoms` struct, where all atoms are retrieved
-/// at once when opening a display.
+/// Generate this module's `PreparedAtoms` struct, where all atoms are retrieved
+/// once when opening a display.
 macro_rules! atoms {
     ($($atom:ident)+) => {
         #[allow(non_snake_case)]
         #[derive(Debug, Hash, PartialEq, Eq)]
-        pub struct UsefulAtoms {
+        pub struct PreparedAtoms {
             $(pub $atom: x::Atom,)+
         }
-        impl UsefulAtoms {
+        impl PreparedAtoms {
             fn fetch(x_dpy: *mut x::Display) -> Self {
-                unsafe { Self { $(
-                    $atom: x::XInternAtom(x_dpy, 
+                Self { $(
+                    $atom: match unsafe { x::XInternAtom(x_dpy, 
                         // PERF: Worried about CString
                         CString::new(stringify!($atom)).unwrap().as_ptr(), 
-                        x::False),
-                )+ } }
+                        x::False)
+                    } {
+                        0 => 0,
+                        atom @ _ => {
+                            info!("Found atom {} = {}", stringify!($atom), atom);
+                            atom
+                        }
+                    },
+                )+ }
             }
         }
     }
@@ -196,6 +254,7 @@ atoms!(
     WM_PROTOCOLS
     WM_DELETE_WINDOW
     WM_TAKE_FOCUS
+    _NET_WORKAREA
     _NET_NUMBER_OF_DESKTOPS
     _NET_CURRENT_DESKTOP
     _NET_DESKTOP_NAMES
@@ -253,20 +312,6 @@ atoms!(
     XKLAVIER_STATE
 );
 
-mod types {
-    #![allow(non_camel_case_types)]
-    use super::*;
-    pub type glXGetProcAddress = unsafe extern fn(*const u8) -> Option<unsafe extern fn()>;
-    pub type glXSwapIntervalMESA = unsafe extern fn(interval: c_int) -> c_int;
-    pub type glXGetSwapIntervalMESA = unsafe extern fn() -> c_int;
-    pub type glXSwapIntervalSGI = unsafe extern fn(interval: c_int) -> c_int;
-    pub type glXSwapIntervalEXT = unsafe extern fn(
-        *mut x::Display, glx::GLXDrawable, interval: c_int
-    );
-    pub type glXCreateContextAttribsARB = unsafe extern fn(
-        *mut x::Display, glx::GLXFBConfig, share_context: glx::GLXContext, 
-        direct: x::Bool, attrib_list: *const c_int) -> glx::GLXContext;
-}
 
 macro_rules! glx_ext {
     (($($name:ident)+) ($($func:ident)+)) => {
@@ -278,29 +323,35 @@ macro_rules! glx_ext {
         }
         impl GlxExt {
             #[allow(non_snake_case)]
-            fn parse(gpa: types::glXGetProcAddress, s: &CStr) -> Self {
+            pub fn parse(gpa: types::glXGetProcAddress, s: &CStr) -> Self {
                 $(let mut $name = false;)+
                 let s = s.to_string_lossy();
                 for name in s.split_whitespace() {
                     match name {
-                        $(stringify!($name) => $name = true,)+
+                        $(stringify!($name) => {
+                            $name = true;
+                            info!("Found GLX extension {}", stringify!($name));
+                        },)+
                         _ => {}
                     };
                 }
                 let mut out = Self { $($name,)+ $($func: None,)+ };
-                out.load_functions(gpa);
-                out
-            }
-            fn load_functions(&mut self, gpa: types::glXGetProcAddress) {
+
+                // Load functions
                 unsafe { $(
-                let cstring = CString::new(stringify!($func)).unwrap_or_default();
-                let name = cstring.to_bytes_with_nul();
-                let fptr = gpa(name.as_ptr() as *mut _);
-                self.$func = match fptr {
-                    None => None,
-                    Some(f) => Some(mem::transmute(f)),
-                };
+                    let cstring = CString::new(stringify!($func)).unwrap_or_default();
+                    let name = cstring.to_bytes_with_nul();
+                    let fptr = gpa(name.as_ptr() as *mut _);
+                    out.$func = match fptr {
+                        None => None,
+                        Some(f) => {
+                            info!("Loaded `{}`", stringify!($func));
+                            Some(mem::transmute(f))
+                        },
+                    };
                 )+ }
+
+                out
             }
         }
     }
@@ -313,6 +364,9 @@ glx_ext!((
     GLX_EXT_swap_control_tear
     GLX_MESA_swap_control
     GLX_SGI_swap_control
+    GLX_SGI_video_sync
+    GLX_OML_swap_method
+    GLX_OML_sync_control
     GLX_ARB_create_context
     GLX_ARB_create_context_profile
     GLX_ARB_create_context_robustness
@@ -326,35 +380,228 @@ glx_ext!((
     glXCreateContextAttribsARB
 ));
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Glx {
-    version: Semver,
-    get_proc_address: types::glXGetProcAddress,
-    ext: GlxExt,
+
+// TODO: Send a PR to x11-rs.
+mod xx {
+    pub const GLX_CONTEXT_ES_PROFILE_BIT_EXT             : i32 = 0x00000004;
+    pub const GLX_CONTEXT_ES2_PROFILE_BIT_EXT            : i32 = 0x00000004;
+    pub const GLX_CONTEXT_ROBUST_ACCESS_BIT_ARB          : i32 = 0x00000004;
+    pub const GLX_CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB: i32 = 0x8256;
+    pub const GLX_NO_RESET_NOTIFICATION_ARB              : i32 = 0x8261;
+    pub const GLX_LOSE_CONTEXT_ON_RESET_ARB              : i32 = 0x8252;
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Display {
-    pub x_dpy: *mut x::Display,
-    pub atoms: UsefulAtoms,
-    // XXX Needs not be freed or not ? Seems not, but...
-    pub screen: *mut x::Screen,
-    pub screen_num: c_int,
-    pub root: x::Window,
-    pub glx: Option<Glx>,
-}
+impl Glx {
 
-impl Drop for Display {
-    fn drop(&mut self) {
-        unsafe {
-            x::XCloseDisplay(self.x_dpy);
-        } 
+    // Functions that generate context attrib arrays (i.e 0-terminated
+    // arrays of i32).
+    //
+    // gen_visual_attribs() and gen_fbconfig_attribs() are two separate 
+    // functions for ease of maintenance. They don't have all keys in
+    // common, and the format is different.
+    // For instance, GLX_DOUBLEBUFFER and GLX_STEREO are not followed by
+    // a boolean in gen_visual_attribs() - their presence _is_ the boolean
+    // instead.
+
+    // GLX below 1.3
+    fn gen_visual_attribs(&self, settings: &GLPixelFormatSettings) -> [c_int; 30] {
+        let &GLPixelFormatSettings {
+            depth_bits, stencil_bits, double_buffer, stereo,
+            red_bits, blue_bits, green_bits, alpha_bits,
+            accum_red_bits, accum_blue_bits, accum_green_bits, 
+            accum_alpha_bits, aux_buffers, msaa, ..
+        } = settings;
+        let mut attr = [
+            GLX_RGBA,
+            GLX_AUX_BUFFERS, aux_buffers as c_int,
+            GLX_RED_SIZE, red_bits as c_int,
+            GLX_GREEN_SIZE, green_bits as c_int,
+            GLX_BLUE_SIZE, blue_bits as c_int,
+            GLX_ALPHA_SIZE, alpha_bits as c_int,
+            GLX_DEPTH_SIZE, depth_bits as c_int,
+            GLX_STENCIL_SIZE, stencil_bits as c_int,
+            GLX_ACCUM_RED_SIZE, accum_red_bits as c_int,
+            GLX_ACCUM_GREEN_SIZE, accum_green_bits as c_int,
+            GLX_ACCUM_BLUE_SIZE, accum_blue_bits as c_int,
+            GLX_ACCUM_ALPHA_SIZE, accum_alpha_bits as c_int,
+            0, // GLX_DOUBLEBUFFER, see below
+            0, // GLX_STEREO, see below
+            0, // GLX_SAMPLE_BUFFERS_ARB, see below
+            0, // GLX_SAMPLE_BUFFERS_ARB value, see below
+            0, // GLX_SAMPLES_ARB, see below
+            0, // GLX_SAMPLES_ARB value, see below
+            0
+        ];
+        // GLX_ARB_multisample
+        // GLX_SAMPLE_BUFFERS, msaa.buffer_count,
+        // GLX_SAMPLES, msaa.sample_count,
+
+        let mut i = attr.len()-7;
+        if double_buffer {
+            attr[i] = GLX_DOUBLEBUFFER;
+            i += 1;
+        }
+        if stereo {
+            attr[i] = GLX_STEREO;
+            i += 1;
+        }
+        if self.ext.GLX_ARB_multisample {
+            attr[i+0] = GLX_SAMPLE_BUFFERS; // Same as prefixed with _ARB
+            attr[i+1] = msaa.buffer_count as _;
+            attr[i+2] = GLX_SAMPLES; // Same as prefixed with _ARB
+            attr[i+3] = msaa.sample_count as _;
+        }
+        attr
+    }
+
+    // GLX 1.3 and above
+    fn gen_fbconfig_attribs(&self, settings: &GLPixelFormatSettings) -> [c_int; 41] {
+        let &GLPixelFormatSettings {
+            depth_bits, stencil_bits, double_buffer, stereo,
+            red_bits, blue_bits, green_bits, alpha_bits,
+            accum_red_bits, accum_blue_bits, accum_green_bits, 
+            accum_alpha_bits, aux_buffers, msaa, ..
+        } = settings;
+        [
+            GLX_FBCONFIG_ID, GLX_DONT_CARE,
+            GLX_DOUBLEBUFFER, double_buffer as c_int,
+            GLX_STEREO, stereo as c_int,
+            GLX_AUX_BUFFERS, aux_buffers as c_int,
+            GLX_RED_SIZE, red_bits as c_int,
+            GLX_GREEN_SIZE, green_bits as c_int,
+            GLX_BLUE_SIZE, blue_bits as c_int,
+            GLX_ALPHA_SIZE, alpha_bits as c_int,
+            GLX_DEPTH_SIZE, depth_bits as c_int,
+            GLX_STENCIL_SIZE, stencil_bits as c_int,
+            GLX_ACCUM_RED_SIZE, accum_red_bits as c_int,
+            GLX_ACCUM_GREEN_SIZE, accum_green_bits as c_int,
+            GLX_ACCUM_BLUE_SIZE, accum_blue_bits as c_int,
+            GLX_ACCUM_ALPHA_SIZE, accum_alpha_bits as c_int,
+            GLX_RENDER_TYPE, GLX_RGBA_BIT,
+            GLX_DRAWABLE_TYPE, GLX_WINDOW_BIT,
+            GLX_X_VISUAL_TYPE, GLX_TRUE_COLOR,
+            GLX_X_RENDERABLE, x::True,
+            GLX_SAMPLE_BUFFERS, msaa.buffer_count as _,
+            GLX_SAMPLES, msaa.sample_count as _,
+            // GLX_CONFIG_CAVEAT, 0,
+            //
+            // There's more GLX_TRANSPARENT_**_VALUE keys, might be
+            // worth checking later,
+            0 // keep last
+        ]
+    }
+
+    // Configure an array of attribute parameters for 
+    // glxCreateContextAttribsARB().
+    fn gen_arb_attribs(&self, settings: &GLContextSettings) -> [c_int; 11] {
+
+        let &GLContextSettings {
+            version, robust_access, debug, forward_compatible, profile, ..
+        } = settings;
+
+        #[allow(non_snake_case)]
+        let &GlxExt {
+            GLX_ARB_create_context_profile,
+            GLX_ARB_create_context_robustness,
+            GLX_EXT_create_context_es_profile,
+            ..
+        } = &self.ext;
+
+        let (major, minor, gl_variant) = match version {
+            Decision::Manual(v) => {
+                let v = v.to_semver();
+                (v.1.major, v.1.minor, v.0)
+            },
+            Decision::Auto => (3, 0, GLVariant::Desktop), // TODO: Shouldn't it be 3.2 ?
+        };
+
+        let flags = if debug { 
+            GLX_CONTEXT_DEBUG_BIT_ARB
+        } else { 0 }
+        | if forward_compatible {
+            GLX_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB
+        } else { 0 }
+        | if robust_access.is_some() && GLX_ARB_create_context_robustness {
+            xx::GLX_CONTEXT_ROBUST_ACCESS_BIT_ARB
+        } else { 0 };
+
+        let profile_param = match gl_variant {
+            GLVariant::Desktop if GLX_ARB_create_context_profile =>
+                GLX_CONTEXT_PROFILE_MASK_ARB,
+            GLVariant::ES if GLX_EXT_create_context_es_profile =>
+                GLX_CONTEXT_PROFILE_MASK_ARB,
+            _ => 0,
+        };
+
+        let profile_mask = match gl_variant {
+            GLVariant::Desktop => match profile {
+                Decision::Auto => GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+                Decision::Manual(p) => match p {
+                    GLProfile::Core =>
+                        GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
+                    GLProfile::Compatibility => 
+                        GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+                }
+            },
+            GLVariant::ES =>
+                // Same as GLX_CONTEXT_ES2_PROFILE_BIT_EXT.
+                xx::GLX_CONTEXT_ES_PROFILE_BIT_EXT,
+        };
+
+        let robust_param = if robust_access.is_some() {
+            xx::GLX_CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB
+        } else { 0 };
+
+        let robust_value = match robust_access {
+            None => 0,
+            Some(r) => match r.context_reset_notification_strategy {
+                GLContextResetNotificationStrategy::NoResetNotification =>
+                    xx::GLX_CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB,
+                GLContextResetNotificationStrategy::LoseContextOnReset =>
+                    xx::GLX_LOSE_CONTEXT_ON_RESET_ARB,
+            },
+        };
+
+        let mut out = [
+            GLX_CONTEXT_MAJOR_VERSION_ARB, major as _,
+            GLX_CONTEXT_MINOR_VERSION_ARB, minor as _,
+            GLX_CONTEXT_FLAGS_ARB, flags,
+            0 /* profile_param */, 0 /* profile_mask */,
+            0 /* robust_param */, 0 /* robust_value */,
+            0
+        ];
+
+        let mut i = out.len()-5;
+        if profile_param != 0 {
+            out[i] = profile_param;
+            out[i+1] = profile_mask;
+            i += 2;
+        }
+        if robust_param != 0 {
+            out[i] = robust_param;
+            out[i+1] = robust_value;
+        }
+
+        out
     }
 }
 
+static mut G_XLIB_ERROR_OCCURED: AtomicBool = ATOMIC_BOOL_INIT;
+static mut G_GLX_ERROR_BASE: i32 = 0;
+static mut G_GLX_EVENT_BASE: i32 = 0;
+
 impl Display {
 
-    pub(super) fn open() -> Result<Self,super::Error> {
+    // TODO: Grab from _XPrintDefaultError in Xlib's sources
+    unsafe extern fn x_generic_error_handler(dpy: *mut x::Display, e: *mut x::XErrorEvent) -> c_int {
+        // NOTE: DO NOT make requests to the X server within X error handlers such as this one.
+        G_XLIB_ERROR_OCCURED.store(true, Ordering::SeqCst);
+        let e = *e;
+        error!("Received X error: XErrorEvent {{ type: {}, display: {:?}, resourceid: {}, serial: {}, error_code: {}, request_code: {}, minor_code: {} }}", e.type_, e.display, e.resourceid, e.serial, e.error_code, e.request_code, e.minor_code);
+        0
+    }
+
+    pub(super) fn open() -> Result<Self, super::Error> {
         Self::open_x11_display_name(None)
     }
 
@@ -362,13 +609,24 @@ impl Display {
         -> Result<Self, super::Error> 
     {
         unsafe {
+            // This thing is global to Xlib, and not inherent to X11.
+            // We wouldn't have it if we used XCB.
+            // info!("Overriding process-wide Xlib error handler.");
+            // x::XSetErrorHandler(Some(Self::x_generic_error_handler));
+
             let x_dpy = x::XOpenDisplay(match x_display_name {
-                Some(s) => s.as_ptr(),
-                None => ptr::null()
+                Some(s) => {
+                    info!("Opening X display {}", s.to_string_lossy());
+                    s.as_ptr()
+                },
+                None => {
+                    info!("Opening default X display");
+                    ptr::null()
+                }
             });
             if x_dpy.is_null() {
                 return Err(super::Error::Backend(
-                    // XXX No thrilled about this allocation though
+                    // PERF: No thrilled about this allocation though
                     Error::NoXDisplayForName { 
                         name: x_display_name.map(|s| CString::new(
                             s.to_bytes_with_nul().to_owned()
@@ -376,28 +634,39 @@ impl Display {
                     }
                 ));
             }
-            let atoms = UsefulAtoms::fetch(x_dpy);
+
+            // TODO: Log a lot of X-server-related info, such as the
+            // X extensions it supports.
+
             let screen = x::XDefaultScreenOfDisplay(x_dpy);
             let screen_num = x::XDefaultScreen(x_dpy);
             let root = x::XRootWindowOfScreen(screen);
+            let atoms = PreparedAtoms::fetch(x_dpy);
             let glx = Self::query_glx(x_dpy, screen_num);
+
             Ok(Self { x_dpy, atoms, screen, screen_num, root, glx })
         }
     }
 
     fn query_glx(x_dpy: *mut x::Display, screen_num: c_int) -> Option<Glx> {
-        unsafe {
-            // ??? What to do with error_base and event_base ?
+
+        let (error_base, event_base) = unsafe {
             let (mut error_base, mut event_base) = mem::uninitialized();
-            let has_glx = glx::glXQueryExtension(x_dpy, &mut error_base, &mut event_base);
+            let has_glx = glXQueryExtension(x_dpy, &mut error_base, &mut event_base);
             if has_glx == x::False {
                 return None;
             }
+            (error_base, event_base)
+        };
+        unsafe {
+            G_GLX_ERROR_BASE = error_base;
+            G_GLX_EVENT_BASE = event_base;
         }
+        info!("GLX error_base = {}, event_base = {}", error_base, event_base);
 
         let (major, minor) = unsafe {
             let (mut major, mut minor) = mem::uninitialized();
-            let success = glx::glXQueryVersion(x_dpy, &mut major, &mut minor);
+            let success = glXQueryVersion(x_dpy, &mut major, &mut minor);
             if success == x::False {
                return None;
             }
@@ -405,95 +674,274 @@ impl Display {
         };
         let version = Semver::new(major, minor, 0);
 
-        let get_proc_address = glx::glXGetProcAddress;
+        info!("GLX extension version {}.{}", major, minor);
+
+        #[cfg(not(target_os = "linux"))]
+        unimplemented!("We don't know how the situation is in OSes other than Linux!");
+        #[cfg(target_os = "linux")]
+        let get_proc_address = glXGetProcAddressARB;
 
         if version < Semver::new(1,1,0) {
-            // TODO Log this, it's terrible! A genuine dinosaur.
-            return Some(Glx { version, get_proc_address,  ext: Default::default() });
+            warn!("The GLX version is less than 1.1! This is supposedly very rare and probably badly handled. Sorry!");
+            return Some(Glx {
+                version, get_proc_address, ext: Default::default(),
+                error_base, event_base,
+            });
         }
 
         let ext = unsafe {
-            let client_vendor  = glx::glXGetClientString(  x_dpy, xx::GLX_VENDOR);
-            let client_version = glx::glXGetClientString(  x_dpy, xx::GLX_VERSION);
-            let server_vendor  = glx::glXQueryServerString(x_dpy, screen_num, xx::GLX_VENDOR);
-            let server_version = glx::glXQueryServerString(x_dpy, screen_num, xx::GLX_VERSION);
-            let extensions = glx::glXQueryExtensionsString(x_dpy, screen_num);
+            let client_vendor  = glXGetClientString(  x_dpy, GLX_VENDOR);
+            let client_version = glXGetClientString(  x_dpy, GLX_VERSION);
+            let server_vendor  = glXQueryServerString(x_dpy, screen_num, GLX_VENDOR);
+            let server_version = glXQueryServerString(x_dpy, screen_num, GLX_VERSION);
+            let extensions = glXQueryExtensionsString(x_dpy, screen_num);
+            info!("GLX client vendor : {:?}", CStr::from_ptr(client_vendor ).to_str());
+            info!("GLX client version: {:?}", CStr::from_ptr(client_version).to_str());
+            info!("GLX server vendor : {:?}", CStr::from_ptr(server_vendor ).to_str());
+            info!("GLX server version: {:?}", CStr::from_ptr(server_version).to_str());
+            info!("GLX extensions    : {:?}", CStr::from_ptr(extensions    ).to_str());
             GlxExt::parse(get_proc_address, &CStr::from_ptr(extensions))
         };
-        Some(Glx { version, get_proc_address, ext })
+        Some(Glx { version, get_proc_address, ext, error_base, event_base })
     }
-}
 
+    pub(super) fn choose_gl_pixel_format<'dpy>(&'dpy self, settings: &GLPixelFormatSettings)
+        -> Result<GLPixelFormat<'dpy>, super::Error>
+    {
+        let x_dpy = self.x_dpy;
 
+        if self.glx.is_none() {
+            return Err(super::Error::Backend(Error::NoGLX));
+        }
+        let glx = self.glx.as_ref().unwrap();
 
+        if glx.version < Semver::new(1,3,0) {
+            // Not actually mutated, but glXChooseVisual wants *mut...
+            let mut visual_attribs = glx.gen_visual_attribs(settings);
+            let visual_info = unsafe { glXChooseVisual(
+                x_dpy, self.screen_num, visual_attribs.as_mut_ptr()
+            )};
+            if visual_info.is_null() {
+                return Err(super::Error::Backend(Error::UnsupportedGLContextSettings));
+            }
+            return Ok(GLPixelFormat { dpy: self, visual_info, fbconfig: None });
+        }
 
+        // If we're here, we have GLX >= 1.3.
 
+        let visual_attribs = glx.gen_fbconfig_attribs(settings);
+        let mut fbcount: c_int = 0;
+        let fbcs = unsafe { glXChooseFBConfig(
+            x_dpy, self.screen_num, visual_attribs.as_ptr(), &mut fbcount
+        )};
+        if fbcs.is_null() || fbcount == 0 {
+            warn!("No matching FBConfigs were found!");
+            return Err(super::Error::Backend(Error::UnsupportedGLContextSettings));
+        }
 
+        // fbcs is an array of candidates, from which we choose the best.
 
+        let mut best_fbc = unsafe { *fbcs };
+        let mut best_sample_count: i32 = 0;
 
+        for i in 0..fbcount {
+            let fbc = unsafe { *fbcs.offset(i as isize) };
+            let visual_info = unsafe {
+                glXGetVisualFromFBConfig(x_dpy, fbc)
+            };
+            if visual_info.is_null() {
+                continue;
+            }
+            let (mut samp_buf, mut samples): (c_int, c_int) = (0, 0);
+            unsafe {
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLE_BUFFERS, &mut samp_buf);
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLES       , &mut samples );
+            }
+            let visualid = unsafe { (*visual_info).visualid };
+            info!{
+                "Matching FBConfig {}, visual ID {}, sample buffers = {}, samples = {}", 
+                i, visualid, samp_buf, samples
+            };
+            if samp_buf > 0 && samples > best_sample_count {
+                best_fbc = fbc;
+                best_sample_count = samples;
+            }
+            unsafe { x::XFree(visual_info as *mut _); }
+        }
+        unsafe { 
+            x::XFree(fbcs as *mut _); 
+            let visual_info = glXGetVisualFromFBConfig(x_dpy, best_fbc);
+            assert!(!visual_info.is_null());
+            Ok(GLPixelFormat { dpy: self, visual_info, fbconfig: Some(best_fbc) })
+        }
+    }
 
-// NOTE: Not pub(super) because we want it to be accessible to the outside 
-// world as handles.
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Window<'dpy> {
-    pub dpy: &'dpy Display,
-    pub x_window: x::Window,
-}
-
-impl Display {
     pub(super) fn create_window<'dpy>(&'dpy self, settings: &Settings) 
         -> Result<Window<'dpy>, super::Error>
     {
+        let x_dpy = self.x_dpy;
+        let parent = unsafe { x::XDefaultRootWindow(x_dpy) };
+        
+        let &Settings {
+            mode, resizable, fully_opaque, ref opengl, allow_high_dpi
+        } = settings;
+
+        let (visual, depth, colormap) = match *opengl {
+            Some(ref pixel_format) => {
+                if self.glx.is_none() {
+                    return Err(super::Error::Backend(Error::NoGLX));
+                }
+                let vi = unsafe { *pixel_format.0.visual_info };
+                let colormap = unsafe {
+                    x::XCreateColormap(x_dpy, parent, vi.visual, x::AllocNone)
+                };
+                (vi.visual, vi.depth, colormap)
+            },
+            None => {
+                let depth = x::CopyFromParent;
+                let visual = unsafe {
+                    x::XDefaultVisual(x_dpy, self.screen_num)
+                };
+                let colormap = unsafe {
+                    x::XCreateColormap(x_dpy, parent, visual, x::AllocNone)
+                };
+                (visual, depth, colormap)
+            },
+        };
+
+        use super::window::Mode;
+        let (w, h) = match mode {
+            Mode::FixedSize(Extent2 { w, h }) => (w, h),
+            Mode::FixedSizeFullScreen(Extent2 { w, h }) => unimplemented!{},
+            Mode::DesktopSize => unimplemented!{},
+            Mode::FullScreen => unimplemented!{},
+        };
+        let (x, y) = (0, 0);
+
+        let border_thickness = 0;
+        let class = x::InputOutput;
+        let valuemask = x::CWBorderPixel | x::CWColormap | x::CWEventMask;
+        let mut swa = x::XSetWindowAttributes {
+            colormap,
+            event_mask:
+                x::ButtonReleaseMask      | x::EnterWindowMask | x::ButtonPressMask |
+                x::LeaveWindowMask        | x::PointerMotionMask | 
+                x::Button1MotionMask      |
+                x::Button2MotionMask      | x::Button3MotionMask |
+                x::Button4MotionMask      | x::Button5MotionMask |
+                x::ButtonMotionMask       | x::KeymapStateMask |
+                x::ExposureMask           | x::VisibilityChangeMask | 
+                x::StructureNotifyMask    | /* ResizeRedirectMask | */
+                x::SubstructureNotifyMask | x::SubstructureRedirectMask |
+                x::FocusChangeMask        | x::PropertyChangeMask |
+                x::ColormapChangeMask     | x::OwnerGrabButtonMask,
+            background_pixmap    : 0,  
+            background_pixel     : 0,  
+            border_pixmap        : 0,  
+            border_pixel         : 0,  
+            bit_gravity          : 0,  
+            win_gravity          : 0,  
+            backing_store        : 0,  
+            backing_planes       : 0,  
+            backing_pixel        : 0,  
+            save_under           : 0,  
+            do_not_propagate_mask: 0,  
+            override_redirect    : 0,  
+            cursor               : 0,  
+        };
+
+        let x_window = unsafe { x::XCreateWindow(
+            x_dpy, parent, x, y, w, h,
+            border_thickness, depth, class as _, visual, valuemask, &mut swa
+        )};
+
+        if x_window == 0 {
+            return Err(super::Error::CouldntCreateWindow);
+        }
+
         unsafe {
-            let border_thickness = 0;
-            let border_color = 0xff0000;
-            let bg_color = 0x00ff00;
-            let x_dpy = self.x_dpy;
-            let parent = x::XDefaultRootWindow(x_dpy);
+            x::XFlush(x_dpy);
+        }
 
-            let &Settings {
-                mode, resizable, fully_opaque, opengl, allow_high_dpi
-            } = settings;
+        let wants_glx_window = {
+            opengl.is_some() && self.glx.as_ref().unwrap().version >= Semver::new(1,3,0)
+        };
 
-            use super::window::Mode;
-            let (w, h) = match mode {
-                Mode::FixedSize(Extent2 { w, h }) => (w, h),
-                // Mode::FixedSizeFullScreen => (),
-                // Mode::DesktopSize =>,
-                // Mode::FullScreen =>,
-                _ => unimplemented!()
-            };
+        let glx_window = if wants_glx_window {
+            let fbconfig = opengl.as_ref().unwrap().0.fbconfig.unwrap();
+            Some(unsafe { glXCreateWindow(
+                x_dpy, fbconfig, x_window, ptr::null_mut()
+            )})
+        } else { None };
 
-            let x_window = x::XCreateSimpleWindow(x_dpy, parent,
-                0, 0, w, h, border_thickness, border_color, bg_color);
+        Ok(Window { dpy: self, x_window, colormap, glx_window })
+    }
 
-            if x_window == 0 {
-                return Err(super::Error::CouldntCreateWindow);
+
+    pub(super) fn create_gl_context<'dpy>(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) 
+        -> Result<GLContext<'dpy>, super::Error>
+    {
+        let x_dpy = self.x_dpy;
+
+        if self.glx.is_none() {
+            return Err(super::Error::Backend(Error::NoGLX));
+        }
+
+        let glx = self.glx.as_ref().unwrap();
+
+        let &GLPixelFormat { visual_info, fbconfig, .. } = pf;
+
+        unsafe {
+            x::XSync(x_dpy, x::False);
+            G_XLIB_ERROR_OCCURED.store(false, Ordering::SeqCst);
+        }
+
+        let (funcname, glx_context) = unsafe {
+            if glx.version < Semver::new(1,3,0) {
+                ("glXCreateContext", glXCreateContext(x_dpy, visual_info, ptr::null_mut(), x::True))
+            } else if glx.version < Semver::new(1,4,0) 
+                || (glx.version >= Semver::new(1,4,0) && !glx.ext.GLX_ARB_create_context) {
+                ("glXCreateNewContext", glXCreateNewContext(
+                    x_dpy, fbconfig.unwrap(), GLX_RGBA_TYPE, ptr::null_mut(), x::True
+                ))
+            } else {
+                #[allow(non_snake_case)]
+                let glXCreateContextAttribsARB = glx.ext.glXCreateContextAttribsARB.unwrap();
+                let attribs_arb = glx.gen_arb_attribs(cs);
+                ("glxCreateContextAttribsARB", glXCreateContextAttribsARB(
+                    x_dpy, fbconfig.unwrap(), ptr::null_mut(), x::True, attribs_arb.as_ptr()
+                ))
+            }
+        };
+
+        unsafe {
+            x::XSync(x_dpy, x::False);
+            if glx_context.is_null() || G_XLIB_ERROR_OCCURED.load(Ordering::SeqCst) {
+                return Err(super::Error::Backend(Error::FunctionName(funcname)));
             }
 
-            x::XFlush(x_dpy);
-
-            Ok(Window { dpy: self, x_window })
+            info!("GLX context is direct: {}", glXIsDirect(x_dpy, glx_context));
+            Ok(GLContext { dpy: self, glx_context })
         }
+    }
+
+
+
+    pub(super) fn create_software_gl_context<'dpy>(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) 
+        -> Result<GLContext<'dpy>,super::Error>
+    {
+        unimplemented!()
     }
 }
 
-impl<'dpy> Drop for Window<'dpy> {
-    fn drop(&mut self) {
-        unsafe {
-            x::XDestroyWindow(self.dpy.x_dpy, self.x_window);
-        }
-    }
-}
 
 impl<'dpy> Window<'dpy> {
-
 
     pub(super) fn get_capabilities(&self) -> Capabilities {
         Capabilities {
             hide: WindowOpResult::Unimplemented,
-            show: WindowOpResult::Success,
-            set_title: WindowOpResult::Success,
+            show: WindowOpResult::Success(()),
+            set_title: WindowOpResult::Success(()),
             set_icon: WindowOpResult::Unimplemented,
             set_style: WindowOpResult::Unimplemented,
             recenter: WindowOpResult::Unimplemented,
@@ -520,7 +968,7 @@ impl<'dpy> Window<'dpy> {
         (ev.get_type() == x::MapNotify && xmap.window == win) as i32
     }
 
-    pub(super) fn show(&self) -> WindowOpResult {
+    pub(super) fn show(&self) -> WindowOpResult<()> {
         unsafe {
             let x_dpy = self.dpy.x_dpy;
             let x_window = self.x_window;
@@ -533,9 +981,11 @@ impl<'dpy> Window<'dpy> {
                     Some(Self::is_map_notify_callback),
                     x_window as x::XPointer);
                 */
-                x::XFlush(x_dpy);
+                x::XSync(x_dpy, x::False); // Otherwise, it would be possible
+                    // to swap buffer before the window is shown, which would
+                    // have no effect.
             // }
-            WindowOpResult::Success
+            WindowOpResult::Success(())
         }
     }
     fn _is_mapped(&self) -> bool {
@@ -547,46 +997,58 @@ impl<'dpy> Window<'dpy> {
     }
 
     pub(super) fn create_child(&self, _settings: &Settings) -> Result<Self, super::Error> {
+        // XCreateWindow() with parent set
         unimplemented!()
     }
-    pub(super) fn hide(&self) -> WindowOpResult { WindowOpResult::Unimplemented }
-    pub(super) fn maximize(&self) -> WindowOpResult { WindowOpResult::Unimplemented }
-    pub(super) fn minimize(&self) -> WindowOpResult { WindowOpResult::Unimplemented }
-    pub(super) fn raise(&self) -> WindowOpResult { WindowOpResult::Unimplemented }
-    pub(super) fn restore(&self) -> WindowOpResult { WindowOpResult::Unimplemented }
-    pub(super) fn set_style(&self, _style: &Style) -> WindowOpResult {
+    // XUnmapWindow()
+    pub(super) fn hide(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
+    // XChangeProperty(), _NET_WM_ACTION_MINIMIZE and _NET_WM_ACTION_RESIZE as allowed actions 
+    pub(super) fn maximize(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
+    pub(super) fn minimize(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
+    // XRaiseWindow
+    pub(super) fn raise(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
+    // Go from minimized to displayed
+    pub(super) fn restore(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
+    // XChangeWindowAttributes() ??
+    // XSetWMProperties() ??
+    // http://wiki.tcl.tk/13409
+    // _MOTIF_WM_HINTS (https://people.gnome.org/~tthurman/docs/metacity/xprops_8h-source.html)
+    // _NET_WM_WINDOW_TYPE
+    pub(super) fn set_style(&self, _style: &Style) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn enter_fullscreen(&self) -> WindowOpResult { WindowOpResult::Unimplemented }
-    pub(super) fn leave_fullscreen(&self) -> WindowOpResult { WindowOpResult::Unimplemented }
-    pub(super) fn set_icon(&self, _icon: Option<Icon>) -> WindowOpResult {
+    pub(super) fn enter_fullscreen(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
+    pub(super) fn leave_fullscreen(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
+    pub(super) fn set_icon(&self, _icon: Option<Icon>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn set_minimum_size(&self, _size: Extent2<u32>) -> WindowOpResult {
+    pub(super) fn set_minimum_size(&self, _size: Extent2<u32>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn set_maximum_size(&self, _size: Extent2<u32>) -> WindowOpResult {
+    pub(super) fn set_maximum_size(&self, _size: Extent2<u32>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn set_opacity(&self, _opacity: f32) -> WindowOpResult {
+    pub(super) fn set_opacity(&self, _opacity: f32) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn move_absolute(&self, _pos: Extent2<u32>) -> WindowOpResult {
+    // XMoveWindow
+    pub(super) fn move_absolute(&self, _pos: Extent2<u32>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn move_relative_to_self(&self, _pos: Extent2<u32>) -> WindowOpResult {
+    pub(super) fn move_relative_to_self(&self, _pos: Extent2<u32>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn move_relative_to_parent(&self, _pos: Extent2<u32>) -> WindowOpResult {
+    pub(super) fn move_relative_to_parent(&self, _pos: Extent2<u32>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn recenter(&self) -> WindowOpResult {
+    pub(super) fn recenter(&self) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn resize(&self, _size: Extent2<u32>) -> WindowOpResult {
+    // XResizeWindow
+    pub(super) fn resize(&self, _size: Extent2<u32>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn set_title(&self, title: &str) -> WindowOpResult {
+    pub(super) fn set_title(&self, title: &str) -> WindowOpResult<()> {
         unsafe {
             let mut title_prop: x::XTextProperty = mem::uninitialized();
             let title_ptr = CString::new(title).unwrap_or_default();
@@ -601,21 +1063,26 @@ impl<'dpy> Window<'dpy> {
             }
             x::XFlush(self.dpy.x_dpy);
         }
-        WindowOpResult::Success
+        WindowOpResult::Success(())
     }
     pub(super) fn gl_swap_buffers(&self) {
         unsafe {
-            glx::glXSwapBuffers(self.dpy.x_dpy, self.x_window)
+            glXSwapBuffers(self.dpy.x_dpy, match self.glx_window {
+                Some(w) => w,
+                None => self.x_window,
+            });
         }
     }
 
+    // XGetWindowAttributes
     pub(super) fn query_screenspace_size(&self) -> Extent2<u32> {
         unimplemented!()
     }
+    // XGetWindowAttributes
     pub(super) fn query_canvas_size(&self) -> Extent2<u32> {
         unimplemented!()
     }
-
+    // Easy
     pub(super) fn gl_set_swap_interval(&self, _interval: GLSwapInterval) -> Result<(),super::Error> { 
         unimplemented!()
     }
@@ -623,225 +1090,33 @@ impl<'dpy> Window<'dpy> {
 
 
 
-
-
-
-
-
-
-
-
-pub(super) struct GLContext<'dpy> {
-    dpy: &'dpy Display,
-    glx_context: glx::GLXContext,
-}
-
-
-impl Display {
-
-    // gen_visual_attribs() and gen_fbconfig_attribs() are two separate 
-    // functions for ease of maintenance. They don't have all keys in
-    // common, and the format is different.
-    // For instance, GLX_DOUBLEBUFFER and GLX_STEREO are not followed by
-    // a boolean in gen_visual_attribs() - their presence _is_ the boolean
-    // instead.
-
-    // GLX below 1.3
-    fn gen_visual_attribs(settings: &GLContextSettings) -> [c_int; 26] {
-        let &GLContextSettings {
-            depth_bits, stencil_bits, double_buffer, stereo,
-            red_bits, blue_bits, green_bits, alpha_bits,
-            accum_red_bits, accum_blue_bits, accum_green_bits, 
-            accum_alpha_bits, aux_buffers, ..
-        } = settings;
-        let mut attr = [
-            glx::GLX_RGBA,
-            glx::GLX_AUX_BUFFERS, aux_buffers as c_int,
-            glx::GLX_RED_SIZE, red_bits as c_int,
-            glx::GLX_GREEN_SIZE, green_bits as c_int,
-            glx::GLX_BLUE_SIZE, blue_bits as c_int,
-            glx::GLX_ALPHA_SIZE, alpha_bits as c_int,
-            glx::GLX_DEPTH_SIZE, depth_bits as c_int,
-            glx::GLX_STENCIL_SIZE, stencil_bits as c_int,
-            glx::GLX_ACCUM_RED_SIZE, accum_red_bits as c_int,
-            glx::GLX_ACCUM_GREEN_SIZE, accum_green_bits as c_int,
-            glx::GLX_ACCUM_BLUE_SIZE, accum_blue_bits as c_int,
-            glx::GLX_ACCUM_ALPHA_SIZE, accum_alpha_bits as c_int,
-            xx::NONE, // GLX_DOUBLEBUFFER
-            xx::NONE, // GLX_STEREO
-            xx::NONE // keep last
-        ];
-        let mut i = attr.len()-3;
-        debug_assert_eq!(attr[i], xx::NONE);
-        if double_buffer {
-            attr[i] = glx::GLX_DOUBLEBUFFER;
-            i += 1;
-        }
-        if stereo {
-            attr[i] = glx::GLX_STEREO;
-        }
-        attr
-    }
-
-    // GLX 1.3 and above
-    fn gen_fbconfig_attribs(settings: &GLContextSettings) -> [c_int; 37] {
-        let &GLContextSettings {
-            depth_bits, stencil_bits, double_buffer, stereo,
-            red_bits, blue_bits, green_bits, alpha_bits,
-            accum_red_bits, accum_blue_bits, accum_green_bits, 
-            accum_alpha_bits, aux_buffers, ..
-        } = settings;
-        [
-            glx::GLX_FBCONFIG_ID, glx::GLX_DONT_CARE,
-            glx::GLX_DOUBLEBUFFER, double_buffer as c_int,
-            glx::GLX_STEREO, stereo as c_int,
-            glx::GLX_AUX_BUFFERS, aux_buffers as c_int,
-            glx::GLX_RED_SIZE, red_bits as c_int,
-            glx::GLX_GREEN_SIZE, green_bits as c_int,
-            glx::GLX_BLUE_SIZE, blue_bits as c_int,
-            glx::GLX_ALPHA_SIZE, alpha_bits as c_int,
-            glx::GLX_DEPTH_SIZE, depth_bits as c_int,
-            glx::GLX_STENCIL_SIZE, stencil_bits as c_int,
-            glx::GLX_ACCUM_RED_SIZE, accum_red_bits as c_int,
-            glx::GLX_ACCUM_GREEN_SIZE, accum_green_bits as c_int,
-            glx::GLX_ACCUM_BLUE_SIZE, accum_blue_bits as c_int,
-            glx::GLX_ACCUM_ALPHA_SIZE, accum_alpha_bits as c_int,
-            glx::GLX_RENDER_TYPE, glx::GLX_RGBA_BIT,
-            glx::GLX_DRAWABLE_TYPE, glx::GLX_WINDOW_BIT,
-            glx::GLX_X_RENDERABLE, x::True,
-            glx::GLX_TRANSPARENT_TYPE, xx::NONE, //glx::GLX_TRANSPARENT_RGB
-            // glx::GLX_CONFIG_CAVEAT, xx::NONE,
-            //
-            // There's more GLX_TRANSPARENT_**_VALUE keys, might be
-            // worth checking later,
-            xx::NONE // keep last
-        ]
-    }
-
-
-    pub(super) fn create_gl_context<'dpy>(
-        &'dpy self, settings: &GLContextSettings
-    ) -> Result<GLContext<'dpy>, super::Error>
-    {
-        if self.glx.is_none() {
-            return Err(super::Error::Backend(Error::NoGLX));
-        }
-
-        let glx = self.glx.as_ref().unwrap();
-
-        if glx.version < Semver::new(1,3,0) {
-            // Not actually mutated, but glXChooseVisual wants *mut...
-            let mut visual_attribs = Self::gen_visual_attribs(settings);
-            let visual_info = unsafe { glx::glXChooseVisual(
-                self.x_dpy, self.screen_num, visual_attribs.as_mut_ptr()
-            )};
-            if visual_info.is_null() {
-                return Err(super::Error::Backend(Error::UnsupportedGLContextSettings));
-            }
-
-            unsafe {
-                // TODO: we have the 'share' param here
-                let glx_context = glx::glXCreateContext(
-                    self.x_dpy, visual_info, ptr::null_mut(), x::True
-                );
-                x::XFree(visual_info as *mut _);
-                return if glx_context.is_null() {
-                    Err(super::Error::Backend(Error::FunctionName("glXCreateContext")))
-                } else {
-                    Ok(GLContext { dpy: self, glx_context })
-                }
-            }
-        }
-
-        // Here, we have GLX version >= 1.3
-
-        let &GLContextSettings {
-            version, debug, forward_compatible, profile, msaa, ..
-        } = settings;
-
-
-        // TODO ensure that the window has the appropriate pixel format
-        // we should probably turn the opengl member of GLContextSettings
-        // from bool to Option<GLContextSetting>... ?
-        // Yes : we should move to XCreateWindow() and use the visual_info we got
-        // from the glX functions.
-        // We aren't able to recreate the window because it's probably shown by now.
-
-        // See https://www.khronos.org/opengl/wiki/Tutorial:_OpenGL_3.0_Context_Creation_(GLX)
-
-        let best_fbc: glx::GLXFBConfig = unimplemented!(); // FIXME
-        let attribs_arb = [
-            glx::arb::GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
-            glx::arb::GLX_CONTEXT_MINOR_VERSION_ARB, 0,
-            glx::arb::GLX_CONTEXT_FLAGS_ARB, 
-                glx::arb::GLX_CONTEXT_DEBUG_BIT_ARB |
-                glx::arb::GLX_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
-            glx::arb::GLX_CONTEXT_PROFILE_MASK_ARB,
-            // Core is the default here
-                glx::arb::GLX_CONTEXT_CORE_PROFILE_BIT_ARB |
-                glx::arb::GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-            xx::NONE
-        ];
-
-        // From the tutorial :
-        // Install an X error handler so the application won't exit if GL 3.0
-        // context allocation fails.
-        // Note this error handler is global.  All display connections in all threads
-        // of a process use the same error handler, so be sure to guard against other
-        // threads issuing X commands while this code is running.
-
-        /*
-        ctxErrorOccurred = false;
-        int (*oldHandler)(Display*, XErrorEvent*) = XSetErrorHandler(&ctxErrorHandler);
-          
-        if !hasExt(b"GLX_ARB_create_context\0") || dyn::glXCreateContextAttribsARB.is_none() {
-            glXCreateNewContext(fbc);
-        }
-
-        else glXCreateContext(visual);
-        */
-
-        #[allow(non_snake_case)]
-        let glXCreateContextAttribsARB = glx.ext.glXCreateContextAttribsARB.unwrap();
-        let glx_context = unsafe { glXCreateContextAttribsARB(
-            self.x_dpy, best_fbc, ptr::null_mut(), x::True, attribs_arb.as_ptr()
-        )};
-        if glx_context.is_null() {
-            return Err(super::Error::Backend(Error::FunctionName("GLXCreateContext")));
-        }
-
-        Ok(GLContext { dpy: self, glx_context })
-    }
-
-
-
-    pub(super) fn create_software_gl_context<'dpy>(&'dpy self, _settings: &GLContextSettings) -> Result<GLContext<'dpy>,super::Error> {
-        unimplemented!()
-    }
-}
-
-
-impl<'dpy> Drop for GLContext<'dpy> {
-    fn drop(&mut self) {
-        unsafe {
-            // XXX Do we need to glXMakeCurrent() before destroying it ?
-            glx::glXMakeCurrent(self.dpy.x_dpy, 0, ptr::null_mut());
-            glx::glXDestroyContext(self.dpy.x_dpy, self.glx_context)
-        }
-    }
-}
-
 impl<'dpy> GLContext<'dpy> {
     pub(super) fn make_current(&self, win: &Window) {
         unsafe {
-            glx::glXMakeCurrent(self.dpy.x_dpy, win.x_window, self.glx_context);
+            match win.glx_window {
+                Some(w) => glXMakeContextCurrent(
+                    self.dpy.x_dpy, w, w, self.glx_context
+                ),
+                None => glXMakeCurrent(
+                    self.dpy.x_dpy, win.x_window, self.glx_context
+                ),
+            };
         }
     }
 
-    // NOTE: glXGetProcAddressARB doesn't need a bound context, unlike
-    // in WGL.
-    pub(super) unsafe fn get_proc_address(&self, _name: *const c_char) -> Option<*const c_void> {
-        unimplemented!()
+    // NOTE: glXGetProcAddressARB doesn't need a bound context, unlike in WGL.
+    pub(super) unsafe fn get_proc_address_raw(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
+        #[cfg(not(target_os = "linux"))]
+        unimplemented!("We don't know how the situation is in OSes other than Linux!");
+        #[cfg(target_os = "linux")]
+        glXGetProcAddressARB(name as *const _)
+    }
+    pub(super) fn get_proc_address(&self, name: &str) -> Option<unsafe extern "C" fn()> {
+        let name = CString::new(name).unwrap();
+        unsafe {
+            self.get_proc_address_raw(name.as_ptr())
+        }
     }
 }
+
 

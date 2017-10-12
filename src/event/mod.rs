@@ -6,10 +6,20 @@
 // - LoadDollarTemplates, SaveDollarTemplate, etc
 // - RecordGesture
 // - Start/StopTextInput
+//
+// NOTE: Model:
+// - One virtual message queue associated to the Display;
+// - One virtual message queue associated to each Window;
+// The user MUST:
+// - First, for each Window, poll Window events:
+//   - GetMessage(.. hwnd ...);
+//   - XWindowEvent(...);
+// - Then poll Display events:
+//   - GetMessage(.. NULL ...)
+//   - XNextEvent();
 
-// XXX
-use Extent2;
-use Vec2;
+use vek::Extent2;
+use vek::Vec2;
 use Timeout;
 
 

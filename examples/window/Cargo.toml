@@ -1,0 +1,9 @@
+[package]
+name = "window"
+version = "0.1.0"
+authors = ["Yoan Lecoq <yoanlecoq.io@gmail.com>"]
+
+[dependencies]
+env_logger = "0.4.3"
+dmc = { path = "../../" }
+gl = "0.6.3"

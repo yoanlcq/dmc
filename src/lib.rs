@@ -16,6 +16,7 @@ extern crate uuid;
 extern crate vek;
 #[macro_use]
 extern crate log;
+extern crate libc;
 
 
 // Main plan for today:

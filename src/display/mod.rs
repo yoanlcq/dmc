@@ -211,7 +211,7 @@ pub mod window {
         /// Some windowing systems support semi-transparent windows, which
         /// is useful for making desktop companions, however it's better to
         /// let them know beforehand that you need such a feature.  
-        /// This defaults to `true` because this is the most common.
+        /// This defaults to `true` because this is commonly expected.
         pub fully_opaque: bool,
     }
 
@@ -382,6 +382,16 @@ pub mod window {
         }
 
         /// A window won't appear until this method is called.
+        ///
+        /// Likewise, swapping OpenGL buffers (i.e "presenting") has
+        /// no effect on a window that is not visible. 
+        /// At least on X11, if you try to present on a window and then show
+        /// it, you'll just get garbage instead.
+        ///
+        /// On X11, this function waits for the server to process the request.
+        /// If it didn't, there would be a small chance that swapping buffers
+        /// happen before showing the window, even if you did the operations
+        /// in the correct order.
         pub fn show(&self) -> WindowOpResult<()> { self.0.show() }
         /// The obvious reciprocal of `show()`.
         pub fn hide(&self) -> WindowOpResult<()> { self.0.hide() }
@@ -948,11 +958,9 @@ impl<'win,'gl:'win,'dpy:'gl> GLContext<'dpy> {
     pub fn make_current(&'gl self, window: &'win Window<'dpy>) -> GLSwapChain<'win,'gl,'dpy> {
         self.0.make_current(&window.0);
         let out = GLSwapChain { window, gl_context: self };
-        /*
-        if out.set_interval(Default::default()).is_err() {
-            out.set_interval(GLSwapInterval::LimitFps(60)).unwrap();
+        if out.set_swap_interval(Default::default()).is_err() {
+            out.set_swap_interval(GLSwapInterval::LimitFps(60)).unwrap();
         }
-        */
         out
     }
 
@@ -981,8 +989,7 @@ impl<'win,'gl:'win,'dpy:'gl> GLSwapChain<'win, 'gl, 'dpy> {
     }
 
     /// Attempts to set the chain's swap interval. 
-    // FIXME: This doesn't need a GLSwapInterval enum when passing it internally ??
-    pub fn set_interval(&self, interval: GLSwapInterval) -> Result<(),Error> {
+    pub fn set_swap_interval(&self, interval: GLSwapInterval) -> Result<(),Error> {
         self.window.0.gl_set_swap_interval(interval)
     }
     /// You never need to do this unless you have several windows
@@ -1000,20 +1007,9 @@ pub enum GLSwapInterval {
     /// Vertical sync : frames are synchronized with the monitor's refresh 
     /// rate. This is the default.
     VSync,
-    /// Immediate frame updates. May make your fan melt if you don't limit
+    /// Immediate frame updates. May make your GPU melt if you don't limit
     /// the FPS.
     Immediate,
-    /// Prevents frames from being presented faster than the given
-    /// frames-per-second limit.
-    LimitFps(u32),
-    /// Passed directly as the value for the backend's GL SwapInterval()
-    /// function.  
-    /// 
-    /// - 0: Immediate updates,  
-    /// - 1: Vsync  
-    /// - 2: Vsync/2 (e.g at 60 Hz, will swap buffers every 30 frames.)  
-    /// - etc...  
-    Interval(u32),
     /// Quoting SDL2's docs:  
     /// Late swap tearing works the same as vsync, but if you've 
     /// already missed the vertical
@@ -1025,6 +1021,30 @@ pub enum GLSwapInterval {
     /// GLX_EXT_swap_control_tear and for some Windows drivers with
     /// WGL_EXT_swap_control_tear.
     LateSwapTearing,
+    /// Passed directly as the value for the backend's GL `SwapInterval()`
+    /// function. Specifies the number of VBlanks to wait for before presenting. 
+    ///
+    /// It can be negative - if so, it's a late swap tearing hint and
+    /// its absolute value is considered.  
+    /// See the `LateSwapTearing` variant of this enum, and for instance the
+    /// `GLX_EXT_swap_control_tear` spec.
+    /// 
+    /// Example meanings of the value:
+    ///
+    /// - `2`: Vsync/2 (e.g at 60 Hz, will swap buffers 30 times per second.);
+    /// - `1`: Vsync (e.g at 60 Hz, will swap buffers 60 times per second.);
+    /// - `0`: Immediate updates;
+    /// - `-1`: VSync with late swap tearing;
+    /// - `-2`: VSync/2 with late swap tearing;
+    /// - etc...  
+    Interval(i32),
+    /// Prevents frames from being presented faster than the given
+    /// frames-per-second limit.
+    ///
+    /// It's rather for convenience since properly setting a swap interval
+    /// may not be supported, in which case the FPS skyrockets and the GPU
+    /// melts.
+    LimitFps(u32),
 }
 
 impl Default for GLSwapInterval {

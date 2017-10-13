@@ -17,6 +17,13 @@
 // - Then poll Display events:
 //   - GetMessage(.. NULL ...)
 //   - XNextEvent();
+//
+// OR:
+// - XCheckTypedEvent, XMaskEvent and friends;
+// - GetMessage(.., -1, ...) ???
+//
+// !!! IMPORTANT TODO:
+// In X11, reply explicitly to _NET_WM_PING messages.
 
 use vek::Extent2;
 use vek::Vec2;

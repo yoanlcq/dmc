@@ -60,9 +60,16 @@ fn main() {
     let window = display.create_window(&window_settings).expect("Couldn't create window!");
     let gl_ctx = display.create_gl_context(&gl_pixel_format, &gl_ctx_settings).expect("Couldn't create GL context!");
     let swap_chain = gl_ctx.make_current(&window);
+
     gl::load_with(|s| match gl_ctx.get_proc_address(s) {
-        Some(p) => p as *const _,
-        None => ptr::null(),
+        Some(p) => {
+            info!("Loaded `{}`", s);
+            p as *const _
+        },
+        None => {
+            info!("Couldn't load `{}`", s);
+            ptr::null()
+        },
     });
 
     // TODO: Let's log as much info as we can from the GL context!
@@ -86,10 +93,12 @@ fn main() {
         let ctxflags = ctxflags as GLuint;
         let ctxpmask = ctxpmask as GLuint;
 
-        let gl_version   = CStr::from_ptr(gl::GetString(gl::VERSION) as _).to_string_lossy();
-        let gl_renderer  = CStr::from_ptr(gl::GetString(gl::RENDERER) as _).to_string_lossy();
-        let gl_vendor    = CStr::from_ptr(gl::GetString(gl::VENDOR) as _).to_string_lossy();
-        let glsl_version = CStr::from_ptr(gl::GetString(gl::SHADING_LANGUAGE_VERSION) as _).to_string_lossy();
+        let gl_version    = CStr::from_ptr(gl::GetString(gl::VERSION) as _).to_string_lossy();
+        let gl_renderer   = CStr::from_ptr(gl::GetString(gl::RENDERER) as _).to_string_lossy();
+        let gl_vendor     = CStr::from_ptr(gl::GetString(gl::VENDOR) as _).to_string_lossy();
+        let glsl_version  = CStr::from_ptr(gl::GetString(gl::SHADING_LANGUAGE_VERSION) as _).to_string_lossy();
+        let gl_extensions = CStr::from_ptr(gl::GetString(gl::EXTENSIONS) as _).to_string_lossy();
+
 
         // TODO: report to gl crate.
         let CONTEXT_FLAG_NO_ERROR_BIT_KHR: GLuint = 0x00000008;
@@ -100,12 +109,13 @@ fn main() {
     Renderer            : {}
     Vendor              : {}
     GLSL version        : {}
-    Profile flags       : {} (0x{:08x})
-    Context flags       : {}{}{}{} (0x{:08x})
+    Profile flags       : {} (bits: 0b{:08b})
+    Context flags       : {}{}{}{} (bits: {:08b})
     Double buffering    : {}
     Stereo buffers      : {}
     Depth buffer bits   : {}
-    Stencil buffer bits : {}",
+    Stencil buffer bits : {}
+    Extesions           : {}",
             gl_version, gl_renderer, gl_vendor, glsl_version,
             if ctxpmask & gl::CONTEXT_CORE_PROFILE_BIT != 0 {
                 "core"
@@ -118,7 +128,8 @@ if ctxflags & gl::CONTEXT_FLAG_DEBUG_BIT != 0 { "debug " } else {""},
 if ctxflags & gl::CONTEXT_FLAG_ROBUST_ACCESS_BIT != 0 { "robust_access " } else {""},
 if ctxflags &     CONTEXT_FLAG_NO_ERROR_BIT_KHR != 0 { "no_error " } else {""},
             ctxflags,
-            double_buffer, stereo_buffers, depth_bits, stencil_bits
+            double_buffer, stereo_buffers, depth_bits, stencil_bits,
+            gl_extensions
         );
     }
     /*
@@ -159,6 +170,16 @@ if ctxflags &     CONTEXT_FLAG_NO_ERROR_BIT_KHR != 0 { "no_error " } else {""},
     }
     */
 
+    if swap_chain.set_swap_interval(GLSwapInterval::LateSwapTearing).is_err() {
+        if swap_chain.set_swap_interval(GLSwapInterval::VSync).is_err() {
+            swap_chain.set_swap_interval(GLSwapInterval::LimitFps(60)).unwrap();
+            info!("Set swap interval to Manual: 60 FPS.");
+        } else {
+            info!("Set swap interval to VSync.");
+        }
+    } else {
+        info!("Set swap interval to Late Swap Tearing");
+    }
 
     window.set_title("Three");
     unsafe {

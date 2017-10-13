@@ -55,6 +55,20 @@
 // Then :
 // - Log glXIsDirect()
 
+// Creating an RGBA pixmap:
+// int width = 100;
+// int height = 100;
+// int depth = 32; // works fine with depth = 24
+// int bitmap_pad = 32; // 32 for 24 and 32 bpp, 16, for 15&16
+// int bytes_per_line = 0; // number of bytes in the client image between the start of one scanline and the start of the next
+// Display *display=XOpenDisplay(0);
+// unsigned char *image32=(unsigned char *)malloc(width*height*4);
+// XImage *img = XCreateImage(display, CopyFromParent, depth, ZPixmap, 0, image32, width, height, bitmap_pad, bytes_per_line);
+// Pixmap p = XCreatePixmap(display, XDefaultRootWindow(display), width, height, depth);
+// XGCValues gcvalues;
+// GC gc = XCreateGC(display, p, 0, &gcvalues);
+// XPutImage(display, p, gc, img, 0, 0, 0, 0, width, height); // 0, 0, 0, 0 are src x,y and dst x,y
+
 
 extern crate x11;
 use self::x11::xlib as x;
@@ -65,7 +79,8 @@ use std::ptr;
 use std::mem;
 use std::ffi::*;
 use std::os::raw::{c_char, c_int};
-use std::sync::atomic::{AtomicBool, ATOMIC_BOOL_INIT, Ordering};
+use std::sync::atomic::{ATOMIC_BOOL_INIT, AtomicBool, Ordering};
+use libc;
 
 use super::Extent2;
 
@@ -143,6 +158,7 @@ pub enum Error {
     NoXDisplayForName { name: Option<CString> },
     NoGLX,
     UnsupportedGLContextSettings,
+    MissingExtensionToGLX,
     FunctionName(&'static str),
 }
 
@@ -196,8 +212,8 @@ impl<'dpy> Drop for GLContext<'dpy> {
 
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
-        match self {
-            &Error::NoXDisplayForName { ref name } => {
+        match *self {
+            Error::NoXDisplayForName { ref name } => {
                 let name = unsafe { CString::from_raw(x::XDisplayName(
                     match name {
                         &None => ptr::null(),
@@ -207,13 +223,16 @@ impl fmt::Display for Error {
                 let name = name.to_str().unwrap_or("<utf-8 conversion error>");
                 write!(fmt, "\"{}\" is not a valid X display", name)
             },
-            &Error::NoGLX => {
+            Error::NoGLX => {
                 write!(fmt, "The GLX extension is not present")
             },
-            &Error::UnsupportedGLContextSettings => {
+            Error::UnsupportedGLContextSettings => {
                 write!(fmt, "Unsupported OpenGL context settings")
             },
-            &Error::FunctionName(name) => {
+            Error::MissingExtensionToGLX => {
+                write!(fmt, "Functionality requires some extension to GLX, but it is not present.")
+            },
+            Error::FunctionName(name) => {
                 write!(fmt, "{}() failed", name)
             },
         }
@@ -230,86 +249,153 @@ macro_rules! atoms {
         pub struct PreparedAtoms {
             $(pub $atom: x::Atom,)+
         }
+        #[allow(non_snake_case)]
         impl PreparedAtoms {
             fn fetch(x_dpy: *mut x::Display) -> Self {
-                Self { $(
-                    $atom: match unsafe { x::XInternAtom(x_dpy, 
-                        // PERF: Worried about CString
-                        CString::new(stringify!($atom)).unwrap().as_ptr(), 
-                        x::False)
-                    } {
-                        0 => 0,
-                        atom @ _ => {
-                            info!("Found atom {} = {}", stringify!($atom), atom);
-                            atom
-                        }
-                    },
-                )+ }
+                $(
+                    let $atom = CString::new(stringify!($atom)).unwrap();
+                    let $atom = unsafe { x::XInternAtom(
+                        x_dpy, $atom.as_ptr(), x::False
+                    )};
+                    match $atom {
+                        0 => warn!("Atom not present: {}", stringify!($atom)),
+                        _ => info!("Found atom {} = {}", stringify!($atom), $atom),
+                    };
+                )+
+                Self { $($atom,)+ }
             }
         }
     }
 }
 
 atoms!(
+
+    // Base atoms
+    UTF8_STRING
+    PRIMARY
+    SECONDARY
+    CLIPBOARD
+
+    // ??? from SDL2
+    XKLAVIER_STATE
+
+    // Some ICCCM atoms
     WM_PROTOCOLS
     WM_DELETE_WINDOW
     WM_TAKE_FOCUS
-    _NET_WORKAREA
+
+    // EWMH atoms
+    _NET_SUPPORTED
+    _NET_CLIENT_LIST
     _NET_NUMBER_OF_DESKTOPS
+    _NET_DESKTOP_GEOMETRY
+    _NET_DESKTOP_VIEWPORT
     _NET_CURRENT_DESKTOP
     _NET_DESKTOP_NAMES
-    _NET_DESKTOP_VIEWPORT
-    _NET_DESKTOP_GEOMETRY
     _NET_ACTIVE_WINDOW
+    _NET_WORKAREA
+    _NET_SUPPORTING_WM_CHECK
+    _NET_VIRTUAL_ROOTS
+    _NET_DESKTOP_LAYOUT
+    _NET_SHOWING_DESKTOP
+
+    _NET_CLOSE_WINDOW
+    _NET_MOVERESIZE_WINDOW
+    _NET_WM_MOVERESIZE
+    _NET_RESTACK_WINDOW
+    _NET_REQUEST_FRAME_EXTENTS
+
     _NET_WM_NAME
+    _NET_WM_VISIBLE_NAME
     _NET_WM_ICON_NAME
+    _NET_WM_VISIBLE_ICON_NAME
+    _NET_WM_DESKTOP
+
     _NET_WM_WINDOW_TYPE
     _NET_WM_WINDOW_TYPE_DESKTOP
+    _NET_WM_WINDOW_TYPE_DOCK
+    _NET_WM_WINDOW_TYPE_TOOLBAR
+    _NET_WM_WINDOW_TYPE_MENU
+    _NET_WM_WINDOW_TYPE_UTILITY
     _NET_WM_WINDOW_TYPE_SPLASH
     _NET_WM_WINDOW_TYPE_DIALOG
+    _NET_WM_WINDOW_TYPE_DROPDOWN_MENU
+    _NET_WM_WINDOW_TYPE_POPUP_MENU
+    _NET_WM_WINDOW_TYPE_TOOLTIP
     _NET_WM_WINDOW_TYPE_NOTIFICATION
-    // and others.. ??
+    _NET_WM_WINDOW_TYPE_COMBO
+    _NET_WM_WINDOW_TYPE_DND
+    _NET_WM_WINDOW_TYPE_NORMAL
 
     _NET_WM_STATE
-    _NET_WM_STATE_HIDDEN
-    _NET_WM_STATE_FOCUSED
+    _NET_WM_STATE_MODAL
+    _NET_WM_STATE_STICKY
     _NET_WM_STATE_MAXIMIZED_VERT
     _NET_WM_STATE_MAXIMIZED_HORZ
-    _NET_WM_STATE_FULLSCREEN
-    _NET_WM_STATE_ABOVE
+    _NET_WM_STATE_SHADED
     _NET_WM_STATE_SKIP_TASKBAR
     _NET_WM_STATE_SKIP_PAGER
+    _NET_WM_STATE_HIDDEN
+    _NET_WM_STATE_FULLSCREEN
+    _NET_WM_STATE_ABOVE
+    _NET_WM_STATE_BELOW
     _NET_WM_STATE_DEMANDS_ATTENTION
+    _NET_WM_STATE_FOCUSED
 
     _NET_WM_ALLOWED_ACTIONS
+    _NET_WM_ACTION_MOVE
+    _NET_WM_ACTION_RESIZE
+    _NET_WM_ACTION_MINIMIZE
+    _NET_WM_ACTION_SHADE
+    _NET_WM_ACTION_STICK
+    _NET_WM_ACTION_MAXIMIZE_HORZ
+    _NET_WM_ACTION_MAXIMIZE_VERT
     _NET_WM_ACTION_FULLSCREEN
+    _NET_WM_ACTION_CHANGE_DESKTOP
+    _NET_WM_ACTION_CLOSE
+    _NET_WM_ACTION_ABOVE
+    _NET_WM_ACTION_BELOW
 
+    _NET_WM_STRUT
+    _NET_WM_STRUT_PARTIAL
+    _NET_WM_ICON_GEOMETRY
     // This is an array of 32bit packed CARDINAL ARGB with high byte being A, low byte being B. The first two cardinals are width, height. Data is in rows, left to right and top to bottom.
     _NET_WM_ICON
 
     _NET_WM_PID
-
-    // Should set this when going off-screen.
+    _NET_WM_HANDLED_ICONS
+    _NET_WM_USER_TIME
+    _NET_WM_USER_TIME_WINDOW
+    _NET_FRAME_EXTENTS
+    _NET_WM_OPAQUE_REGION
     _NET_WM_BYPASS_COMPOSITOR
 
-    _NET_FRAME_EXTENTS
     _NET_WM_PING
+    _NET_WM_SYNC_REQUEST
+    _NET_WM_FULLSCREEN_MONITORS
+    _NET_WM_FULL_PLACEMENT
     _NET_WM_WINDOW_OPACITY // Doesn't seem to be defined officially ??
-    UTF8_STRING
-    PRIMARY
 
-    // X drag'n Drop atoms
+    // X Drag'n Drop atoms
+    // Also don't forget to check:
+    // https://www.freedesktop.org/wiki/Draganddropwarts/
+    XdndAware
     XdndEnter
     XdndPosition
+    XdndLeave
     XdndStatus
     XdndTypeList
-    XdndActionCopy
     XdndDrop
     XdndFinished
     XdndSelection
-
-    // ??? from SDL2
-    XKLAVIER_STATE
+    XdndActionCopy
+    XdndActionMove
+    XdndActionLink
+    XdndActionAsk
+    XdndActionPrivate
+    XdndActionList
+    XdndActionDescription
+    XdndProxy
 );
 
 
@@ -343,7 +429,10 @@ macro_rules! glx_ext {
                     let name = cstring.to_bytes_with_nul();
                     let fptr = gpa(name.as_ptr() as *mut _);
                     out.$func = match fptr {
-                        None => None,
+                        None => {
+                            warn!("Couldn't load `{}`", stringify!($func));
+                            None
+                        },
                         Some(f) => {
                             info!("Loaded `{}`", stringify!($func));
                             Some(mem::transmute(f))
@@ -373,10 +462,10 @@ glx_ext!((
     GLX_EXT_create_context_es_profile
     GLX_EXT_create_context_es2_profile
     )(
+    glXSwapIntervalEXT
     glXSwapIntervalMESA
     glXGetSwapIntervalMESA
     glXSwapIntervalSGI
-    glXSwapIntervalEXT
     glXCreateContextAttribsARB
 ));
 
@@ -455,7 +544,7 @@ impl Glx {
     }
 
     // GLX 1.3 and above
-    fn gen_fbconfig_attribs(&self, settings: &GLPixelFormatSettings) -> [c_int; 41] {
+    fn gen_fbconfig_attribs(&self, settings: &GLPixelFormatSettings) -> [c_int; 43] {
         let &GLPixelFormatSettings {
             depth_bits, stencil_bits, double_buffer, stereo,
             red_bits, blue_bits, green_bits, alpha_bits,
@@ -483,8 +572,7 @@ impl Glx {
             GLX_X_RENDERABLE, x::True,
             GLX_SAMPLE_BUFFERS, msaa.buffer_count as _,
             GLX_SAMPLES, msaa.sample_count as _,
-            // GLX_CONFIG_CAVEAT, 0,
-            //
+            GLX_CONFIG_CAVEAT, GLX_DONT_CARE, // Setting it to GLX_NONE prevents me from matching any FBConfig ??
             // There's more GLX_TRANSPARENT_**_VALUE keys, might be
             // worth checking later,
             0 // keep last
@@ -702,6 +790,7 @@ impl Display {
             info!("GLX extensions    : {:?}", CStr::from_ptr(extensions    ).to_str());
             GlxExt::parse(get_proc_address, &CStr::from_ptr(extensions))
         };
+
         Some(Glx { version, get_proc_address, ext, error_base, event_base })
     }
 
@@ -740,9 +829,19 @@ impl Display {
         }
 
         // fbcs is an array of candidates, from which we choose the best.
+        //
+        // glXChooseFBConfig's man page describes the sorting order, which
+        // in general favors more lightweight configs: what matters most to us
+        // is that the sorting order favors single-buffered configs, and is
+        // apparently oblivious to MSAA parameters.
+        //
+        // So what we've got to do is run through the list of candidates and
+        // stop at the first that supports double buffering and exactly our
+        // MSAA params. If there's none, we'll just select the first one.
 
         let mut best_fbc = unsafe { *fbcs };
-        let mut best_sample_count: i32 = 0;
+        let mut best_fbc_i = 0;
+        let mut is_fbconfig_chosen = false;
 
         for i in 0..fbcount {
             let fbc = unsafe { *fbcs.offset(i as isize) };
@@ -752,22 +851,35 @@ impl Display {
             if visual_info.is_null() {
                 continue;
             }
-            let (mut samp_buf, mut samples): (c_int, c_int) = (0, 0);
+            let mut samp_buf: c_int = 0;
+            let mut samples: c_int = 0;
+            let mut double_buffer: c_int = 0;
             unsafe {
                 glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLE_BUFFERS, &mut samp_buf);
                 glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLES       , &mut samples );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_DOUBLEBUFFER  , &mut double_buffer);
             }
             let visualid = unsafe { (*visual_info).visualid };
-            info!{
-                "Matching FBConfig {}, visual ID {}, sample buffers = {}, samples = {}", 
-                i, visualid, samp_buf, samples
-            };
-            if samp_buf > 0 && samples > best_sample_count {
-                best_fbc = fbc;
-                best_sample_count = samples;
+            unsafe { 
+                x::XFree(visual_info as *mut _);
             }
-            unsafe { x::XFree(visual_info as *mut _); }
+            info!(
+                "Matching FBConfig n°{}, visual ID {}, sample_buffers = {}, samples = {}, double_buffer = {}", 
+                i, visualid, samp_buf, samples, double_buffer
+            );
+            if !is_fbconfig_chosen
+            && samp_buf == settings.msaa.buffer_count as _
+            && samples == settings.msaa.sample_count as _
+            && double_buffer == settings.double_buffer as _
+            {
+                is_fbconfig_chosen = true;
+                best_fbc = fbc;
+                best_fbc_i = i;
+                // Don't `break`, ensure we run through the whole list first
+                // so we can log them all.
+            }
         }
+        info!("Chosen FBConfig n°{}", best_fbc_i);
         unsafe { 
             x::XFree(fbcs as *mut _); 
             let visual_info = glXGetVisualFromFBConfig(x_dpy, best_fbc);
@@ -860,7 +972,146 @@ impl Display {
         }
 
         unsafe {
-            x::XFlush(x_dpy);
+            let mut protocols = [ 
+                self.atoms.WM_DELETE_WINDOW,
+                self.atoms._NET_WM_PING,
+                self.atoms.WM_TAKE_FOCUS,
+            ];
+            x::XSetWMProtocols(
+                x_dpy, x_window, protocols.as_mut_ptr(), protocols.len() as _
+            );
+
+            let pid = libc::getpid();
+            if pid > 0 {
+                x::XChangeProperty(
+                    x_dpy, x_window, self.atoms._NET_WM_PID, 
+                    x::XA_CARDINAL, 32, x::PropModeReplace,
+                    &pid as *const _ as *const _, 
+                    1
+                );
+            }
+            /*
+            x::XChangeProperty(
+                x_dpy, x_window, self.atoms.XdndAware, 
+                x::XA_ATOM, 32, x::PropModeReplace,
+                &xdnd_version as *const _ as *const _, 
+                1
+            );
+            */
+        }
+
+        // TODO: Move this to set_minimum_size() and friends
+        let sizehints = x::XSizeHints {
+            flags: x::PPosition | x::PSize | x::PMinSize | x::PMaxSize
+                 /*| x::PResizeInc | x::PAspect*/,
+            x, y, 
+            width: w as _, 
+            height: h as _,
+            // TODO: if not resizable, we should set these as equal to w and h.
+            min_width: 0, 
+            min_height: 0,
+            max_width: 9999999, 
+            max_height: 9999999,
+            width_inc: 1,
+            height_inc: 1,
+            min_aspect: x::AspectRatio { x: 0, y: 0 },
+            max_aspect: x::AspectRatio { x: 0, y: 0 },
+            base_width: 0, 
+            base_height: 0,
+            win_gravity: 0,
+        };
+        // TODO: leverage the UrgencyHint for messageboxes and stuff
+        let wmhints = x::XWMHints {
+            flags: x::InputHint /*| x::WindowGroupHint | x::IconPixmapHint | ...*/,
+            input: x::True,
+            .. unsafe { mem::zeroed() }
+            /*
+            initial_state,
+            icon_pixmap, icon_window, icon_x, icon_y, icon_mask,
+            window_group: window_group,
+            */
+        };
+        // TODO: readlink() on:
+        // - /proc/<pid>/exe on Linux, 
+        // - /proc/<pid>/file on FreeBSD.
+        let classname = b"dmc_app\0";
+        let classhint = x::XClassHint {
+            res_name: classname as *const _ as *mut _,
+            res_class: classname as *const _ as *mut _,
+        };
+
+        unsafe {
+            // We must do this because the structs might be extended in the
+            // future and only the XAlloc* functions know how big they are.
+            // Silly if you ask me.
+            let sizehints_buf = x::XAllocSizeHints();
+            let classhint_buf = x::XAllocClassHint();
+            let wmhints_buf = x::XAllocWMHints();
+
+            *sizehints_buf = sizehints;
+            *classhint_buf = classhint;
+            *wmhints_buf = wmhints;
+
+            let argc = 0;
+            let argv = ptr::null_mut();
+            let window_name = ptr::null_mut();
+            let icon_name = ptr::null_mut();
+            // replaces x::XSetWMNormalHints(x_dpy, x_window, &mut hints);
+            x::XSetWMProperties(
+                x_dpy, x_window, window_name, icon_name, argv, argc,
+                sizehints_buf, wmhints_buf, classhint_buf
+            );
+            x::XFree(sizehints_buf as _);
+            x::XFree(classhint_buf as _);
+            x::XFree(wmhints_buf as _);
+
+            let always_on_top = false;
+            let skip_taskbar = false;
+            let input_focus = false;
+            let maximized = false;
+            let fullscreen = false;
+            let mut atoms: [x::Atom; 16] = [0; 16];
+            let mut count = 0;
+            if always_on_top {
+                atoms[count] = self.atoms._NET_WM_STATE_ABOVE;
+                count += 1;
+            }
+            if skip_taskbar {
+                atoms[count] = self.atoms._NET_WM_STATE_SKIP_TASKBAR;
+                count += 1;
+                atoms[count] = self.atoms._NET_WM_STATE_SKIP_PAGER;
+                count += 1;
+            }
+            if input_focus {
+                atoms[count] = self.atoms._NET_WM_STATE_FOCUSED;
+                count += 1;
+            }
+            if maximized {
+                atoms[count] = self.atoms._NET_WM_STATE_MAXIMIZED_VERT;
+                count += 1;
+                atoms[count] = self.atoms._NET_WM_STATE_MAXIMIZED_HORZ;
+                count += 1;
+            }
+            if fullscreen {
+                atoms[count] = self.atoms._NET_WM_STATE_FULLSCREEN;
+                count += 1;
+            }
+            if count > 0 {
+                x::XChangeProperty(
+                    x_dpy, x_window, self.atoms._NET_WM_STATE, x::XA_ATOM, 32,
+                    x::PropModeReplace, atoms.as_mut_ptr() as *mut _, count as _
+                );
+            } else {
+                x::XDeleteProperty(x_dpy, x_window, self.atoms._NET_WM_STATE);
+            }
+
+            // TODO: There are many other possible types of window.
+            let mut wintype = self.atoms._NET_WM_WINDOW_TYPE_NORMAL;
+            x::XChangeProperty(
+                x_dpy, x_window, self.atoms._NET_WM_WINDOW_TYPE, x::XA_ATOM, 32,
+                x::PropModeReplace, &mut wintype as *mut _ as *mut _, 1
+            );
+            // Xinput2SelectTouch(this, window);
         }
 
         let wants_glx_window = {
@@ -876,7 +1127,6 @@ impl Display {
 
         Ok(Window { dpy: self, x_window, colormap, glx_window })
     }
-
 
     pub(super) fn create_gl_context<'dpy>(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) 
         -> Result<GLContext<'dpy>, super::Error>
@@ -900,7 +1150,8 @@ impl Display {
             if glx.version < Semver::new(1,3,0) {
                 ("glXCreateContext", glXCreateContext(x_dpy, visual_info, ptr::null_mut(), x::True))
             } else if glx.version < Semver::new(1,4,0) 
-                || (glx.version >= Semver::new(1,4,0) && !glx.ext.GLX_ARB_create_context) {
+                   || (glx.version >= Semver::new(1,4,0) && !glx.ext.GLX_ARB_create_context)
+            {
                 ("glXCreateNewContext", glXCreateNewContext(
                     x_dpy, fbconfig.unwrap(), GLX_RGBA_TYPE, ptr::null_mut(), x::True
                 ))
@@ -935,7 +1186,92 @@ impl Display {
 }
 
 
+impl<'dpy> GLContext<'dpy> {
+    pub(super) fn make_current(&self, win: &Window) {
+        unsafe {
+            match win.glx_window {
+                Some(w) => glXMakeContextCurrent(
+                    self.dpy.x_dpy, w, w, self.glx_context
+                ),
+                None => glXMakeCurrent(
+                    self.dpy.x_dpy, win.x_window, self.glx_context
+                ),
+            };
+        }
+    }
+
+    // NOTE: glXGetProcAddressARB doesn't need a bound context, unlike in WGL.
+    pub(super) unsafe fn get_proc_address_raw(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
+        #[cfg(not(target_os = "linux"))]
+        unimplemented!("We don't know how the situation is in OSes other than Linux!");
+        #[cfg(target_os = "linux")]
+        glXGetProcAddressARB(name as *const _)
+    }
+    pub(super) fn get_proc_address(&self, name: &str) -> Option<unsafe extern "C" fn()> {
+        let name = CString::new(name).unwrap();
+        unsafe {
+            self.get_proc_address_raw(name.as_ptr())
+        }
+    }
+}
+
+
 impl<'dpy> Window<'dpy> {
+
+    pub(super) fn gl_swap_buffers(&self) {
+        unsafe {
+            glXSwapBuffers(self.dpy.x_dpy, match self.glx_window {
+                Some(w) => w,
+                None => self.x_window,
+            });
+        }
+    }
+
+    pub(super) fn gl_set_swap_interval(&self, interval: GLSwapInterval) -> Result<(),super::Error> { 
+
+        let glx = self.dpy.glx.as_ref().unwrap();
+
+        let interval: c_int = match interval {
+            GLSwapInterval::VSync => 1,
+            GLSwapInterval::Immediate => 0,
+            GLSwapInterval::LateSwapTearing => {
+                if !glx.ext.GLX_EXT_swap_control_tear {
+                    return Err(super::Error::Backend(Error::MissingExtensionToGLX));
+                }
+                -1
+            },
+            GLSwapInterval::Interval(i) => {
+                if i < 0 && !glx.ext.GLX_EXT_swap_control_tear {
+                    return Err(super::Error::Backend(Error::MissingExtensionToGLX));
+                }
+                i
+            },
+            GLSwapInterval::LimitFps(fps) => unimplemented!{},
+        };
+
+        if glx.ext.GLX_EXT_swap_control && self.glx_window.is_some() {
+            let ssi = glx.ext.glXSwapIntervalEXT.unwrap();
+            unsafe {
+                ssi(self.dpy.x_dpy, self.glx_window.unwrap(), interval);
+            }
+            Ok(())
+        } else if glx.ext.GLX_MESA_swap_control {
+            let ssi = glx.ext.glXSwapIntervalMESA.unwrap();
+            unsafe {
+                ssi(interval);
+            }
+            Ok(())
+        } else if glx.ext.GLX_SGI_swap_control {
+            let ssi = glx.ext.glXSwapIntervalSGI.unwrap();
+            unsafe {
+                ssi(interval);
+            }
+            Ok(())
+        } else {
+            warn!("There's no extension that could set the swap interval!");
+            Err(super::Error::Backend(Error::MissingExtensionToGLX))
+        }
+    }
 
     pub(super) fn get_capabilities(&self) -> Capabilities {
         Capabilities {
@@ -1065,14 +1401,6 @@ impl<'dpy> Window<'dpy> {
         }
         WindowOpResult::Success(())
     }
-    pub(super) fn gl_swap_buffers(&self) {
-        unsafe {
-            glXSwapBuffers(self.dpy.x_dpy, match self.glx_window {
-                Some(w) => w,
-                None => self.x_window,
-            });
-        }
-    }
 
     // XGetWindowAttributes
     pub(super) fn query_screenspace_size(&self) -> Extent2<u32> {
@@ -1081,41 +1409,6 @@ impl<'dpy> Window<'dpy> {
     // XGetWindowAttributes
     pub(super) fn query_canvas_size(&self) -> Extent2<u32> {
         unimplemented!()
-    }
-    // Easy
-    pub(super) fn gl_set_swap_interval(&self, _interval: GLSwapInterval) -> Result<(),super::Error> { 
-        unimplemented!()
-    }
-}
-
-
-
-impl<'dpy> GLContext<'dpy> {
-    pub(super) fn make_current(&self, win: &Window) {
-        unsafe {
-            match win.glx_window {
-                Some(w) => glXMakeContextCurrent(
-                    self.dpy.x_dpy, w, w, self.glx_context
-                ),
-                None => glXMakeCurrent(
-                    self.dpy.x_dpy, win.x_window, self.glx_context
-                ),
-            };
-        }
-    }
-
-    // NOTE: glXGetProcAddressARB doesn't need a bound context, unlike in WGL.
-    pub(super) unsafe fn get_proc_address_raw(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
-        #[cfg(not(target_os = "linux"))]
-        unimplemented!("We don't know how the situation is in OSes other than Linux!");
-        #[cfg(target_os = "linux")]
-        glXGetProcAddressARB(name as *const _)
-    }
-    pub(super) fn get_proc_address(&self, name: &str) -> Option<unsafe extern "C" fn()> {
-        let name = CString::new(name).unwrap();
-        unsafe {
-            self.get_proc_address_raw(name.as_ptr())
-        }
     }
 }
 

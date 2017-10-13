@@ -15,6 +15,7 @@ build = "build.rs"
 log = "0.3.8"
 num-traits = "0.1.37"
 uuid = "0.5"
+libc = "0.2.26"
 vek = { git = "https://github.com/yoanlcq/vek" }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies.x11]

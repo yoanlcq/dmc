@@ -25,7 +25,7 @@ extern crate libc;
 // - Have the basics of CI
 
 pub use vek::vec::repr_c::{
-    Xyz, Xy, Extent2, Rgba,
+    Xyz, Xy, Extent2, Rgba, Rgb,
 };
 pub type Rgba32 = Rgba<u8>;
 

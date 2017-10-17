@@ -1405,6 +1405,7 @@ impl<'dpy> Window<'dpy> {
             hide: WindowOpResult::Unimplemented,
             show: WindowOpResult::Success(()),
             set_title: WindowOpResult::Success(()),
+            clear_icon: WindowOpResult::Unimplemented,
             set_icon: WindowOpResult::Unimplemented,
             set_style: WindowOpResult::Unimplemented,
             recenter: WindowOpResult::Unimplemented,
@@ -1482,8 +1483,47 @@ impl<'dpy> Window<'dpy> {
     }
     pub(super) fn enter_fullscreen(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
     pub(super) fn leave_fullscreen(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
-    pub(super) fn set_icon(&self, _icon: Option<Icon>) -> WindowOpResult<()> {
-        WindowOpResult::Unimplemented
+    pub(super) fn clear_icon(&self) -> WindowOpResult<()> {
+        let x_dpy = self.dpy.x_dpy;
+        let x_window = self.x_window;
+        #[allow(non_snake_case)]
+        let _NET_WM_ICON = self.dpy.atoms._NET_WM_ICON;
+
+        unsafe {
+            x::XDeleteProperty(x_dpy, x_window, _NET_WM_ICON);
+        }
+        WindowOpResult::Success(())
+    }
+    pub(super) fn set_icon(&self, icon: Icon) -> WindowOpResult<()> {
+        let x_dpy = self.dpy.x_dpy;
+        let x_window = self.x_window;
+        #[allow(non_snake_case)]
+        let _NET_WM_ICON = self.dpy.atoms._NET_WM_ICON;
+
+        let (w, h) = (icon.size.w, icon.size.h);
+        let mut prop = Vec::<u32>::with_capacity((2 + w * h) as _);
+        prop.push(w);
+        prop.push(h);
+        for y in 0..h {
+            for x in 0..w {
+                let p: Rgba<u8> = icon[(x, y)];
+                let argb: u32 = 
+                      (p.a as u32) << 24
+                    | (p.r as u32) << 16
+                    | (p.g as u32) << 8
+                    | (p.b as u32);
+                prop.push(argb);
+            }
+        }
+        unsafe { 
+            x::XChangeProperty(
+                x_dpy, x_window, _NET_WM_ICON, x::XA_CARDINAL, 32, 
+                x::PropModeReplace, prop.as_ptr() as _, prop.len() as _
+            );
+            x::XFlush(x_dpy);
+        }
+
+        WindowOpResult::Success(())
     }
     pub(super) fn set_minimum_size(&self, _size: Extent2<u32>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
@@ -1538,5 +1578,4 @@ impl<'dpy> Window<'dpy> {
         unimplemented!()
     }
 }
-
 

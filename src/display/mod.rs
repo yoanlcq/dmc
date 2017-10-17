@@ -141,12 +141,6 @@
 //! 
 //! [1]: struct.Display.html
 
-
-
-#[cfg(dmc_display_backend="x11")]
-#[path="x11.rs"]
-mod backend;
-
 // TODO
 // x X11: Perform enough error checking;
 // o Get display modes (and desktop extent);
@@ -169,7 +163,13 @@ mod backend;
 use std::path::Path;
 use std::time::Duration;
 use std::os::raw::{c_char};
-use super::{Decision, Semver, Rgba32, Extent2, Xy};
+use super::{Decision, Semver, Rgba32, Extent2, Xy, Rgba};
+use std::ops::{Index};
+
+
+#[cfg(dmc_display_backend="x11")]
+#[path="x11.rs"]
+mod backend;
 
 pub mod window {
 
@@ -280,9 +280,23 @@ pub mod window {
         pub borders: Option<Borders>,
     }
 
-    /// TODO Data for a window's icon.
-    pub struct Icon;
+    // TODO: Create our own type. Bundle it with vek ?
 
+    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+    pub struct Image<'a, Pixel: 'a> {
+        pub size: Extent2<u32>,
+        pub pixels: &'a [Pixel],
+    }
+
+    impl<'a, Pixel: 'a> Index<(u32, u32)> for Image<'a, Pixel> {
+        type Output = Pixel;
+        fn index(&self, i: (u32, u32)) -> &Self::Output {
+            let ((x, y), w) = (i, self.size.w);
+            &self.pixels[(y * w + x) as usize]
+        }
+    }
+
+    pub type Icon<'a> = Image<'a, Rgba<u8>>;
 
     impl<T: Into<Extent2<u32>>> From<T> for Mode {
         fn from(size: T) -> Self {
@@ -360,6 +374,7 @@ pub mod window {
         pub show: WindowOpResult<()>,
         pub set_title: WindowOpResult<()>,
         pub set_icon: WindowOpResult<()>,
+        pub clear_icon: WindowOpResult<()>,
         pub set_style: WindowOpResult<()>,
         pub recenter: WindowOpResult<()>,
         pub set_opacity: WindowOpResult<()>,
@@ -412,8 +427,12 @@ pub mod window {
             self.0.set_title(title)
         }
         #[allow(missing_docs)]
-        pub fn set_icon<I: Into<Option<Icon>>>(&self, icon: I) -> WindowOpResult<()> {
-            self.0.set_icon(icon.into())
+        pub fn set_icon(&self, icon: Icon) -> WindowOpResult<()> {
+            self.0.set_icon(icon)
+        }
+        #[allow(missing_docs)]
+        pub fn clear_icon(&self) -> WindowOpResult<()> {
+            self.0.clear_icon()
         }
         /// Attempts to set the window's borders.
         pub fn set_style(&self, style: &Style) -> WindowOpResult<()> {

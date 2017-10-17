@@ -148,12 +148,23 @@
 mod backend;
 
 // TODO
-// - Enable/DisableScreenSaver
-// - Get display modes
-// - Get DPI
-// - Get Grabbed window
-// - More feature-complete messageboxes
-// - Set cursor
+// x X11: Perform enough error checking;
+// o Get display modes (and desktop extent);
+// o Set cursor;
+// o Set icon;
+// o Support OpenGL-less window;
+// o Once examples are done, test everything (docs included);
+// o Get a list of FBConfigs one can choose from.
+// o GLX_CAVEAT;
+// o Drag'n Drop;
+// o Clipboard;
+// o Copy GL contexts;
+// o Share objects between contexts;
+// o Off-screen rendering (e.g PBuffers, etc);
+// o Enable/DisableScreenSaver
+// o Get DPI
+// o Get Grabbed window
+// o More feature-complete messageboxes
 
 use std::path::Path;
 use std::time::Duration;

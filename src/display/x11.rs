@@ -17,22 +17,7 @@
 // - GLX extensions
 //   https://www.khronos.org/registry/OpenGL/index_gl.php
 //
-// Missing features:
-// - Copy contexts
-// - Share contexts (at glXCreateContext)
-// - Off-screen rendering
-//
-// TODO: Talk a bit about how X11 PreparedAtoms are like Keys or Values for 
-// Properties.
-//
-// The plan:
-// - Display::open() chooses a screen (for use other than XDefaultScreen)
-// - Get the root window for the screen with XRootWindow;
-// - Display::open() calls glXQueryExtension and glXQueryVersion.
-// - Display::open() calls glXGetClientString and glXQueryServerString
-//   and glXQueryExtensionsString;
-//
-// Then, depending one the GLX version:
+// Depending one the GLX version:
 //
 // - All versions :
 //   - Always use glXGetProcAddressARB (glXGetProcAddress is not always 
@@ -78,8 +63,9 @@ use std::fmt::{self, Formatter};
 use std::ptr;
 use std::mem;
 use std::ffi::*;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_uchar, c_int, c_long, c_ulong};
 use std::sync::atomic::{ATOMIC_BOOL_INIT, AtomicBool, Ordering};
+use std::slice;
 use libc;
 
 use super::Extent2;
@@ -113,6 +99,15 @@ mod types {
 // be accessible from the outside world if they opt-in.
 // Users do have to use `get_internal()` on their window already.
 
+// TODO: move to `vek`.
+#[derive(Debug, Copy, Clone, Hash, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Rect<T> {
+    pub x: T,
+    pub y: T,
+    pub w: T,
+    pub h: T,
+}
+
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Display {
     pub x_dpy: *mut x::Display,
@@ -121,6 +116,7 @@ pub struct Display {
     pub screen_num: c_int,
     pub root: x::Window,
     pub glx: Option<Glx>,
+    pub usable_viewport: Rect<u32>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -255,7 +251,7 @@ macro_rules! atoms {
                 $(
                     let $atom = CString::new(stringify!($atom)).unwrap();
                     let $atom = unsafe { x::XInternAtom(
-                        x_dpy, $atom.as_ptr(), x::False
+                        x_dpy, $atom.as_ptr(), x::False // Don't create
                     )};
                     match $atom {
                         0 => warn!("Atom not present: {}", stringify!($atom)),
@@ -270,13 +266,13 @@ macro_rules! atoms {
 
 atoms!(
 
-    // Base atoms
+    // Some base atoms
     UTF8_STRING
     PRIMARY
     SECONDARY
     CLIPBOARD
 
-    // ??? from SDL2
+    // One mindlessly grabbed from SDL2
     XKLAVIER_STATE
 
     // Some ICCCM atoms
@@ -515,9 +511,9 @@ impl Glx {
             GLX_ACCUM_ALPHA_SIZE, accum_alpha_bits as c_int,
             0, // GLX_DOUBLEBUFFER, see below
             0, // GLX_STEREO, see below
-            0, // GLX_SAMPLE_BUFFERS_ARB, see below
+            0, // GLX_SAMPLE_BUFFERS_ARB attrib, see below
             0, // GLX_SAMPLE_BUFFERS_ARB value, see below
-            0, // GLX_SAMPLES_ARB, see below
+            0, // GLX_SAMPLES_ARB attrib, see below
             0, // GLX_SAMPLES_ARB value, see below
             0
         ];
@@ -572,7 +568,7 @@ impl Glx {
             GLX_X_RENDERABLE, x::True,
             GLX_SAMPLE_BUFFERS, msaa.buffer_count as _,
             GLX_SAMPLES, msaa.sample_count as _,
-            GLX_CONFIG_CAVEAT, GLX_DONT_CARE, // Setting it to GLX_NONE prevents me from matching any FBConfig ??
+            GLX_CONFIG_CAVEAT, GLX_DONT_CARE, // NOTE: Setting it to GLX_NONE is very strict.
             // There's more GLX_TRANSPARENT_**_VALUE keys, might be
             // worth checking later,
             0 // keep last
@@ -699,6 +695,7 @@ impl Display {
         unsafe {
             // This thing is global to Xlib, and not inherent to X11.
             // We wouldn't have it if we used XCB.
+            //
             // info!("Overriding process-wide Xlib error handler.");
             // x::XSetErrorHandler(Some(Self::x_generic_error_handler));
 
@@ -714,7 +711,6 @@ impl Display {
             });
             if x_dpy.is_null() {
                 return Err(super::Error::Backend(
-                    // PERF: No thrilled about this allocation though
                     Error::NoXDisplayForName { 
                         name: x_display_name.map(|s| CString::new(
                             s.to_bytes_with_nul().to_owned()
@@ -731,9 +727,49 @@ impl Display {
             let root = x::XRootWindowOfScreen(screen);
             let atoms = PreparedAtoms::fetch(x_dpy);
             let glx = Self::query_glx(x_dpy, screen_num);
+            let usable_viewport = Self::query_usable_viewport(x_dpy, screen_num, &atoms);
 
-            Ok(Self { x_dpy, atoms, screen, screen_num, root, glx })
+            Ok(Self { x_dpy, atoms, screen, screen_num, root, glx, usable_viewport })
         }
+    }
+
+    // FIXME: If we can't, return the whole screen size.
+    fn query_usable_viewport(x_dpy: *mut x::Display, screen_num: c_int, atoms: &PreparedAtoms) -> Rect<u32> {
+        let mut real_type: x::Atom = 0;
+        let mut real_format: c_int = 0;
+        let mut items_read: c_ulong = 0;
+        let mut items_left: c_ulong = 0;
+        let mut propdata: *mut c_uchar = ptr::null_mut();
+
+        // XXX: Dubious
+        let fallback = unsafe { Rect {
+            x: 0, y: 0,
+            w: x::XDisplayWidth(x_dpy, screen_num) as u32,
+            h: x::XDisplayHeight(x_dpy, screen_num) as u32,
+        }};
+
+        let status = unsafe { x::XGetWindowProperty(
+            x_dpy, x::XDefaultRootWindow(x_dpy), atoms._NET_WORKAREA,
+            0, 4, x::False, x::XA_CARDINAL,
+            &mut real_type, &mut real_format, &mut items_read,
+            &mut items_left, &mut propdata
+        )};
+        let usable = if status == x::Success as _ && items_read >= 4 {
+            let p = unsafe {
+                slice::from_raw_parts(propdata as *const c_long, items_read as _)
+            };
+            let usable = Rect {
+                x: p[0] as u32, y: p[1] as u32, w: p[2] as u32, h: p[3] as u32
+            };
+            usable
+        } else {
+            fallback
+        };
+
+        unsafe {
+            x::XFree(propdata as _);
+        }
+        usable
     }
 
     fn query_glx(x_dpy: *mut x::Display, screen_num: c_int) -> Option<Glx> {
@@ -765,7 +801,7 @@ impl Display {
         info!("GLX extension version {}.{}", major, minor);
 
         #[cfg(not(target_os = "linux"))]
-        unimplemented!("We don't know how the situation is in OSes other than Linux!");
+        unimplemented!("We don't know how the situation is in OSes other than Linux! This could require moving to x11-dl.");
         #[cfg(target_os = "linux")]
         let get_proc_address = glXGetProcAddressARB;
 
@@ -851,26 +887,117 @@ impl Display {
             if visual_info.is_null() {
                 continue;
             }
-            let mut samp_buf: c_int = 0;
-            let mut samples: c_int = 0;
-            let mut double_buffer: c_int = 0;
+            let mut sample_buffers          : c_int = 0;
+            let mut samples                 : c_int = 0;
+            let mut fbconfig_id             : c_int = 0; 
+            let mut buffer_size             : c_int = 0; 
+            let mut level                   : c_int = 0; 
+            let mut stereo                  : c_int = 0; 
+            let mut doublebuffer            : c_int = 0;
+            let mut aux_buffers             : c_int = 0; 
+            let mut red_size                : c_int = 0; 
+            let mut green_size              : c_int = 0; 
+            let mut blue_size               : c_int = 0; 
+            let mut alpha_size              : c_int = 0; 
+            let mut depth_size              : c_int = 0; 
+            let mut stencil_size            : c_int = 0; 
+            let mut accum_red_size          : c_int = 0; 
+            let mut accum_green_size        : c_int = 0; 
+            let mut accum_blue_size         : c_int = 0; 
+            let mut accum_alpha_size        : c_int = 0; 
+            let mut render_type             : c_int = 0; 
+            let mut drawable_type           : c_int = 0; 
+            let mut x_renderable            : c_int = 0; 
+            let mut visual_id               : c_int = 0; 
+            let mut x_visual_type           : c_int = 0; 
+            let mut config_caveat           : c_int = 0; 
+            let mut transparent_type        : c_int = 0; 
+            let mut transparent_index_value : c_int = 0; 
+            let mut transparent_red_value   : c_int = 0; 
+            let mut transparent_green_value : c_int = 0; 
+            let mut transparent_blue_value  : c_int = 0; 
+            let mut transparent_alpha_value : c_int = 0; 
+            let mut max_pbuffer_width       : c_int = 0; 
+            let mut max_pbuffer_height      : c_int = 0; 
+            let mut max_pbuffer_pixels      : c_int = 0; 
             unsafe {
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLE_BUFFERS, &mut samp_buf);
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLES       , &mut samples );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_DOUBLEBUFFER  , &mut double_buffer);
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLE_BUFFERS         , &mut sample_buffers         );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLES                , &mut samples                );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_FBCONFIG_ID            , &mut fbconfig_id            );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_BUFFER_SIZE            , &mut buffer_size            );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_LEVEL                  , &mut level                  );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_DOUBLEBUFFER           , &mut stereo                 );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_STEREO                 , &mut doublebuffer           );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_AUX_BUFFERS            , &mut aux_buffers            );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_RED_SIZE               , &mut red_size               );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_GREEN_SIZE             , &mut green_size             );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_BLUE_SIZE              , &mut blue_size              );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ALPHA_SIZE             , &mut alpha_size             );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_DEPTH_SIZE             , &mut depth_size             );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_STENCIL_SIZE           , &mut stencil_size           );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ACCUM_RED_SIZE         , &mut accum_red_size         );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ACCUM_GREEN_SIZE       , &mut accum_green_size       );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ACCUM_BLUE_SIZE        , &mut accum_blue_size        );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ACCUM_ALPHA_SIZE       , &mut accum_alpha_size       );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_RENDER_TYPE            , &mut render_type            );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_DRAWABLE_TYPE          , &mut drawable_type          );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_X_RENDERABLE           , &mut x_renderable           );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_VISUAL_ID              , &mut visual_id              );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_X_VISUAL_TYPE          , &mut x_visual_type          );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_CONFIG_CAVEAT          , &mut config_caveat          );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_TYPE       , &mut transparent_type       );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_INDEX_VALUE, &mut transparent_index_value);
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_RED_VALUE  , &mut transparent_red_value  );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_GREEN_VALUE, &mut transparent_green_value);
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_BLUE_VALUE , &mut transparent_blue_value );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_ALPHA_VALUE, &mut transparent_alpha_value);
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_MAX_PBUFFER_WIDTH      , &mut max_pbuffer_width      );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_MAX_PBUFFER_HEIGHT     , &mut max_pbuffer_height     );
+                glXGetFBConfigAttrib(x_dpy, fbc, GLX_MAX_PBUFFER_PIXELS     , &mut max_pbuffer_pixels     );
             }
             let visualid = unsafe { (*visual_info).visualid };
             unsafe { 
                 x::XFree(visual_info as *mut _);
             }
-            info!(
-                "Matching FBConfig n°{}, visual ID {}, sample_buffers = {}, samples = {}, double_buffer = {}", 
-                i, visualid, samp_buf, samples, double_buffer
-            );
+            info!("Matching FBConfig n°{}", i);
+            info!("- sample_buffers          : {}", sample_buffers         );
+            info!("- samples                 : {}", samples                );
+            info!("- fbconfig_id             : {}", fbconfig_id            );
+            info!("- buffer_size             : {}", buffer_size            );
+            info!("- level                   : {}", level                  );
+            info!("- stereo                  : {}", stereo                 );
+            info!("- doublebuffer            : {}", doublebuffer           );
+            info!("- aux_buffers             : {}", aux_buffers            );
+            info!("- red_size                : {}", red_size               );
+            info!("- green_size              : {}", green_size             );
+            info!("- blue_size               : {}", blue_size              );
+            info!("- alpha_size              : {}", alpha_size             );
+            info!("- depth_size              : {}", depth_size             );
+            info!("- stencil_size            : {}", stencil_size           );
+            info!("- accum_red_size          : {}", accum_red_size         );
+            info!("- accum_green_size        : {}", accum_green_size       );
+            info!("- accum_blue_size         : {}", accum_blue_size        );
+            info!("- accum_alpha_size        : {}", accum_alpha_size       );
+            info!("- render_type             : {}", render_type            );
+            info!("- drawable_type           : {}", drawable_type          );
+            info!("- x_renderable            : {}", x_renderable           );
+            info!("- visual_id               : {}", visual_id              );
+            info!("- x_visual_type           : {}", x_visual_type          );
+            info!("- config_caveat           : {}", config_caveat          );
+            info!("- transparent_type        : {}", transparent_type       );
+            info!("- transparent_index_value : {}", transparent_index_value);
+            info!("- transparent_red_value   : {}", transparent_red_value  );
+            info!("- transparent_green_value : {}", transparent_green_value);
+            info!("- transparent_blue_value  : {}", transparent_blue_value );
+            info!("- transparent_alpha_value : {}", transparent_alpha_value);
+            info!("- max_pbuffer_width       : {}", max_pbuffer_width      );
+            info!("- max_pbuffer_height      : {}", max_pbuffer_height     );
+            info!("- max_pbuffer_pixels      : {}", max_pbuffer_pixels     );
+
             if !is_fbconfig_chosen
-            && samp_buf == settings.msaa.buffer_count as _
+            && sample_buffers == settings.msaa.buffer_count as _
             && samples == settings.msaa.sample_count as _
-            && double_buffer == settings.double_buffer as _
+            && doublebuffer == settings.double_buffer as _
             {
                 is_fbconfig_chosen = true;
                 best_fbc = fbc;
@@ -1203,7 +1330,7 @@ impl<'dpy> GLContext<'dpy> {
     // NOTE: glXGetProcAddressARB doesn't need a bound context, unlike in WGL.
     pub(super) unsafe fn get_proc_address_raw(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
         #[cfg(not(target_os = "linux"))]
-        unimplemented!("We don't know how the situation is in OSes other than Linux!");
+        unimplemented!("We don't know how the situation is in OSes other than Linux! This could require moving to x11-dl.");
         #[cfg(target_os = "linux")]
         glXGetProcAddressARB(name as *const _)
     }

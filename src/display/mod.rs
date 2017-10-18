@@ -123,7 +123,7 @@
 //! // GLSwapInterval offers more options, go check them out!
 //! if swap_chain.set_interval(LateSwapTearing).is_err() {
 //!     if swap_chain.set_interval(VSync).is_err() {
-//!         let _ = swap_chain.set_interval(LimitFps(60));
+//!         let _ = swap_chain.set_interval(LimitFps(60.0f32));
 //!     }
 //! }
 //! 
@@ -183,11 +183,13 @@ pub mod window {
         #[allow(missing_docs)]
         FixedSize(Extent2<u32>),
         #[allow(missing_docs)]
-        DesktopSize,
+        Maximized,
         #[allow(missing_docs)]
         FullScreen,
-        /// This is _possible_ but I wonder who would use this.
-        FixedSizeFullScreen(Extent2<u32>),
+        // This one is removed because there's no use case for it and can't
+        // easily be implemented.
+        // /// This is _possible_ but I wonder who would use this.
+        // FixedSizeFullScreen(Extent2<u32>),
     }
 
     /// The absolute minimum information a window needs at creation time.
@@ -572,9 +574,9 @@ pub mod window {
         pub fn is_cursor_shown(&self) -> WindowOpResult<bool> { unimplemented!{} }
         pub fn show_cursor(&self) -> WindowOpResult<()> { unimplemented!{} }
         pub fn hide_cursor(&self) -> WindowOpResult<()> { unimplemented!{} }
-        pub fn set_cursor(&self, cursor: &Cursor) -> WindowOpResult<()> { unimplemented!{} }
+        pub fn set_cursor(&self, _cursor: &Cursor) -> WindowOpResult<()> { unimplemented!{} }
         pub fn cursor(&self) -> WindowOpResult<&Cursor> { unimplemented!{} }
-        pub fn move_cursor(&self, pos: Xy<u32>) -> WindowOpResult<()> { unimplemented!{} }
+        pub fn move_cursor(&self, _pos: Xy<u32>) -> WindowOpResult<()> { unimplemented!{} }
         pub fn get_cursor_position(&self) -> WindowOpResult<Xy<u32>> { unimplemented!{} }
     }
 }
@@ -694,9 +696,9 @@ impl<'dpy> Display {
         unimplemented!()
     }
 
-    pub fn best_cursor_size(&'dpy self, size_hint: Extent2<u32>) -> Extent2<u32> { unimplemented!{} }
-    pub fn create_cursor(&'dpy self, anim: CursorBuilder) -> Result<Cursor<'dpy>, Error> { unimplemented!{} }
-    pub fn system_cursor(&'dpy self, s: SystemCursor) -> Result<Cursor<'dpy>, Error> { unimplemented!{} }
+    pub fn best_cursor_size(&'dpy self, _size_hint: Extent2<u32>) -> Extent2<u32> { unimplemented!{} }
+    pub fn create_cursor(&'dpy self, _anim: CursorBuilder) -> Result<Cursor<'dpy>, Error> { unimplemented!{} }
+    pub fn system_cursor(&'dpy self, _s: SystemCursor) -> Result<Cursor<'dpy>, Error> { unimplemented!{} }
 }
 
 
@@ -725,8 +727,9 @@ impl Default for GLProfile {
 /// The only way to get one is to call the `make_current` method
 /// of a [`GLContext`](struct.GLContext.html).
 pub struct GLSwapChain<'win,'gl:'win,'dpy:'gl> {
-    window: &'win Window<'dpy>,
-    gl_context: &'gl GLContext<'dpy>,
+    pub window: &'win Window<'dpy>,
+    pub gl_context: &'gl GLContext<'dpy>,
+    pub fps_limit: Option<f32>,
 }
 
 
@@ -987,9 +990,9 @@ impl<'win,'gl:'win,'dpy:'gl> GLContext<'dpy> {
     /// created before another "make_current".
     pub fn make_current(&'gl self, window: &'win Window<'dpy>) -> GLSwapChain<'win,'gl,'dpy> {
         self.0.make_current(&window.0);
-        let out = GLSwapChain { window, gl_context: self };
+        let mut out = GLSwapChain { window, gl_context: self, fps_limit: None };
         if out.set_swap_interval(Default::default()).is_err() {
-            out.set_swap_interval(GLSwapInterval::LimitFps(60)).unwrap();
+            out.set_swap_interval(GLSwapInterval::LimitFps(60_f32)).unwrap();
         }
         out
     }
@@ -1015,11 +1018,22 @@ impl<'win,'gl:'win,'dpy:'gl> GLSwapChain<'win, 'gl, 'dpy> {
     /// otherwise nothing will happen. See [this blog
     /// post](http://renderingpipeline.com/2012/05/nsopenglcontext-flushbuffer-might-not-do-what-you-think/) for more info.
     pub fn present(&self) {
-        self.window.0.gl_swap_buffers()
+        match self.fps_limit {
+            None => self.window.0.gl_swap_buffers(),
+            Some(_fps_limit) => {
+                // TODO: Implement fixed time-step
+                unimplemented!{"Limiting FPS isn't supported yet."}
+            },
+        }
     }
 
     /// Attempts to set the chain's swap interval. 
-    pub fn set_swap_interval(&self, interval: GLSwapInterval) -> Result<(),Error> {
+    pub fn set_swap_interval(&mut self, interval: GLSwapInterval) -> Result<(),Error> {
+        self.fps_limit = None;
+        if let GLSwapInterval::LimitFps(fps_limit) = interval {
+            self.fps_limit = Some(fps_limit);
+            return Ok(());
+        }
         self.window.0.gl_set_swap_interval(interval)
     }
     /// You never need to do this unless you have several windows
@@ -1032,7 +1046,7 @@ impl<'win,'gl:'win,'dpy:'gl> GLSwapChain<'win, 'gl, 'dpy> {
 }
 
 /// The interval at which OpenGL buffers are swapped.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum GLSwapInterval {
     /// Vertical sync : frames are synchronized with the monitor's refresh 
     /// rate. This is the default.
@@ -1074,7 +1088,7 @@ pub enum GLSwapInterval {
     /// It's rather for convenience since properly setting a swap interval
     /// may not be supported, in which case the FPS skyrockets and the GPU
     /// melts.
-    LimitFps(u32),
+    LimitFps(f32),
 }
 
 impl Default for GLSwapInterval {

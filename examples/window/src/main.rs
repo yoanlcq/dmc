@@ -59,7 +59,7 @@ fn main() {
     };
     let window = display.create_window(&window_settings).expect("Couldn't create window!");
     let gl_ctx = display.create_gl_context(&gl_pixel_format, &gl_ctx_settings).expect("Couldn't create GL context!");
-    let swap_chain = gl_ctx.make_current(&window);
+    let mut swap_chain = gl_ctx.make_current(&window);
 
     gl::load_with(|s| match gl_ctx.get_proc_address(s) {
         Some(p) => {
@@ -71,6 +71,7 @@ fn main() {
             ptr::null()
         },
     });
+
 
     // TODO: Let's log as much info as we can from the GL context!
 
@@ -101,6 +102,7 @@ fn main() {
 
 
         // TODO: report to gl crate.
+        #[allow(non_snake_case)]
         let CONTEXT_FLAG_NO_ERROR_BIT_KHR: GLuint = 0x00000008;
 
         info!(
@@ -115,7 +117,7 @@ fn main() {
     Stereo buffers      : {}
     Depth buffer bits   : {}
     Stencil buffer bits : {}
-    Extesions           : {}",
+    Extensions          : {}",
             gl_version, gl_renderer, gl_vendor, glsl_version,
             if ctxpmask & gl::CONTEXT_CORE_PROFILE_BIT != 0 {
                 "core"
@@ -172,7 +174,7 @@ if ctxflags &     CONTEXT_FLAG_NO_ERROR_BIT_KHR != 0 { "no_error " } else {""},
 
     if swap_chain.set_swap_interval(GLSwapInterval::LateSwapTearing).is_err() {
         if swap_chain.set_swap_interval(GLSwapInterval::VSync).is_err() {
-            swap_chain.set_swap_interval(GLSwapInterval::LimitFps(60)).unwrap();
+            swap_chain.set_swap_interval(GLSwapInterval::LimitFps(60_f32)).unwrap();
             info!("Set swap interval to Manual: 60 FPS.");
         } else {
             info!("Set swap interval to VSync.");

@@ -128,7 +128,7 @@ pub struct Glx {
     pub event_base: c_int,
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct Window<'dpy> {
     pub dpy: &'dpy Display,
     pub x_window: x::Window,
@@ -469,10 +469,10 @@ glx_ext!((
 // TODO: Send a PR to x11-rs.
 mod xx {
     pub const GLX_CONTEXT_ES_PROFILE_BIT_EXT             : i32 = 0x00000004;
-    pub const GLX_CONTEXT_ES2_PROFILE_BIT_EXT            : i32 = 0x00000004;
+    // pub const GLX_CONTEXT_ES2_PROFILE_BIT_EXT            : i32 = 0x00000004;
     pub const GLX_CONTEXT_ROBUST_ACCESS_BIT_ARB          : i32 = 0x00000004;
     pub const GLX_CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB: i32 = 0x8256;
-    pub const GLX_NO_RESET_NOTIFICATION_ARB              : i32 = 0x8261;
+    // pub const GLX_NO_RESET_NOTIFICATION_ARB              : i32 = 0x8261;
     pub const GLX_LOSE_CONTEXT_ON_RESET_ARB              : i32 = 0x8252;
 }
 
@@ -676,8 +676,8 @@ static mut G_GLX_EVENT_BASE: i32 = 0;
 
 impl Display {
 
-    // TODO: Grab from _XPrintDefaultError in Xlib's sources
-    unsafe extern fn x_generic_error_handler(dpy: *mut x::Display, e: *mut x::XErrorEvent) -> c_int {
+    // WISH: Grab from _XPrintDefaultError in Xlib's sources
+    unsafe extern fn _x_generic_error_handler(_dpy: *mut x::Display, e: *mut x::XErrorEvent) -> c_int {
         // NOTE: DO NOT make requests to the X server within X error handlers such as this one.
         G_XLIB_ERROR_OCCURED.store(true, Ordering::SeqCst);
         let e = *e;
@@ -719,8 +719,16 @@ impl Display {
                 ));
             }
 
-            // TODO: Log a lot of X-server-related info, such as the
-            // X extensions it supports.
+            let protocol_version  = x::XProtocolVersion(x_dpy);
+            let protocol_revision = x::XProtocolRevision(x_dpy);
+            let screen_count      = x::XScreenCount(x_dpy);
+            let vendor_release    = x::XVendorRelease(x_dpy);
+            let display_string    = CStr::from_ptr(x::XDisplayString(x_dpy)).to_string_lossy();
+            let server_vendor     = CStr::from_ptr(x::XServerVendor(x_dpy) ).to_string_lossy();
+            info!("Opened X11 display `{}`", display_string);
+            info!("X Protocol version {}, revision {}", protocol_version, protocol_revision);
+            info!("Vendor: `{}`, release {}", server_vendor, vendor_release);
+            info!("Screen count: {}", screen_count);
 
             let screen = x::XDefaultScreenOfDisplay(x_dpy);
             let screen_num = x::XDefaultScreen(x_dpy);
@@ -955,14 +963,39 @@ impl Display {
                 glXGetFBConfigAttrib(x_dpy, fbc, GLX_MAX_PBUFFER_HEIGHT     , &mut max_pbuffer_height     );
                 glXGetFBConfigAttrib(x_dpy, fbc, GLX_MAX_PBUFFER_PIXELS     , &mut max_pbuffer_pixels     );
             }
-            let visualid = unsafe { (*visual_info).visualid };
+            // let visualid = unsafe { (*visual_info).visualid };
             unsafe { 
                 x::XFree(visual_info as *mut _);
             }
+            let stereo = stereo != x::False;
+            let doublebuffer = doublebuffer != x::False;
+            let x_renderable = x_renderable != x::False;
+            let x_visual_type = match x_visual_type {
+                GLX_TRUE_COLOR   => "GLX_TRUE_COLOR",
+                GLX_DIRECT_COLOR => "GLX_DIRECT_COLOR",
+                GLX_PSEUDO_COLOR => "GLX_PSEUDO_COLOR",
+                GLX_STATIC_COLOR => "GLX_STATIC_COLOR",
+                GLX_GRAY_SCALE   => "GLX_GRAY_SCALE",
+                GLX_STATIC_GRAY  => "GLX_STATIC_GRAY",
+                _ => "<??>",
+            };
+            let config_caveat = match config_caveat {
+                GLX_NONE                  => "GLX_NONE",
+                GLX_SLOW_CONFIG           => "GLX_SLOW_CONFIG",
+                GLX_NON_CONFORMANT_CONFIG => "GLX_NON_CONFORMANT_CONFIG",
+                _ => "<??>",
+            };
+            let transparent_type = match transparent_type {
+                GLX_NONE              => "GLX_NONE",
+                GLX_TRANSPARENT_RGB   => "GLX_TRANSPARENT_RGB",
+                GLX_TRANSPARENT_INDEX => "GLX_TRANSPARENT_INDEX",
+                _ => "<??>",
+            };
+
             info!("Matching FBConfig n°{}", i);
             info!("- sample_buffers          : {}", sample_buffers         );
             info!("- samples                 : {}", samples                );
-            info!("- fbconfig_id             : {}", fbconfig_id            );
+            info!("- fbconfig_id             : 0x{:x}", fbconfig_id            );
             info!("- buffer_size             : {}", buffer_size            );
             info!("- level                   : {}", level                  );
             info!("- stereo                  : {}", stereo                 );
@@ -978,13 +1011,20 @@ impl Display {
             info!("- accum_green_size        : {}", accum_green_size       );
             info!("- accum_blue_size         : {}", accum_blue_size        );
             info!("- accum_alpha_size        : {}", accum_alpha_size       );
-            info!("- render_type             : {}", render_type            );
-            info!("- drawable_type           : {}", drawable_type          );
+            info!("- render_type             : 0x{:x}{}{}", render_type, 
+                if render_type & GLX_RGBA_BIT != 0 { " (GLX_RGBA_BIT)" } else { "" },
+                if render_type & GLX_COLOR_INDEX_BIT != 0 { " (GLX_COLOR_INDEX_BIT)" } else { "" }
+            );
+            info!("- drawable_type           : 0x{:x}{}{}{}", drawable_type,
+                if drawable_type & GLX_WINDOW_BIT  != 0 { " (GLX_WINDOW_BIT)"  } else { "" },
+                if drawable_type & GLX_PIXMAP_BIT  != 0 { " (GLX_PIXMAP_BIT)"  } else { "" },
+                if drawable_type & GLX_PBUFFER_BIT != 0 { " (GLX_PBUFFER_BIT)" } else { "" }
+            ); // GLX_WINDOW_BIT, GLX_PIXMAP_BIT, and GLX_PBUFFER_BIT
             info!("- x_renderable            : {}", x_renderable           );
-            info!("- visual_id               : {}", visual_id              );
-            info!("- x_visual_type           : {}", x_visual_type          );
-            info!("- config_caveat           : {}", config_caveat          );
-            info!("- transparent_type        : {}", transparent_type       );
+            info!("- visual_id               : 0x{:x}", visual_id              );
+            info!("- x_visual_type           : {}", x_visual_type          ); // GLX_TRUE_COLOR, GLX_DIRECT_COLOR, GLX_PSEUDO_COLOR, GLX_STATIC_COLOR, GLX_GRAY_SCALE, or GLX_STATIC_GRAY
+            info!("- config_caveat           : {}", config_caveat          ); // GLX_NONE, GLX_SLOW_CONFIG, GLX_NON_CONFORMANT_CONFIG
+            info!("- transparent_type        : {}", transparent_type       ); // GLX_NONE, GLX_TRANSPARENT_RGB, GLX_TRANSPARENT_INDEX
             info!("- transparent_index_value : {}", transparent_index_value);
             info!("- transparent_red_value   : {}", transparent_red_value  );
             info!("- transparent_green_value : {}", transparent_green_value);
@@ -1025,6 +1065,9 @@ impl Display {
             mode, resizable, fully_opaque, ref opengl, allow_high_dpi
         } = settings;
 
+        let _ = allow_high_dpi;
+        let _ = fully_opaque;
+
         let (visual, depth, colormap) = match *opengl {
             Some(ref pixel_format) => {
                 if self.glx.is_none() {
@@ -1049,11 +1092,11 @@ impl Display {
         };
 
         use super::window::Mode;
-        let (w, h) = match mode {
-            Mode::FixedSize(Extent2 { w, h }) => (w, h),
-            Mode::FixedSizeFullScreen(Extent2 { w, h }) => unimplemented!{},
-            Mode::DesktopSize => unimplemented!{},
-            Mode::FullScreen => unimplemented!{},
+        let (w, h, maximized, fullscreen) = match mode {
+            Mode::FixedSize(Extent2 { w, h }) => (w, h, false, false),
+            // FIXME: Don't give `1` as extents. The accuracy is relied upon later.
+            Mode::Maximized => (1, 1, true, false),
+            Mode::FullScreen => (1, 1, false, true),
         };
         let (x, y) = (0, 0);
 
@@ -1134,11 +1177,10 @@ impl Display {
             x, y, 
             width: w as _, 
             height: h as _,
-            // TODO: if not resizable, we should set these as equal to w and h.
-            min_width: 0, 
-            min_height: 0,
-            max_width: 9999999, 
-            max_height: 9999999,
+            min_width:  if resizable { 0 } else { w } as _, 
+            min_height: if resizable { 0 } else { h } as _,
+            max_width:  if resizable { 999999 } else { w } as _, 
+            max_height: if resizable { 999999 } else { h } as _,
             width_inc: 1,
             height_inc: 1,
             min_aspect: x::AspectRatio { x: 0, y: 0 },
@@ -1195,8 +1237,6 @@ impl Display {
             let always_on_top = false;
             let skip_taskbar = false;
             let input_focus = false;
-            let maximized = false;
-            let fullscreen = false;
             let mut atoms: [x::Atom; 16] = [0; 16];
             let mut count = 0;
             if always_on_top {
@@ -1238,7 +1278,6 @@ impl Display {
                 x_dpy, x_window, self.atoms._NET_WM_WINDOW_TYPE, x::XA_ATOM, 32,
                 x::PropModeReplace, &mut wintype as *mut _ as *mut _, 1
             );
-            // Xinput2SelectTouch(this, window);
         }
 
         let wants_glx_window = {
@@ -1252,7 +1291,7 @@ impl Display {
             )})
         } else { None };
 
-        Ok(Window { dpy: self, x_window, colormap, glx_window })
+        Ok(Window { dpy: self, x_window, colormap, glx_window, })
     }
 
     pub(super) fn create_gl_context<'dpy>(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) 
@@ -1304,8 +1343,7 @@ impl Display {
     }
 
 
-
-    pub(super) fn create_software_gl_context<'dpy>(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) 
+    pub(super) fn create_software_gl_context<'dpy>(&'dpy self, _pf: &GLPixelFormat, _cs: &GLContextSettings) 
         -> Result<GLContext<'dpy>,super::Error>
     {
         unimplemented!()
@@ -1359,6 +1397,7 @@ impl<'dpy> Window<'dpy> {
         let glx = self.dpy.glx.as_ref().unwrap();
 
         let interval: c_int = match interval {
+            GLSwapInterval::LimitFps(_) => unreachable!{} /* Implemented globally in mod.rs instead */,
             GLSwapInterval::VSync => 1,
             GLSwapInterval::Immediate => 0,
             GLSwapInterval::LateSwapTearing => {
@@ -1373,7 +1412,6 @@ impl<'dpy> Window<'dpy> {
                 }
                 i
             },
-            GLSwapInterval::LimitFps(fps) => unimplemented!{},
         };
 
         if glx.ext.GLX_EXT_swap_control && self.glx_window.is_some() {

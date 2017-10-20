@@ -18,12 +18,6 @@ extern crate vek;
 extern crate log;
 extern crate libc;
 
-
-// Main plan for today:
-// - Review the architecture of Display and events;
-// - log! everything
-// - Have the basics of CI
-
 pub use vek::vec::repr_c::{
     Vec2, Vec3, Extent2, Rgba, Rgb,
 };

@@ -171,6 +171,11 @@ use std::ops::{Index};
 #[path="x11.rs"]
 mod backend;
 
+#[cfg(not(dmc_display_backend="x11"))]
+#[path="unimplemented_backend.rs"]
+mod backend;
+
+
 pub mod window {
 
     //! Module related to window initialization and management.

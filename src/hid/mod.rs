@@ -188,7 +188,7 @@ extern crate uuid;
 
 use self::num_traits::{Signed, Num, ToPrimitive};
 use self::uuid::Uuid as Guid;
-use super::{Xy, Xyz};
+use super::{Vec2, Vec3};
 
 use std;
 use std::time::Instant;
@@ -300,12 +300,12 @@ impl Dpad {
     /// Get a (X,Y) absolute axis pair from this D-pad.
     /// 
     /// The values are as returned by `T::normalized_axis_bounds()`.
-    pub fn to_axes<T: SignedAxis>(&self) -> Xy<T> {
+    pub fn to_axes<T: SignedAxis>(&self) -> Vec2<T> {
         let Minmax { min, max } = T::normalized_axis_bounds();
         let x = if self.down { min } else if self.up { max } else { T::zero() };
         let Minmax { min, max } = T::normalized_axis_bounds();
         let y = if self.left { min } else if self.right { max } else { T::zero() };
-        Xy { x, y }
+        Vec2 { x, y }
     }
 }
 
@@ -410,15 +410,15 @@ macro_rules! state {
     (st numbered_btns) => { [bool; MAX_NUMBERED_BUTTONS] };
     (st uaxis) => { UAxis };
     (st iaxis) => { IAxis };
-    (st iaxis3) => { Xyz<IAxis> };
-    (st hats) => { [Xy<UAxis>; MAX_JOYSTICK_HATS] };
+    (st iaxis3) => { Vec3<IAxis> };
+    (st hats) => { [Vec2<UAxis>; MAX_JOYSTICK_HATS] };
     (st Dpad) => { Dpad };
 
     (cap btn) => { Knowledge<Option<()>> };
     (cap numbered_btns) => { [Knowledge<Option<()>>; MAX_NUMBERED_BUTTONS] };
     (cap uaxis) =>  { Knowledge<Option<AxisInfo<UAxis>>> };
     (cap iaxis) =>  { Knowledge<Option<AxisInfo<IAxis>>> };
-    (cap iaxis3) => { Knowledge<Xyz<Option<AxisInfo<IAxis>>>> };
+    (cap iaxis3) => { Knowledge<Vec3<Option<AxisInfo<IAxis>>>> };
     (cap hats) => { [ Knowledge<Option<AxisInfo<IAxis>>>; MAX_JOYSTICK_HATS] };
     (cap Dpad) => { Knowledge<Option<()>> };
 

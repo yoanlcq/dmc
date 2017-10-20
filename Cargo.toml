@@ -1,6 +1,6 @@
 [package]
 authors = ["Yoan Lecoq <yoanlecoq.io@gmail.com>"]
-description = "(placeholder) Idiomatic replacement for SDL2.\nThe acronym originally stood for DirectMedia Crate."
+description = "(work in progress) Idiomatic platform layer in the likes of the SDL2 or SFML."
 documentation = "https://docs.rs/dmc"
 keywords = ["sdl2", "window", "opengl"]
 categories = [ "multimedia", "game-engines" ]
@@ -13,8 +13,8 @@ build = "build.rs"
 
 [dependencies]
 log = "0.3.8"
-num-traits = "0.1.37"
-uuid = "0.5"
+num-traits = "0.1.40"
+uuid = "0.5.1"
 libc = "0.2.26"
 vek = { git = "https://github.com/yoanlcq/vek" }
 

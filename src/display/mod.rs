@@ -163,7 +163,7 @@
 use std::path::Path;
 use std::time::Duration;
 use std::os::raw::{c_char};
-use super::{Decision, Semver, Rgba32, Extent2, Xy, Rgba};
+use super::{Decision, Semver, Rgba32, Extent2, Vec2, Rgba};
 use std::ops::{Index};
 
 
@@ -576,8 +576,8 @@ pub mod window {
         pub fn hide_cursor(&self) -> WindowOpResult<()> { unimplemented!{} }
         pub fn set_cursor(&self, _cursor: &Cursor) -> WindowOpResult<()> { unimplemented!{} }
         pub fn cursor(&self) -> WindowOpResult<&Cursor> { unimplemented!{} }
-        pub fn move_cursor(&self, _pos: Xy<u32>) -> WindowOpResult<()> { unimplemented!{} }
-        pub fn get_cursor_position(&self) -> WindowOpResult<Xy<u32>> { unimplemented!{} }
+        pub fn move_cursor(&self, _pos: Vec2<u32>) -> WindowOpResult<()> { unimplemented!{} }
+        pub fn get_cursor_position(&self) -> WindowOpResult<Vec2<u32>> { unimplemented!{} }
     }
 }
 use self::window::{Window, Settings, Style, Icon};
@@ -618,7 +618,7 @@ pub struct CursorImage; // TODO
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct CursorFrameBuilder {
-    pub hotspot: Xy<u32>,
+    pub hotspot: Vec2<u32>,
     pub image: CursorImage,
     pub duration: Duration,
 }

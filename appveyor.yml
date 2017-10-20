@@ -45,11 +45,10 @@ test_script:
       cd examples/window &&
       cargo build --target %TARGET% &&
       cargo build --target %TARGET% --release
-
+    )
       # NOTE(yoanlcq): In this crate, tests are interactive and need a display.
       # cargo test --lib --no-fail-fast --target %TARGET% &&
       # cargo test --lib --no-fail-fast --target %TARGET% --release
-    )
 
 cache:
   - C:\Users\appveyor\.cargo\registry

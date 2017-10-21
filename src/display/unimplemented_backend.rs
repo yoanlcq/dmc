@@ -84,19 +84,19 @@ impl Display {
         unimplemented!{}
     }
 
-    pub(super) fn choose_gl_pixel_format<'dpy>(&'dpy self, settings: &GLPixelFormatSettings)
+    pub(super) fn choose_gl_pixel_format<'dpy>(&'dpy self, _settings: &GLPixelFormatSettings)
         -> Result<GLPixelFormat<'dpy>, super::Error>
     {
         unimplemented!{}
     }
 
-    pub(super) fn create_window<'dpy>(&'dpy self, settings: &Settings) 
+    pub(super) fn create_window<'dpy>(&'dpy self, _settings: &Settings) 
         -> Result<Window<'dpy>, super::Error>
     {
         unimplemented!{}
     }
 
-    pub(super) fn create_gl_context<'dpy>(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) 
+    pub(super) fn create_gl_context<'dpy>(&'dpy self, _pf: &GLPixelFormat, _cs: &GLContextSettings) 
         -> Result<GLContext<'dpy>, super::Error>
     {
         unimplemented!{}
@@ -112,14 +112,14 @@ impl Display {
 
 
 impl<'dpy> GLContext<'dpy> {
-    pub(super) fn make_current(&self, win: &Window) {
+    pub(super) fn make_current(&self, _win: &Window) {
         unimplemented!()
     }
 
-    pub(super) unsafe fn get_proc_address_raw(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
+    pub(super) unsafe fn get_proc_address_raw(&self, _name: *const c_char) -> Option<unsafe extern "C" fn()> {
         unimplemented!()
     }
-    pub(super) fn get_proc_address(&self, name: &str) -> Option<unsafe extern "C" fn()> {
+    pub(super) fn get_proc_address(&self, _name: &str) -> Option<unsafe extern "C" fn()> {
         unimplemented!()
     }
 }
@@ -131,7 +131,7 @@ impl<'dpy> Window<'dpy> {
         unimplemented!()
     }
 
-    pub(super) fn gl_set_swap_interval(&self, interval: GLSwapInterval) -> Result<(),super::Error> { 
+    pub(super) fn gl_set_swap_interval(&self, _interval: GLSwapInterval) -> Result<(),super::Error> { 
         unimplemented!()
     }
 
@@ -158,7 +158,7 @@ impl<'dpy> Window<'dpy> {
     pub(super) fn clear_icon(&self) -> WindowOpResult<()> {
         unimplemented!()
     }
-    pub(super) fn set_icon(&self, icon: Icon) -> WindowOpResult<()> {
+    pub(super) fn set_icon(&self, _icon: Icon) -> WindowOpResult<()> {
         unimplemented!()
     }
     pub(super) fn set_minimum_size(&self, _size: Extent2<u32>) -> WindowOpResult<()> {
@@ -185,7 +185,7 @@ impl<'dpy> Window<'dpy> {
     pub(super) fn resize(&self, _size: Extent2<u32>) -> WindowOpResult<()> {
         WindowOpResult::Unimplemented
     }
-    pub(super) fn set_title(&self, title: &str) -> WindowOpResult<()> {
+    pub(super) fn set_title(&self, _title: &str) -> WindowOpResult<()> {
         unimplemented!()
     }
     pub(super) fn query_screenspace_size(&self) -> Extent2<u32> {

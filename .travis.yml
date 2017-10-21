@@ -120,7 +120,7 @@ before_install:
 
 install:
   - source ~/.cargo/env || true
-  - rustup target add $TARGET
+  - rustup target add $TARGET || true
   - pkg-config --list-all
 
 script:

@@ -22,9 +22,12 @@ matrix:
     - env: TARGET=x86_64-unknown-linux-gnu
     - env: TARGET=x86_64-unknown-linux-gnu
       rust: nightly
-    - env: TARGET=i686-unknown-linux-gnu
-    - env: TARGET=i686-unknown-linux-gnu
-      rust: nightly
+    # NOTE(yoanlcq): NOT testing on ia32, because setting up packages
+    # is a PITA for some reason. This crate does not normally exhibit
+    # achitecture-specific behaviour so let's just forget about it.
+    #- env: TARGET=i686-unknown-linux-gnu
+    #- env: TARGET=i686-unknown-linux-gnu
+    #  rust: nightly
 
     # OSX
     - env: TARGET=x86_64-apple-darwin
@@ -32,13 +35,15 @@ matrix:
     - env: TARGET=x86_64-apple-darwin
       os: osx
       rust: nightly
-    - env: TARGET=i686-apple-darwin
-      os: osx
-    - env: TARGET=i686-apple-darwin
-      os: osx
-      rust: nightly
+    #- env: TARGET=i686-apple-darwin
+    #  os: osx
+    #- env: TARGET=i686-apple-darwin
+    #  os: osx
+    #  rust: nightly
 
     # *BSD
+    # NOTE(yoanlcq): Skipping BSD because x11 crate fails to build because
+    # of a pkg-config "cross-compilation" error.
     #- env: TARGET=i686-unknown-freebsd
     #- env: TARGET=x86_64-unknown-freebsd
     #- env: TARGET=x86_64-unknown-netbsd
@@ -98,33 +103,23 @@ matrix:
 addons:
   apt:
     packages:
-      - libgl1-mesa-dev
-      - libgl1-mesa-dev:i386
-      - libgl1-mesa-glx
-      - libgl1-mesa-glx:i386
       - mesa-common-dev
-      - mesa-common-dev:i386
+      - mesa-utils
+      - libgl1-mesa-dev
+      - libgl1-mesa-glx
       - libx11-dev
-      - libx11-dev:i386
       - libxcursor-dev
-      - libxcursor-dev:i386
       - libxi-dev
-      - libxi-dev:i386
       - libxinerama-dev
-      - libxinerama-dev:i386
       - libxrandr-dev
-      - libxrandr-dev:i386
       - libxrender-dev
-      - libxrender-dev:i386
+      - libxmu-dev
+      - libxv-dev
       - libudev-dev
       - libevdev-dev
-      #- xserver-xorg-video-dummy
-      #- xpra
-      #- xorg-dev
-      #- mesa-utils
-      #- libxmu-dev
-      #- libxv-dev
-
+      - xserver-xorg-video-dummy
+      - xpra
+      - xorg-dev
 
 before_install:
   - set -e

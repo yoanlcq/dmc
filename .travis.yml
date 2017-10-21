@@ -99,21 +99,32 @@ addons:
   apt:
     packages:
       - libgl1-mesa-dev
+      - libgl1-mesa-dev:i386
       - libgl1-mesa-glx
-      - mesa-utils
+      - libgl1-mesa-glx:i386
+      - mesa-common-dev
+      - mesa-common-dev:i386
       - libx11-dev
+      - libx11-dev:i386
       - libxcursor-dev
+      - libxcursor-dev:i386
       - libxi-dev
+      - libxi-dev:i386
       - libxinerama-dev
+      - libxinerama-dev:i386
       - libxrandr-dev
+      - libxrandr-dev:i386
       - libxrender-dev
-      - libxmu-dev
-      - libxv-dev
-      - xserver-xorg-video-dummy
-      - xpra
-      - xorg-dev
+      - libxrender-dev:i386
       - libudev-dev
       - libevdev-dev
+      #- xserver-xorg-video-dummy
+      #- xpra
+      #- xorg-dev
+      #- mesa-utils
+      #- libxmu-dev
+      #- libxv-dev
+
 
 before_install:
   - set -e

@@ -18,7 +18,7 @@ extern crate vek;
 extern crate log;
 extern crate libc;
 
-pub use vek::vec::repr_c::{
+pub use vek::vec::{
     Vec2, Vec3, Extent2, Rgba, Rgb,
 };
 pub type Rgba32 = Rgba<u8>;

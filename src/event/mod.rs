@@ -1,5 +1,43 @@
 //! Platform-specific event handling.
 
+// INFO:
+// --- Detecting graphics tablets ---
+// 1. Detect XInput devices
+//    $ xinput
+// 2. Find the relevant device ID. Let's assume it is 16.
+//    List the device's properties (including vendor-specific ones) :
+//    $ xinput list-props 16
+// 3. This also gives you an event device path.
+//    Let's assume it is `/dev/input/event13`.
+//    You can get what `udev` has to say about it:
+//    $ udevadm info /dev/input/event13
+//    If you see `ID_INPUT_TABLET=1`, then it's a tablet!
+// 4. See what XInput2 events look like on this device:
+//    $ xinput test-xi2 16
+//
+// References:
+// - `libinput` (we can't use it: it is for use by the X server or Wayland compositor).
+//   Has nice documentation on graphics tablets.
+// - `QTabletEvent`, Qt 5.
+//   Illustrates well what we could expect from an API (including physical position
+//   events for subpixel precision, etc).
+// - The DIGImend project (https://digimend.github.io/). They maintain a big list
+//   of less common graphics tablets.
+// - `libwacom`, which provides static descriptions for graphics tablets
+//   (and not only Wacom tablets actually). It is packaged with a bunch of
+//   text files in key-value format (the "database"), and the API is only
+//   an abstraction over the retrieval and parsing of some of those files.
+//   You can get info about a tablet by getting a handle to it via either:
+//   - An event device path (e.g /dev/input/eventXX);
+//   - From vendor and product IDs;
+//   - From a name.
+//   Quoting their doc:
+//       libwacom is a library to identify wacom tablets and their model-specific
+//       features. It provides easy access to information such as "is this a
+//       built-in on-screen tablet", "what is the size of this model", etc.
+// - Who-T's blog - "X Input hacker" : http://who-t.blogspot.fr/
+// - The Linux Wacom project
+//
 // TODO:
 // - GetNumTouchDevices, etc
 // - GetNumTouchFingers, etc
@@ -60,7 +98,7 @@ pub enum Event {
     AudioCaptureDeviceRemoved,
     // A Joystick should count as a Controller
     // A Joystick hat should count as an axis
-    ControllerAxisMotion { axis_id: u32, axis: Vec2<i32> },
+    ControllerAxisMotion { controller_id: u32, axis_id: u32, axis: Vec2<i32> },
     ControllerButtonPressed { controller_id: u32, button: u32 },
     ControllerButtonReleased { controller_id: u32, button: u32 },
     ControllerTrackballMotion { controller_id: u32, ball_index: u8, motion: Vec2<i32> },

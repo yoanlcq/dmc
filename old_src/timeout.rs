@@ -1,8 +1,7 @@
-//! The Timeout enum, which is either a fixed duration or infinite.
+//! The Timeout enum, which is ither a fixed duration or infinite.
 
 use std::time::Duration;
 
-///! The Timeout enum, which is either a fixed duration or infinite.
 #[derive(Debug)]
 pub enum Timeout {
     Set(Duration),

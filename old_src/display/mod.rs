@@ -588,11 +588,12 @@ pub mod window {
 use self::window::{Window, Settings, Style, Icon};
 
 /// Error types returned by this module.
+#[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub enum Error {
-    #[allow(missing_docs)]
+    Unsupported,
+    Unimplemented,
     DoesntSupportMultipleWindows,
-    #[allow(missing_docs)]
     CouldntCreateWindow,
     /// Backend-specific error.
     Backend(backend::Error)
@@ -654,7 +655,18 @@ impl<'dpy> Display {
     pub fn open_x11_display_name(name: Option<&::std::ffi::CStr>) -> Result<Self, Error> {
         backend::Display::open_x11_display_name(name).map(Display)
     }
-    
+
+    // Reply TRUE to WM_QUERYENDSESSION, in which case we then get WM_ENDSESSION.
+    // ShutdownBlockReasonDestroy
+    pub fn allow_session_termination(&mut self) -> Result<(), Error> {
+        self.0.allow_session_termination()
+    }
+    // Reply FALSE to WM_QUERYENDSESSION.
+    // ShutdownBlockReasonCreate
+    pub fn disallow_session_termination(&mut self, reason: Option<&str>) -> Result<(), Error> {
+        self.0.disallow_session_termination(self, reason)
+    }
+
     /// Attempts to retrieve the best pixel format for OpenGL-enabled windows
     /// and OpenGL contexts, given relevant settings.
     ///

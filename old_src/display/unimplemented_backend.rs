@@ -84,6 +84,13 @@ impl Display {
         unimplemented!{}
     }
 
+    pub fn allow_session_termination(&mut self) -> Result<(), Error> {
+        Err(super::Error::Unimplemented)
+    }
+    pub fn disallow_session_termination(&mut self, reason: Option<&str>) -> Result<(), Error> {
+        Err(super::Error::Unimplemented)
+    }
+
     pub(super) fn choose_gl_pixel_format<'dpy>(&'dpy self, _settings: &GLPixelFormatSettings)
         -> Result<GLPixelFormat<'dpy>, super::Error>
     {

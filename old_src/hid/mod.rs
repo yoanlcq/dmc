@@ -39,7 +39,7 @@
 //! 
 //! # Overview
 //! 
-//! This module's main entry point is the `GameInputDevice` structure,
+//! This module's main entry point is the `Hid` structure,
 //! which is a handle to a connected device. You acquire these by
 //! first creating a `Monitor` once. At this time, you also get a list
 //! of the already connected devices, which you have to take ownership of
@@ -54,12 +54,12 @@
 //! handles. If you miss the opportunities to store them, you won't 
 //! be able to get them back later.**
 //! 
-//! You should _also_ poll your own list of `GameInputDevice`s regularly
+//! You should _also_ poll your own list of `Hid`s regularly
 //! to receive state change events from each one of them.
 //! One of these events is 
 //! `Disconnected`, which tells you that the device isn't available anymore,
 //! in which case you should drop the
-//! `GameInputDevice` in order to free the remaining resources, and because
+//! `Hid` in order to free the remaining resources, and because
 //! you won't be able to do much with it anymore.
 //! 
 //! Regardless of a device's actual classification and abilities, you should
@@ -68,7 +68,7 @@
 //! joystick-specific events, and vice versa, but sometimes the backend
 //! just doesn't know and reports whatever event it deems appropriate.
 //! 
-//! You can do a bunch of other things with a `GameInputDevice`, some of
+//! You can do a bunch of other things with a `Hid`, some of
 //! which are:
 //! 
 //! - Query the immediate state of its buttons and axes;
@@ -859,7 +859,7 @@ pub struct Info<'dev> {
 /// 
 /// You should drop it when it receives the `Disconnected` event.
 #[derive(Debug, Eq, PartialEq)]
-pub struct GameInputDevice<'dev> {
+pub struct Hid<'dev> {
     // Private so we return immutable reference through `get_info()`.
     info: Info<'dev>,
 
@@ -883,7 +883,7 @@ pub struct GameInputDevice<'dev> {
     pub mappings: Vec<mapping::Mapping>,
 }
 
-impl<'dev> GameInputDevice<'dev> {
+impl<'dev> Hid<'dev> {
     /// Queries whether the device is still connected or not.  
     /// If it's not, you may drop this object.
     /// 
@@ -962,7 +962,7 @@ impl<'dev> GameInputDevice<'dev> {
     }
 }
 
-impl<'dev> Drop for GameInputDevice<'dev> {
+impl<'dev> Drop for Hid<'dev> {
     fn drop(&mut self) {
         unimplemented!()
     }
@@ -971,15 +971,15 @@ impl<'dev> Drop for GameInputDevice<'dev> {
 /// A polling iterator over a device's event queue.
 #[derive(Debug)]
 pub struct PollIter<'a, 'dev:'a> {
-    _dev: &'a mut GameInputDevice<'dev>,
+    _dev: &'a mut Hid<'dev>,
 }
 /// A waiting iterator over a device's event queue.
 #[derive(Debug)]
 pub struct WaitIter<'a, 'dev:'a> {
-    _dev: &'a mut GameInputDevice<'dev>,
+    _dev: &'a mut Hid<'dev>,
     _timeout: Timeout,
 }
-/// Events sent by a `GameInputDevice`.
+/// Events sent by a `Hid`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Event {
     /// The device has been disconnected - you should drop it.
@@ -1024,13 +1024,13 @@ pub mod monitor {
         _timeout: Timeout,
     }
     impl<'a> Iterator for PollIter<'a> {
-        type Item = GameInputDevice<'a>;
+        type Item = Hid<'a>;
         fn next(&mut self) -> Option<Self::Item> {
             unimplemented!()
         }
     }
     impl<'a> Iterator for WaitIter<'a> {
-        type Item = GameInputDevice<'a>;
+        type Item = Hid<'a>;
         fn next(&mut self) -> Option<Self::Item> {
             unimplemented!()
         }
@@ -1045,7 +1045,7 @@ pub mod monitor {
         /// devices.
         /// 
         /// You only need one. Creating more is not forbidden, but wasteful.
-        pub fn create<'dev>() -> (Self, Vec<GameInputDevice<'dev>>) {
+        pub fn create<'dev>() -> (Self, Vec<Hid<'dev>>) {
             unimplemented!()
         }
         /// Returns a polling iterator over the list of newly connected
@@ -1133,7 +1133,7 @@ pub mod haptic {
     #[derive(Debug, Clone, Eq, PartialEq)]
     /// A haptic effect that was successfully uploaded to a device.
     pub struct UploadedEffect<'a,'dev:'a> {
-        _dev: &'a GameInputDevice<'dev>,
+        _dev: &'a Hid<'dev>,
         _code: i32,
     }
     #[derive(Debug, Copy, Clone, Eq, PartialEq)]

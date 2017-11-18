@@ -62,6 +62,9 @@
 //
 // !!! IMPORTANT TODO:
 // In X11, reply explicitly to _NET_WM_PING messages.
+//
+//
+// TODO be able to provide WM_QUERYENDSESSION and WM_ENDSESSION events (Win32)- See [Shutting Down](https://msdn.microsoft.com/en-us/library/windows/desktop/aa376881(v=vs.85).aspx)
 
 use vek::Extent2;
 use vek::Vec2;
@@ -96,45 +99,50 @@ pub enum Event {
     AudioOutputDeviceRemoved,
     AudioCaptureDeviceAdded,
     AudioCaptureDeviceRemoved,
-    // A Joystick should count as a Controller
-    // A Joystick hat should count as an axis
-    ControllerAxisMotion { controller_id: u32, axis_id: u32, axis: Vec2<i32> },
-    ControllerButtonPressed { controller_id: u32, button: u32 },
-    ControllerButtonReleased { controller_id: u32, button: u32 },
-    ControllerTrackballMotion { controller_id: u32, ball_index: u8, motion: Vec2<i32> },
-    ControllerAdded { controller_id: u32, },
-    ControllerRemoved { controller_id: u32, },
-    ControllerRemapped { controller_id: u32, },
+
+    HidConnected { hid: HidId, },
+    HidDisconnected { hid: HidId, },
+    HidRemapped { hid: HidId, }, // Just says that the controller mappings have changed and might need to be refreshed.
+    HidButtonPressed { hid: HidId, button: u32 },
+    HidButtonReleased { hid: HidId, button: u32 },
+    HidAxisMotion { hid: HidId, axis_id: u32, axis: Vec2<i32> },
+    HidTrackballMotion { hid: HidId, ball_index: u8, motion: Vec2<i32> },
+
     DollarGesture { touch_device_id: u32, gesture_id: u32, finger_count: u8, error: f32, normalized_center: Vec2<f32> },
+
     DragAndDropBegin,
     DragAndDropCancel,
     DragAndDropFile { file_path: String, },
     DragAndDropText { text: String, },
     DragAndDropRawData { text: Vec<u8>, },
+
     FingerPressed { touch_id: u32, finger_id: u32, normalized_position: Vec2<f32>, pressure: f32 },
     FingerReleased { touch_id: u32, finger_id: u32, normalized_position: Vec2<f32>, pressure: f32 },
     FingerMotion { touch_id: u32, finger_id: u32, normalized_motion: Vec2<f32>, pressure: f32 },
-    KeyPressed { window_id: Option<u32>, is_repeat: bool, vkey: VKey, key: Key, },
-    KeyReleased { window_id: Option<u32>, is_repeat: bool, vkey: VKey, key: Key, },
-    MouseButtonPressed { window_id: Option<u32>, mouse: u32, click: Click, button: MouseButton, },
-    MouseButtonReleased { window_id: Option<u32>, mouse: u32, click: Click, button: MouseButton, },
-    MouseMotion { window_id: Option<u32>, mouse: u32, new_position: Vec2<i32> },
-    MouseScroll { window_id: Option<u32>, mouse: u32, scroll: Vec2<i32>, },
+
     MultiGesture { touch_id: u32, theta: f32, dist: f32, normalized_center: Vec2<f32>, finger_count: u8 },
 
-    WindowShown { window_id: u32, },
-    WindowHidden { window_id: u32, },
-    WindowShouldRedrawItself { window_id: u32, },
-    WindowMoved { window_id: u32, position: Extent2<u32>, },
-    WindowResized { window_id: u32, size: Extent2<u32>, by_user: bool, },
-    WindowMinimized { window_id: u32, },
-    WindowMaximized { window_id: u32, },
-    WindowRestored { window_id: u32, },
-    WindowGainedMouseFocus { window_id: u32, },
-    WindowLostMouseFocus { window_id: u32, },
-    WindowGainedKeyboardFocus { window_id: u32, },
-    WindowLostKeyboardFocus { window_id: u32, },
-    WindowCloseRequested { window_id: u32, },
+    KeyPressed { window_id: Option<WindowId>, is_repeat: bool, vkey: VKey, key: Key, },
+    KeyReleased { window_id: Option<WindowId>, is_repeat: bool, vkey: VKey, key: Key, },
+
+    MouseButtonPressed { window_id: Option<WindowId>, mouse: u32, click: Click, button: MouseButton, },
+    MouseButtonReleased { window_id: Option<WindowId>, mouse: u32, click: Click, button: MouseButton, },
+    MouseMotion { window_id: Option<WindowId>, mouse: u32, new_position: Vec2<i32> },
+    MouseScroll { window_id: Option<WindowId>, mouse: u32, scroll: Vec2<i32>, },
+
+    WindowShown { window_id: WindowId, },
+    WindowHidden { window_id: WindowId, },
+    WindowPaint { window_id: WindowId, },
+    WindowMoved { window_id: WindowId, position: Extent2<u32>, },
+    WindowResized { window_id: WindowId, size: Extent2<u32>, by_user: bool, },
+    WindowMinimized { window_id: WindowId, },
+    WindowMaximized { window_id: WindowId, },
+    WindowRestored { window_id: WindowId, },
+    WindowGainedMouseFocus { window_id: WindowId, },
+    WindowLostMouseFocus { window_id: WindowId, },
+    WindowGainedKeyboardFocus { window_id: WindowId, },
+    WindowLostKeyboardFocus { window_id: WindowId, },
+    WindowCloseRequested { window_id: WindowId, },
 
     Quit,
     AppTerminating,
@@ -143,6 +151,11 @@ pub enum Event {
     AppEnteredBackground,
     AppEnteringForeground,
     AppEnteredForeground,
+
+    /// Asks "Is it OK to terminate you ?". (WM_QUERYENDSESSION)
+    SessionEndRequested,
+    /// Perform clean-up operations here. (WM_ENDSESSION)
+    SessionEnding,
 
     KeymapChanged,
     ClipboardChanged,

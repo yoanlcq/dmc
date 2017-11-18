@@ -685,6 +685,13 @@ impl Display {
         0
     }
 
+    pub fn allow_session_termination(&mut self) -> Result<(), Error> {
+        Err(super::Error::Unimplemented)
+    }
+    pub fn disallow_session_termination(&mut self, reason: Option<&str>) -> Result<(), Error> {
+        Err(super::Error::Unimplemented)
+    }
+
     pub(super) fn open() -> Result<Self, super::Error> {
         Self::open_x11_display_name(None)
     }

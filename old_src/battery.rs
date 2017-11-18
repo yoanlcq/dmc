@@ -1,5 +1,6 @@
 //! Getting the device's battery's state, if any
 
+use Knowledge;
 use std::time::Duration;
 
 /// One of: Wired, FullyCharged, Charging and Discharging.
@@ -21,14 +22,14 @@ pub enum BatteryStatus {
 /// It's all packed into a single struct because on most platforms, it's 
 /// cheaper to query everything at once rather than "coming back" for 
 /// individual pieces of information.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct BatteryState {
     #[allow(missing_docs)]
-    pub status: BatteryStatus,
+    pub status: Knowledge<BatteryStatus>,
     #[allow(missing_docs)]
-    pub estimated_time_remaining: Duration,
+    pub estimated_time_remaining: Knowledge<Duration>,
     /// The value is between 0 and 1 (both inclusive).
-    pub percentage_remaining: f32,
+    pub percentage_remaining: Knowledge<f32>,
 }
 
 impl BatteryState {

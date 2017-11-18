@@ -8,15 +8,13 @@ license = "MIT/Apache-2.0"
 repository = "https://github.com/yoanlcq/dmc"
 name = "dmc"
 version = "0.1.0" # remember to update html_root_url
-build = "build.rs"
 
 
 [dependencies]
 log = "0.3.8"
 num-traits = "0.1.40"
-uuid = "0.5.1"
 libc = "0.2.26"
-vek = { git = "https://github.com/yoanlcq/vek" }
+vek = { git = "https://github.com/yoanlcq/vek", features = ["vec2", "vec3", "extent2", "extent3", "rgb", "rgba"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies.x11]
 version = "2.15.0"

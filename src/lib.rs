@@ -13,8 +13,7 @@
 
 extern crate num_traits;
 extern crate vek;
-#[macro_use]
-extern crate log;
+#[macro_use] extern crate log;
 
 // Nontrivial modules go first
 pub mod context;
@@ -43,12 +42,27 @@ pub use knowledge::Knowledge;
 pub use knowledge::Knowledge::*;
 
 
-#[cfg(dmc_display_backend="x11")]
-#[path="backends/x11.rs"]
-mod backend;
-
-#[cfg(not(dmc_display_backend="x11"))]
-#[path="backends/unimplemented.rs"]
-mod backend;
-
-
+#[cfg(target_os="linux")]
+#[path="os/linux.rs"]
+mod os;
+#[cfg(any(target_os="freebsd", target_os="dragonfly", target_os="openbsd", target_os="netbsd"))]
+#[path="os/bsd.rs"]
+mod os;
+#[cfg(target_os="windows")]
+#[path="os/windows.rs"]
+mod os;
+#[cfg(target_os="macos")] /* AppKit */ 
+#[path="os/macos.rs"]
+mod os;
+#[cfg(target_os="android")]
+#[path="os/android.rs"]
+mod os;
+#[cfg(target_os="ios")] /* UIKit */ 
+#[path="os/ios.rs"]
+mod os;
+#[cfg(target_os="winrt")]
+#[path="os/winrt.rs"]
+mod os;
+#[cfg(target_os="emscripten")]
+#[path="os/emscripten.rs"]
+mod os;

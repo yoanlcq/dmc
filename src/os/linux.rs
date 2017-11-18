@@ -6,24 +6,24 @@ type XIDevice = ();
 type udev_device = ();
 
 #[derive(Debug)]
-pub struct BackendContext {
+pub struct OsContext {
     x_dpy: XDisplay,
     udev_mon: udev_monitor,
 }
 #[derive(Debug)]
-pub struct BackendHid {
-    platform_display: Rc<BackendContext>,
+pub struct OsHid {
+    platform_display: Rc<OsContext>,
     udev_dev: udev_device,
     evdev_fd: i32,
     xi_devices: Vec<XIDevice>,
 }
 
-impl BackendHid {
+impl OsHid {
     pub fn is_connected(&self) -> bool {
         unimplemented!{}
     }
 }
-impl Drop for BackendHid {
+impl Drop for OsHid {
     fn drop(&mut self) {
         drop(self.udev_dev);
         drop(self.evdev_fd);

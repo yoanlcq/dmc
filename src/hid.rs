@@ -2,7 +2,7 @@ use std::time::Instant;
 use std::ops::Range;
 use std::rc::Rc;
 use vek::{Vec2, Vec3};
-use backend::{BackendContext, BackendHid};
+use os::{OsContext, OsHid};
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum Bus {
@@ -104,8 +104,8 @@ pub enum MouseButton {
 
 #[derive(Debug)]
 pub struct Mouse {
-    internal: BackendHid,
-    backend: Rc<BackendContext>,
+    os_hid: OsHid,
+    os_context: Rc<OsContext>,
     info: HidInfo,
     // some_extra_mousey_info: Foo,
 }
@@ -124,7 +124,7 @@ pub struct MouseState {
 
 impl Hid for Mouse {
     fn info(&self) -> &HidInfo { &self.info }
-    fn is_connected(&self) -> bool { self.internal.is_connected() }
+    fn is_connected(&self) -> bool { self.os_hid.is_connected() }
 }
 
 impl Mouse {
@@ -147,8 +147,8 @@ pub struct Key;
 
 #[derive(Debug)]
 pub struct Keyboard {
-    internal: BackendHid,
-    backend: Rc<BackendContext>,
+    os_hid: OsHid,
+    os_context: Rc<OsContext>,
     info: HidInfo,
     // some_extra_keyboardey_info: Foo,
 }
@@ -317,7 +317,7 @@ vkeys!{
 
 impl Hid for Keyboard {
     fn info(&self) -> &HidInfo { &self.info }
-    fn is_connected(&self) -> bool { self.internal.is_connected() }
+    fn is_connected(&self) -> bool { self.os_hid.is_connected() }
 }
 
 impl Keyboard {
@@ -458,8 +458,8 @@ controller_items!{
 
 #[derive(Debug)]
 pub struct Controller {
-    internal: BackendHid,
-    backend: Rc<BackendContext>,
+    os_hid: OsHid,
+    os_context: Rc<OsContext>,
     info: HidInfo,
     features: ControllerFeatures,
     kind: ControllerKind,
@@ -468,7 +468,7 @@ pub struct Controller {
 
 impl Hid for Controller {
     fn info(&self) -> &HidInfo { &self.info }
-    fn is_connected(&self) -> bool { self.internal.is_connected() }
+    fn is_connected(&self) -> bool { self.os_hid.is_connected() }
 }
 
 impl Controller {
@@ -531,8 +531,8 @@ pub struct PenTabletState {
 
 #[derive(Debug)]
 pub struct PenTablet {
-    internal: BackendHid,
-    backend: Rc<BackendContext>,
+    os_hid: OsHid,
+    os_context: Rc<OsContext>,
     info: HidInfo,
     features: PenTabletFeatures,
     // some_extra_info: Foo,
@@ -540,7 +540,7 @@ pub struct PenTablet {
 
 impl Hid for PenTablet {
     fn info(&self) -> &HidInfo { &self.info }
-    fn is_connected(&self) -> bool { self.internal.is_connected() }
+    fn is_connected(&self) -> bool { self.os_hid.is_connected() }
 }
 
 impl PenTablet {

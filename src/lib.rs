@@ -20,6 +20,8 @@ pub mod context;
 pub use context::Context;
 pub mod window;
 pub use window::Window;
+pub mod gl;
+pub mod cursor;
 pub mod hid;
 pub use hid::*;
 pub mod event;

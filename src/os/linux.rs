@@ -5,7 +5,7 @@ use std::os::raw::c_char;
 use gl::*;
 use window::*;
 use cursor::*;
-use vek::{Extent2, Vec2};
+use super::{Extent2, Vec2};
 
 type XDisplay = ();
 type udev_monitor = ();

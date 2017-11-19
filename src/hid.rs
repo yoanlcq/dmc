@@ -1,7 +1,7 @@
 use std::time::Instant;
 use std::ops::Range;
 use std::rc::Rc;
-use vek::{Vec2, Vec3};
+use super::{Vec2, Vec3};
 use os::{OsContext, OsHid};
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]

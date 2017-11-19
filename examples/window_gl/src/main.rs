@@ -8,10 +8,11 @@ use std::time::Duration;
 use std::thread::sleep;
 use std::ptr;
 use std::ffi::*;
+use std::rc::Rc;
 
-use dmc::display::*;
-use dmc::display::window::Settings as WindowSettings;
-use dmc::option_alternatives::*;
+use dmc::*;
+use dmc::gl::*;
+use dmc::decision::Decision;
 use dmc::Extent2;
 
 use gl::types::*;
@@ -48,18 +49,19 @@ fn main() {
     };
 
     env_logger::init().unwrap();
-    let display = Display::open().expect("Could not open display!");
-    let gl_pixel_format = display.choose_gl_pixel_format(&gl_pf_settings).expect("Couldn't choose pixel format!");
+    let mut context = Context::open().expect("Could not open context!");
+    let gl_pixel_format = context.choose_gl_pixel_format(&gl_pf_settings).expect("Couldn't choose pixel format!");
     let window_settings = WindowSettings {
-        mode: window::Mode::FixedSize(Extent2 { w: 400, h: 300 }),
+        mode: WindowMode::from((400, 300)),
         opengl: Some(&gl_pixel_format),
         resizable: true,
         allow_high_dpi: true,
         fully_opaque: true,
     };
-    let window = display.create_window(&window_settings).expect("Couldn't create window!");
-    let gl_ctx = display.create_gl_context(&gl_pixel_format, &gl_ctx_settings).expect("Couldn't create GL context!");
-    let mut swap_chain = gl_ctx.make_current(&window);
+    let gl_ctx = context.create_gl_context(&gl_pixel_format, &gl_ctx_settings).expect("Couldn't create GL context!");
+    let mut window = context.create_window(&window_settings).expect("Couldn't create window!");
+    let window = Rc::get_mut(&mut window).unwrap();
+    window.make_gl_context_current(Some(&gl_ctx));
 
     gl::load_with(|s| match gl_ctx.get_proc_address(s) {
         Some(p) => {
@@ -172,9 +174,9 @@ if ctxflags &     CONTEXT_FLAG_NO_ERROR_BIT_KHR != 0 { "no_error " } else {""},
     }
     */
 
-    if swap_chain.set_swap_interval(GLSwapInterval::LateSwapTearing).is_err() {
-        if swap_chain.set_swap_interval(GLSwapInterval::VSync).is_err() {
-            swap_chain.set_swap_interval(GLSwapInterval::LimitFps(60_f32)).unwrap();
+    if window.set_gl_swap_interval(GLSwapInterval::LateSwapTearing).is_err() {
+        if window.set_gl_swap_interval(GLSwapInterval::VSync).is_err() {
+            window.set_gl_swap_interval(GLSwapInterval::LimitFps(60_f32)).unwrap();
             info!("Set swap interval to Manual: 60 FPS.");
         } else {
             info!("Set swap interval to VSync.");
@@ -183,29 +185,29 @@ if ctxflags &     CONTEXT_FLAG_NO_ERROR_BIT_KHR != 0 { "no_error " } else {""},
         info!("Set swap interval to Late Swap Tearing");
     }
 
-    window.set_title("Three");
+    window.set_title("Three").unwrap();
     unsafe {
         gl::ClearColor(1f32, 0f32, 0f32, 1f32);
         gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
     }
     // NOTE: show() before present(), because otherwise presenting won't take place the first time.
-    window.show();
-    swap_chain.present();
+    window.show().unwrap();
+    window.present_gl();
     sleep(Duration::from_secs(1));
 
-    window.set_title("Two");
+    window.set_title("Two").unwrap();
     unsafe {
         gl::ClearColor(0f32, 1f32, 0f32, 1f32);
         gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
     }
-    swap_chain.present();
+    window.present_gl();
     sleep(Duration::from_secs(1));
 
-    window.set_title("One");
+    window.set_title("One").unwrap();
     unsafe {
         gl::ClearColor(0f32, 0f32, 1f32, 1f32);
         gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
     }
-    swap_chain.present();
+    window.present_gl();
     sleep(Duration::from_secs(1));
 }

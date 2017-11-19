@@ -4,7 +4,7 @@ use cursor::*;
 use window::*;
 use std::rc::Rc;
 use std::path::Path;
-use vek::{Extent2};
+use Extent2;
 
 #[derive(Debug)]
 pub struct Context(OsContext);

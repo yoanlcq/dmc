@@ -15,11 +15,16 @@ extern crate num_traits;
 extern crate vek;
 #[macro_use] extern crate log;
 
+
+pub use vek::{
+    Vec2, Vec3, Vec4, Extent2, Extent3, Rgba, Rgb,
+};
+
 // Nontrivial modules go first
 pub mod context;
 pub use context::Context;
 pub mod window;
-pub use window::Window;
+pub use window::{Window, WindowSettings, WindowMode};
 pub mod gl;
 pub mod cursor;
 pub mod hid;

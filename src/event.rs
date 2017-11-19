@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use vek::{Vec2, Extent2};
+use super::{Vec2, Extent2};
 use timeout::Timeout;
 use hid;
 use hid::*;

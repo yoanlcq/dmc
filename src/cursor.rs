@@ -1,6 +1,6 @@
 use os::OsCursor;
 use std::time::Duration;
-use vek::{Vec2, Rgba};
+use super::{Vec2, Rgba};
 
 #[derive(Debug)]
 pub struct Cursor(OsCursor);

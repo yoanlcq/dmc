@@ -1,7 +1,7 @@
 use gl::*;
 use os::*;
 use context::Error;
-use vek::{Extent2, Vec2, Rgba};
+use super::{Extent2, Vec2, Rgba};
 use decision::Decision;
 use cursor::Cursor;
 
@@ -36,7 +36,7 @@ pub enum WindowMode {
 /// for `fully_opaque` which is set to `true`, because people seldom
 /// need semi-transparent windows.
 #[derive(Debug, PartialEq)]
-pub struct WindowSettings {
+pub struct WindowSettings<'a> {
     /// Specifies whether you want a full-screen or fixed-size window.
     /// The default value is a `FixedSize` obtained by a heuristic
     /// based on the desktop's available size, which picks a size
@@ -45,7 +45,7 @@ pub struct WindowSettings {
     /// Support OpenGL ? (defaults to `None`).
     /// The settings need to be known beforehand so that the window
     /// can use the proper pixel format at the time of its creation.
-    pub opengl: Option<GLPixelFormat>,
+    pub opengl: Option<&'a GLPixelFormat>,
     /// `true` by default -
     /// If `false`, the window won't be resizable, not even manually by
     /// the user. Also keep in mind that some targets (other than 
@@ -72,7 +72,7 @@ impl Default for WindowMode {
     }
 }
 
-impl Default for WindowSettings {
+impl<'a> Default for WindowSettings<'a> {
     fn default() -> Self {
         Self {
             opengl: None,
@@ -90,7 +90,7 @@ impl<T: Into<Extent2<u32>>> From<T> for WindowMode {
     }
 }
 
-impl<T: Into<Extent2<u32>>> From<T> for WindowSettings {
+impl<'a, T: Into<Extent2<u32>>> From<T> for WindowSettings<'a> {
     fn from(size: T) -> Self {
         Self {
             mode: WindowMode::from(size),

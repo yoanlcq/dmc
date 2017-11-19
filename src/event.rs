@@ -147,36 +147,24 @@ def_events!{
 
 }
 
-impl<'c> Context {
-    pub fn poll_iter(&'c mut self) -> PollIter<'c> {
-        PollIter { context: self }
-    }
-    pub fn peek_iter(&'c mut self) -> PeekIter<'c> {
-        PeekIter { context: self }
-    }
-    pub fn wait_iter(&'c mut self, timeout: Timeout) -> WaitIter<'c> {
-        WaitIter { context: self, timeout }
-    }
-}
-
 #[derive(Debug)]
 pub struct PollIter<'c> {
-    context: &'c mut Context,
+    pub(crate) context: &'c mut Context,
 }
 #[derive(Debug)]
 pub struct PeekIter<'c> {
-    context: &'c mut Context,
+    pub(crate) context: &'c mut Context,
 }
 #[derive(Debug)]
 pub struct WaitIter<'c> {
-    context: &'c mut Context,
-    timeout: Timeout,
+    pub(crate) context: &'c mut Context,
+    pub(crate) timeout: Timeout,
 }
 
 impl<'c> Iterator for PollIter<'c> {
     type Item = Event;
     fn next(&mut self) -> Option<Event> {
-        unimplemented!{}
+        self.context.0.poll_next_event()
     }
 }
 
@@ -190,6 +178,6 @@ impl<'c> Iterator for PeekIter<'c> {
 impl<'c> Iterator for WaitIter<'c> {
     type Item = Event;
     fn next(&mut self) -> Option<Event> {
-        unimplemented!{}
+        self.context.0.wait_next_event(self.timeout)
     }
 }

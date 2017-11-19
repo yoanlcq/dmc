@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use gl::*;
 use os::*;
 use context::Error;
@@ -6,7 +7,18 @@ use decision::Decision;
 use cursor::Cursor;
 
 // TODO
-pub struct Icon {}
+pub struct Icon {
+    pub size: Extent2<u32>,
+}
+
+use std::ops::Index;
+impl<V: Into<Vec2<u32>>> Index<V> for Icon {
+    type Output = Rgba<u8>;
+    fn index(&self, v: V) -> &Self::Output {
+        unimplemented!{}
+    }
+}
+
 
 // TODO
 #[derive(Debug)]
@@ -35,7 +47,7 @@ pub enum WindowMode {
 /// The `Default` implementation picks the most permissive values, except
 /// for `fully_opaque` which is set to `true`, because people seldom
 /// need semi-transparent windows.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct WindowSettings<'a> {
     /// Specifies whether you want a full-screen or fixed-size window.
     /// The default value is a `FixedSize` obtained by a heuristic
@@ -256,22 +268,15 @@ impl Window {
     /// desktop-space.  
     /// 
     /// The anchor is the window's top-left corner.
-    pub fn move_absolute(&self, pos: Extent2<u32>) -> Result<(), Error> {
-        self.os_window.move_absolute(pos)
+    pub fn position(&self) -> Result<Vec2<i32>, Error> {
+        self.os_window.position()
     }
-    /// Moves the window relatively to itself in 
+    /// Moves the window to the given absolute position in 
     /// desktop-space.  
     /// 
     /// The anchor is the window's top-left corner.
-    pub fn move_relative_to_self(&self, pos: Extent2<u32>) -> Result<(), Error> {
-        self.os_window.move_relative_to_self(pos)
-    }
-    /// Moves the window relatively to its parent, if any.  
-    /// Otherwise, this resolves to `move_absolute()`.
-    /// 
-    /// The anchor is the window's top-left corner.
-    pub fn move_relative_to_parent(&self, pos: Extent2<u32>) -> Result<(), Error> {
-        self.os_window.move_relative_to_parent(pos)
+    pub fn set_position(&self, pos: Vec2<i32>) -> Result<(), Error> {
+        self.os_window.set_position(pos)
     }
     /// Attempts to set the window's screen-space size.
     pub fn resize(&self, size: Extent2<u32>) -> Result<(), Error> {
@@ -281,15 +286,14 @@ impl Window {
     pub fn is_cursor_shown(&self) -> Result<bool, Error> { unimplemented!{} }
     pub fn show_cursor(&self) -> Result<(), Error> { unimplemented!{} }
     pub fn hide_cursor(&self) -> Result<(), Error> { unimplemented!{} }
-    pub fn set_cursor(&self, _cursor: &Cursor) -> Result<(), Error> { unimplemented!{} }
-    pub fn cursor(&self) -> Result<&Cursor, Error> { unimplemented!{} }
+    pub fn set_cursor(&self, _cursor: Rc<Cursor>) -> Result<(), Error> { unimplemented!{} }
+    pub fn cursor(&self) -> Result<Rc<Cursor>, Error> { unimplemented!{} }
     pub fn set_cursor_position(&self, _pos: Vec2<u32>) -> Result<(), Error> { unimplemented!{} }
     pub fn cursor_position(&self) -> Result<Vec2<u32>, Error> { unimplemented!{} }
 
 
-    /// Lowers to the plaftorm-specific "<xxglxx>ContextMakeCurrent()",
-    /// and handles back a "Swap Chain" object which lives as long as both
-    /// the target window and the OpenGL context.
+    /// Lowers to the plaftorm-specific "<xxglxx>ContextMakeCurrent()".
+    /// Please note that making a context current is a thread-wide operation.
     ///
     /// FIXME: There's no way to prevent SwapChains from co-existing.
     /// There's no mechanism to prevent users from using a SwapChain that was

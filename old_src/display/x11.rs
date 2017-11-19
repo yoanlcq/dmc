@@ -110,7 +110,7 @@ pub struct Rect<T> {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Display {
-    pub x_dpy: *mut x::Display,
+    pub x_display: *mut x::Display,
     pub atoms: PreparedAtoms,
     pub screen: *mut x::Screen, // NOTE: Nothing says it needs to be freed, so we don't.
     pub screen_num: c_int,
@@ -167,7 +167,7 @@ pub struct Cursor<'dpy> {
 impl Drop for Display {
     fn drop(&mut self) {
         unsafe {
-            x::XCloseDisplay(self.x_dpy);
+            x::XCloseDisplay(self.x_display);
         } 
     }
 }
@@ -176,11 +176,11 @@ impl<'dpy> Drop for Window<'dpy> {
     fn drop(&mut self) {
         unsafe {
             match self.glx_window {
-                Some(w) => glXDestroyWindow(self.dpy.x_dpy, w),
+                Some(w) => glXDestroyWindow(self.dpy.x_display, w),
                 None => (),
             };
-            x::XDestroyWindow(self.dpy.x_dpy, self.x_window);
-            x::XFreeColormap(self.dpy.x_dpy, self.colormap);
+            x::XDestroyWindow(self.dpy.x_display, self.x_window);
+            x::XFreeColormap(self.dpy.x_display, self.colormap);
         }
     }
 }
@@ -197,7 +197,7 @@ impl<'dpy> Drop for GLContext<'dpy> {
     fn drop(&mut self) {
         unsafe {
             // Defers destruction until it's not current to any thread.
-            glXDestroyContext(self.dpy.x_dpy, self.glx_context);
+            glXDestroyContext(self.dpy.x_display, self.glx_context);
         }
     }
 }
@@ -247,11 +247,11 @@ macro_rules! atoms {
         }
         #[allow(non_snake_case)]
         impl PreparedAtoms {
-            fn fetch(x_dpy: *mut x::Display) -> Self {
+            fn fetch(x_display: *mut x::Display) -> Self {
                 $(
                     let $atom = CString::new(stringify!($atom)).unwrap();
                     let $atom = unsafe { x::XInternAtom(
-                        x_dpy, $atom.as_ptr(), x::False // Don't create
+                        x_display, $atom.as_ptr(), x::False // Don't create
                     )};
                     match $atom {
                         0 => warn!("Atom not present: {}", stringify!($atom)),
@@ -706,7 +706,7 @@ impl Display {
             // info!("Overriding process-wide Xlib error handler.");
             // x::XSetErrorHandler(Some(Self::x_generic_error_handler));
 
-            let x_dpy = x::XOpenDisplay(match x_display_name {
+            let x_display = x::XOpenDisplay(match x_display_name {
                 Some(s) => {
                     info!("Opening X display {}", s.to_string_lossy());
                     s.as_ptr()
@@ -716,7 +716,7 @@ impl Display {
                     ptr::null()
                 }
             });
-            if x_dpy.is_null() {
+            if x_display.is_null() {
                 return Err(super::Error::Backend(
                     Error::NoXDisplayForName { 
                         name: x_display_name.map(|s| CString::new(
@@ -726,30 +726,30 @@ impl Display {
                 ));
             }
 
-            let protocol_version  = x::XProtocolVersion(x_dpy);
-            let protocol_revision = x::XProtocolRevision(x_dpy);
-            let screen_count      = x::XScreenCount(x_dpy);
-            let vendor_release    = x::XVendorRelease(x_dpy);
-            let display_string    = CStr::from_ptr(x::XDisplayString(x_dpy)).to_string_lossy();
-            let server_vendor     = CStr::from_ptr(x::XServerVendor(x_dpy) ).to_string_lossy();
+            let protocol_version  = x::XProtocolVersion(x_display);
+            let protocol_revision = x::XProtocolRevision(x_display);
+            let screen_count      = x::XScreenCount(x_display);
+            let vendor_release    = x::XVendorRelease(x_display);
+            let display_string    = CStr::from_ptr(x::XDisplayString(x_display)).to_string_lossy();
+            let server_vendor     = CStr::from_ptr(x::XServerVendor(x_display) ).to_string_lossy();
             info!("Opened X11 display `{}`", display_string);
             info!("X Protocol version {}, revision {}", protocol_version, protocol_revision);
             info!("Vendor: `{}`, release {}", server_vendor, vendor_release);
             info!("Screen count: {}", screen_count);
 
-            let screen = x::XDefaultScreenOfDisplay(x_dpy);
-            let screen_num = x::XDefaultScreen(x_dpy);
+            let screen = x::XDefaultScreenOfDisplay(x_display);
+            let screen_num = x::XDefaultScreen(x_display);
             let root = x::XRootWindowOfScreen(screen);
-            let atoms = PreparedAtoms::fetch(x_dpy);
-            let glx = Self::query_glx(x_dpy, screen_num);
-            let usable_viewport = Self::query_usable_viewport(x_dpy, screen_num, &atoms);
+            let atoms = PreparedAtoms::fetch(x_display);
+            let glx = Self::query_glx(x_display, screen_num);
+            let usable_viewport = Self::query_usable_viewport(x_display, screen_num, &atoms);
 
-            Ok(Self { x_dpy, atoms, screen, screen_num, root, glx, usable_viewport })
+            Ok(Self { x_display, atoms, screen, screen_num, root, glx, usable_viewport })
         }
     }
 
     // FIXME: If we can't, return the whole screen size.
-    fn query_usable_viewport(x_dpy: *mut x::Display, screen_num: c_int, atoms: &PreparedAtoms) -> Rect<u32> {
+    fn query_usable_viewport(x_display: *mut x::Display, screen_num: c_int, atoms: &PreparedAtoms) -> Rect<u32> {
         let mut real_type: x::Atom = 0;
         let mut real_format: c_int = 0;
         let mut items_read: c_ulong = 0;
@@ -759,12 +759,12 @@ impl Display {
         // XXX: Dubious
         let fallback = unsafe { Rect {
             x: 0, y: 0,
-            w: x::XDisplayWidth(x_dpy, screen_num) as u32,
-            h: x::XDisplayHeight(x_dpy, screen_num) as u32,
+            w: x::XDisplayWidth(x_display, screen_num) as u32,
+            h: x::XDisplayHeight(x_display, screen_num) as u32,
         }};
 
         let status = unsafe { x::XGetWindowProperty(
-            x_dpy, x::XDefaultRootWindow(x_dpy), atoms._NET_WORKAREA,
+            x_display, x::XDefaultRootWindow(x_display), atoms._NET_WORKAREA,
             0, 4, x::False, x::XA_CARDINAL,
             &mut real_type, &mut real_format, &mut items_read,
             &mut items_left, &mut propdata
@@ -787,11 +787,11 @@ impl Display {
         usable
     }
 
-    fn query_glx(x_dpy: *mut x::Display, screen_num: c_int) -> Option<Glx> {
+    fn query_glx(x_display: *mut x::Display, screen_num: c_int) -> Option<Glx> {
 
         let (error_base, event_base) = unsafe {
             let (mut error_base, mut event_base) = mem::uninitialized();
-            let has_glx = glXQueryExtension(x_dpy, &mut error_base, &mut event_base);
+            let has_glx = glXQueryExtension(x_display, &mut error_base, &mut event_base);
             if has_glx == x::False {
                 return None;
             }
@@ -805,7 +805,7 @@ impl Display {
 
         let (major, minor) = unsafe {
             let (mut major, mut minor) = mem::uninitialized();
-            let success = glXQueryVersion(x_dpy, &mut major, &mut minor);
+            let success = glXQueryVersion(x_display, &mut major, &mut minor);
             if success == x::False {
                return None;
             }
@@ -829,11 +829,11 @@ impl Display {
         }
 
         let ext = unsafe {
-            let client_vendor  = glXGetClientString(  x_dpy, GLX_VENDOR);
-            let client_version = glXGetClientString(  x_dpy, GLX_VERSION);
-            let server_vendor  = glXQueryServerString(x_dpy, screen_num, GLX_VENDOR);
-            let server_version = glXQueryServerString(x_dpy, screen_num, GLX_VERSION);
-            let extensions = glXQueryExtensionsString(x_dpy, screen_num);
+            let client_vendor  = glXGetClientString(  x_display, GLX_VENDOR);
+            let client_version = glXGetClientString(  x_display, GLX_VERSION);
+            let server_vendor  = glXQueryServerString(x_display, screen_num, GLX_VENDOR);
+            let server_version = glXQueryServerString(x_display, screen_num, GLX_VERSION);
+            let extensions = glXQueryExtensionsString(x_display, screen_num);
             info!("GLX client vendor : {:?}", CStr::from_ptr(client_vendor ).to_str());
             info!("GLX client version: {:?}", CStr::from_ptr(client_version).to_str());
             info!("GLX server vendor : {:?}", CStr::from_ptr(server_vendor ).to_str());
@@ -848,7 +848,7 @@ impl Display {
     pub(super) fn choose_gl_pixel_format<'dpy>(&'dpy self, settings: &GLPixelFormatSettings)
         -> Result<GLPixelFormat<'dpy>, super::Error>
     {
-        let x_dpy = self.x_dpy;
+        let x_display = self.x_display;
 
         if self.glx.is_none() {
             return Err(super::Error::Backend(Error::NoGLX));
@@ -859,7 +859,7 @@ impl Display {
             // Not actually mutated, but glXChooseVisual wants *mut...
             let mut visual_attribs = glx.gen_visual_attribs(settings);
             let visual_info = unsafe { glXChooseVisual(
-                x_dpy, self.screen_num, visual_attribs.as_mut_ptr()
+                x_display, self.screen_num, visual_attribs.as_mut_ptr()
             )};
             if visual_info.is_null() {
                 return Err(super::Error::Backend(Error::UnsupportedGLContextSettings));
@@ -872,7 +872,7 @@ impl Display {
         let visual_attribs = glx.gen_fbconfig_attribs(settings);
         let mut fbcount: c_int = 0;
         let fbcs = unsafe { glXChooseFBConfig(
-            x_dpy, self.screen_num, visual_attribs.as_ptr(), &mut fbcount
+            x_display, self.screen_num, visual_attribs.as_ptr(), &mut fbcount
         )};
         if fbcs.is_null() || fbcount == 0 {
             warn!("No matching FBConfigs were found!");
@@ -897,7 +897,7 @@ impl Display {
         for i in 0..fbcount {
             let fbc = unsafe { *fbcs.offset(i as isize) };
             let visual_info = unsafe {
-                glXGetVisualFromFBConfig(x_dpy, fbc)
+                glXGetVisualFromFBConfig(x_display, fbc)
             };
             if visual_info.is_null() {
                 continue;
@@ -936,39 +936,39 @@ impl Display {
             let mut max_pbuffer_height      : c_int = 0; 
             let mut max_pbuffer_pixels      : c_int = 0; 
             unsafe {
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLE_BUFFERS         , &mut sample_buffers         );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_SAMPLES                , &mut samples                );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_FBCONFIG_ID            , &mut fbconfig_id            );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_BUFFER_SIZE            , &mut buffer_size            );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_LEVEL                  , &mut level                  );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_DOUBLEBUFFER           , &mut stereo                 );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_STEREO                 , &mut doublebuffer           );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_AUX_BUFFERS            , &mut aux_buffers            );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_RED_SIZE               , &mut red_size               );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_GREEN_SIZE             , &mut green_size             );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_BLUE_SIZE              , &mut blue_size              );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ALPHA_SIZE             , &mut alpha_size             );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_DEPTH_SIZE             , &mut depth_size             );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_STENCIL_SIZE           , &mut stencil_size           );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ACCUM_RED_SIZE         , &mut accum_red_size         );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ACCUM_GREEN_SIZE       , &mut accum_green_size       );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ACCUM_BLUE_SIZE        , &mut accum_blue_size        );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_ACCUM_ALPHA_SIZE       , &mut accum_alpha_size       );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_RENDER_TYPE            , &mut render_type            );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_DRAWABLE_TYPE          , &mut drawable_type          );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_X_RENDERABLE           , &mut x_renderable           );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_VISUAL_ID              , &mut visual_id              );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_X_VISUAL_TYPE          , &mut x_visual_type          );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_CONFIG_CAVEAT          , &mut config_caveat          );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_TYPE       , &mut transparent_type       );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_INDEX_VALUE, &mut transparent_index_value);
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_RED_VALUE  , &mut transparent_red_value  );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_GREEN_VALUE, &mut transparent_green_value);
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_BLUE_VALUE , &mut transparent_blue_value );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_TRANSPARENT_ALPHA_VALUE, &mut transparent_alpha_value);
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_MAX_PBUFFER_WIDTH      , &mut max_pbuffer_width      );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_MAX_PBUFFER_HEIGHT     , &mut max_pbuffer_height     );
-                glXGetFBConfigAttrib(x_dpy, fbc, GLX_MAX_PBUFFER_PIXELS     , &mut max_pbuffer_pixels     );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_SAMPLE_BUFFERS         , &mut sample_buffers         );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_SAMPLES                , &mut samples                );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_FBCONFIG_ID            , &mut fbconfig_id            );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_BUFFER_SIZE            , &mut buffer_size            );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_LEVEL                  , &mut level                  );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_DOUBLEBUFFER           , &mut stereo                 );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_STEREO                 , &mut doublebuffer           );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_AUX_BUFFERS            , &mut aux_buffers            );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_RED_SIZE               , &mut red_size               );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_GREEN_SIZE             , &mut green_size             );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_BLUE_SIZE              , &mut blue_size              );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_ALPHA_SIZE             , &mut alpha_size             );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_DEPTH_SIZE             , &mut depth_size             );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_STENCIL_SIZE           , &mut stencil_size           );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_ACCUM_RED_SIZE         , &mut accum_red_size         );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_ACCUM_GREEN_SIZE       , &mut accum_green_size       );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_ACCUM_BLUE_SIZE        , &mut accum_blue_size        );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_ACCUM_ALPHA_SIZE       , &mut accum_alpha_size       );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_RENDER_TYPE            , &mut render_type            );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_DRAWABLE_TYPE          , &mut drawable_type          );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_X_RENDERABLE           , &mut x_renderable           );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_VISUAL_ID              , &mut visual_id              );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_X_VISUAL_TYPE          , &mut x_visual_type          );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_CONFIG_CAVEAT          , &mut config_caveat          );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_TRANSPARENT_TYPE       , &mut transparent_type       );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_TRANSPARENT_INDEX_VALUE, &mut transparent_index_value);
+                glXGetFBConfigAttrib(x_display, fbc, GLX_TRANSPARENT_RED_VALUE  , &mut transparent_red_value  );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_TRANSPARENT_GREEN_VALUE, &mut transparent_green_value);
+                glXGetFBConfigAttrib(x_display, fbc, GLX_TRANSPARENT_BLUE_VALUE , &mut transparent_blue_value );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_TRANSPARENT_ALPHA_VALUE, &mut transparent_alpha_value);
+                glXGetFBConfigAttrib(x_display, fbc, GLX_MAX_PBUFFER_WIDTH      , &mut max_pbuffer_width      );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_MAX_PBUFFER_HEIGHT     , &mut max_pbuffer_height     );
+                glXGetFBConfigAttrib(x_display, fbc, GLX_MAX_PBUFFER_PIXELS     , &mut max_pbuffer_pixels     );
             }
             // let visualid = unsafe { (*visual_info).visualid };
             unsafe { 
@@ -1056,7 +1056,7 @@ impl Display {
         info!("Chosen FBConfig n°{}", best_fbc_i);
         unsafe { 
             x::XFree(fbcs as *mut _); 
-            let visual_info = glXGetVisualFromFBConfig(x_dpy, best_fbc);
+            let visual_info = glXGetVisualFromFBConfig(x_display, best_fbc);
             assert!(!visual_info.is_null());
             Ok(GLPixelFormat { dpy: self, visual_info, fbconfig: Some(best_fbc) })
         }
@@ -1065,8 +1065,8 @@ impl Display {
     pub(super) fn create_window<'dpy>(&'dpy self, settings: &Settings) 
         -> Result<Window<'dpy>, super::Error>
     {
-        let x_dpy = self.x_dpy;
-        let parent = unsafe { x::XDefaultRootWindow(x_dpy) };
+        let x_display = self.x_display;
+        let parent = unsafe { x::XDefaultRootWindow(x_display) };
         
         let &Settings {
             mode, resizable, fully_opaque, ref opengl, allow_high_dpi
@@ -1082,17 +1082,17 @@ impl Display {
                 }
                 let vi = unsafe { *pixel_format.0.visual_info };
                 let colormap = unsafe {
-                    x::XCreateColormap(x_dpy, parent, vi.visual, x::AllocNone)
+                    x::XCreateColormap(x_display, parent, vi.visual, x::AllocNone)
                 };
                 (vi.visual, vi.depth, colormap)
             },
             None => {
                 let depth = x::CopyFromParent;
                 let visual = unsafe {
-                    x::XDefaultVisual(x_dpy, self.screen_num)
+                    x::XDefaultVisual(x_display, self.screen_num)
                 };
                 let colormap = unsafe {
-                    x::XCreateColormap(x_dpy, parent, visual, x::AllocNone)
+                    x::XCreateColormap(x_display, parent, visual, x::AllocNone)
                 };
                 (visual, depth, colormap)
             },
@@ -1140,7 +1140,7 @@ impl Display {
         };
 
         let x_window = unsafe { x::XCreateWindow(
-            x_dpy, parent, x, y, w, h,
+            x_display, parent, x, y, w, h,
             border_thickness, depth, class as _, visual, valuemask, &mut swa
         )};
 
@@ -1155,13 +1155,13 @@ impl Display {
                 self.atoms.WM_TAKE_FOCUS,
             ];
             x::XSetWMProtocols(
-                x_dpy, x_window, protocols.as_mut_ptr(), protocols.len() as _
+                x_display, x_window, protocols.as_mut_ptr(), protocols.len() as _
             );
 
             let pid = libc::getpid();
             if pid > 0 {
                 x::XChangeProperty(
-                    x_dpy, x_window, self.atoms._NET_WM_PID, 
+                    x_display, x_window, self.atoms._NET_WM_PID, 
                     x::XA_CARDINAL, 32, x::PropModeReplace,
                     &pid as *const _ as *const _, 
                     1
@@ -1169,7 +1169,7 @@ impl Display {
             }
             /*
             x::XChangeProperty(
-                x_dpy, x_window, self.atoms.XdndAware, 
+                x_display, x_window, self.atoms.XdndAware, 
                 x::XA_ATOM, 32, x::PropModeReplace,
                 &xdnd_version as *const _ as *const _, 
                 1
@@ -1232,9 +1232,9 @@ impl Display {
             let argv = ptr::null_mut();
             let window_name = ptr::null_mut();
             let icon_name = ptr::null_mut();
-            // replaces x::XSetWMNormalHints(x_dpy, x_window, &mut hints);
+            // replaces x::XSetWMNormalHints(x_display, x_window, &mut hints);
             x::XSetWMProperties(
-                x_dpy, x_window, window_name, icon_name, argv, argc,
+                x_display, x_window, window_name, icon_name, argv, argc,
                 sizehints_buf, wmhints_buf, classhint_buf
             );
             x::XFree(sizehints_buf as _);
@@ -1272,17 +1272,17 @@ impl Display {
             }
             if count > 0 {
                 x::XChangeProperty(
-                    x_dpy, x_window, self.atoms._NET_WM_STATE, x::XA_ATOM, 32,
+                    x_display, x_window, self.atoms._NET_WM_STATE, x::XA_ATOM, 32,
                     x::PropModeReplace, atoms.as_mut_ptr() as *mut _, count as _
                 );
             } else {
-                x::XDeleteProperty(x_dpy, x_window, self.atoms._NET_WM_STATE);
+                x::XDeleteProperty(x_display, x_window, self.atoms._NET_WM_STATE);
             }
 
             // TODO: There are many other possible types of window.
             let mut wintype = self.atoms._NET_WM_WINDOW_TYPE_NORMAL;
             x::XChangeProperty(
-                x_dpy, x_window, self.atoms._NET_WM_WINDOW_TYPE, x::XA_ATOM, 32,
+                x_display, x_window, self.atoms._NET_WM_WINDOW_TYPE, x::XA_ATOM, 32,
                 x::PropModeReplace, &mut wintype as *mut _ as *mut _, 1
             );
         }
@@ -1294,7 +1294,7 @@ impl Display {
         let glx_window = if wants_glx_window {
             let fbconfig = opengl.as_ref().unwrap().0.fbconfig.unwrap();
             Some(unsafe { glXCreateWindow(
-                x_dpy, fbconfig, x_window, ptr::null_mut()
+                x_display, fbconfig, x_window, ptr::null_mut()
             )})
         } else { None };
 
@@ -1304,7 +1304,7 @@ impl Display {
     pub(super) fn create_gl_context<'dpy>(&'dpy self, pf: &GLPixelFormat, cs: &GLContextSettings) 
         -> Result<GLContext<'dpy>, super::Error>
     {
-        let x_dpy = self.x_dpy;
+        let x_display = self.x_display;
 
         if self.glx.is_none() {
             return Err(super::Error::Backend(Error::NoGLX));
@@ -1315,36 +1315,36 @@ impl Display {
         let &GLPixelFormat { visual_info, fbconfig, .. } = pf;
 
         unsafe {
-            x::XSync(x_dpy, x::False);
+            x::XSync(x_display, x::False);
             G_XLIB_ERROR_OCCURED.store(false, Ordering::SeqCst);
         }
 
         let (funcname, glx_context) = unsafe {
             if glx.version < Semver::new(1,3,0) {
-                ("glXCreateContext", glXCreateContext(x_dpy, visual_info, ptr::null_mut(), x::True))
+                ("glXCreateContext", glXCreateContext(x_display, visual_info, ptr::null_mut(), x::True))
             } else if glx.version < Semver::new(1,4,0) 
                    || (glx.version >= Semver::new(1,4,0) && !glx.ext.GLX_ARB_create_context)
             {
                 ("glXCreateNewContext", glXCreateNewContext(
-                    x_dpy, fbconfig.unwrap(), GLX_RGBA_TYPE, ptr::null_mut(), x::True
+                    x_display, fbconfig.unwrap(), GLX_RGBA_TYPE, ptr::null_mut(), x::True
                 ))
             } else {
                 #[allow(non_snake_case)]
                 let glXCreateContextAttribsARB = glx.ext.glXCreateContextAttribsARB.unwrap();
                 let attribs_arb = glx.gen_arb_attribs(cs);
                 ("glxCreateContextAttribsARB", glXCreateContextAttribsARB(
-                    x_dpy, fbconfig.unwrap(), ptr::null_mut(), x::True, attribs_arb.as_ptr()
+                    x_display, fbconfig.unwrap(), ptr::null_mut(), x::True, attribs_arb.as_ptr()
                 ))
             }
         };
 
         unsafe {
-            x::XSync(x_dpy, x::False);
+            x::XSync(x_display, x::False);
             if glx_context.is_null() || G_XLIB_ERROR_OCCURED.load(Ordering::SeqCst) {
                 return Err(super::Error::Backend(Error::FunctionName(funcname)));
             }
 
-            info!("GLX context is direct: {}", glXIsDirect(x_dpy, glx_context));
+            info!("GLX context is direct: {}", glXIsDirect(x_display, glx_context));
             Ok(GLContext { dpy: self, glx_context })
         }
     }
@@ -1363,27 +1363,21 @@ impl<'dpy> GLContext<'dpy> {
         unsafe {
             match win.glx_window {
                 Some(w) => glXMakeContextCurrent(
-                    self.dpy.x_dpy, w, w, self.glx_context
+                    self.dpy.x_display, w, w, self.glx_context
                 ),
                 None => glXMakeCurrent(
-                    self.dpy.x_dpy, win.x_window, self.glx_context
+                    self.dpy.x_display, win.x_window, self.glx_context
                 ),
             };
         }
     }
 
     // NOTE: glXGetProcAddressARB doesn't need a bound context, unlike in WGL.
-    pub(super) unsafe fn get_proc_address_raw(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
+    pub(super) unsafe fn get_proc_address(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
         #[cfg(not(target_os = "linux"))]
         unimplemented!("We don't know how the situation is in OSes other than Linux! This could require moving to x11-dl.");
         #[cfg(target_os = "linux")]
         glXGetProcAddressARB(name as *const _)
-    }
-    pub(super) fn get_proc_address(&self, name: &str) -> Option<unsafe extern "C" fn()> {
-        let name = CString::new(name).unwrap();
-        unsafe {
-            self.get_proc_address_raw(name.as_ptr())
-        }
     }
 }
 
@@ -1392,7 +1386,7 @@ impl<'dpy> Window<'dpy> {
 
     pub(super) fn gl_swap_buffers(&self) {
         unsafe {
-            glXSwapBuffers(self.dpy.x_dpy, match self.glx_window {
+            glXSwapBuffers(self.dpy.x_display, match self.glx_window {
                 Some(w) => w,
                 None => self.x_window,
             });
@@ -1424,7 +1418,7 @@ impl<'dpy> Window<'dpy> {
         if glx.ext.GLX_EXT_swap_control && self.glx_window.is_some() {
             let ssi = glx.ext.glXSwapIntervalEXT.unwrap();
             unsafe {
-                ssi(self.dpy.x_dpy, self.glx_window.unwrap(), interval);
+                ssi(self.dpy.x_display, self.glx_window.unwrap(), interval);
             }
             Ok(())
         } else if glx.ext.GLX_MESA_swap_control {
@@ -1470,7 +1464,7 @@ impl<'dpy> Window<'dpy> {
         }
     }
 
-    unsafe extern fn _is_map_notify_callback(_x_dpy: *mut x::Display, ev: *mut x::XEvent, win: x::XPointer) -> i32 {
+    unsafe extern fn _is_map_notify_callback(_x_display: *mut x::Display, ev: *mut x::XEvent, win: x::XPointer) -> i32 {
         let ev = ev.as_ref().unwrap();
         let xmap = x::XMapEvent::from(ev);
         let win = win as x::Window;
@@ -1479,18 +1473,18 @@ impl<'dpy> Window<'dpy> {
 
     pub(super) fn show(&self) -> WindowOpResult<()> {
         unsafe {
-            let x_dpy = self.dpy.x_dpy;
+            let x_display = self.dpy.x_display;
             let x_window = self.x_window;
             // if !self._is_mapped() {
-                x::XMapRaised(x_dpy, x_window);
+                x::XMapRaised(x_display, x_window);
                 /*
                  * This blocks
                 let mut event: x::XEvent = mem::uninitialized();
-                x::XIfEvent(x_dpy, &mut event,
+                x::XIfEvent(x_display, &mut event,
                     Some(Self::is_map_notify_callback),
                     x_window as x::XPointer);
                 */
-                x::XSync(x_dpy, x::False); // Otherwise, it would be possible
+                x::XSync(x_display, x::False); // Otherwise, it would be possible
                     // to swap buffer before the window is shown, which would
                     // have no effect.
             // }
@@ -1500,7 +1494,7 @@ impl<'dpy> Window<'dpy> {
     fn _is_mapped(&self) -> bool {
         unsafe {
             let mut attrs: x::XWindowAttributes = mem::uninitialized();
-            x::XGetWindowAttributes(self.dpy.x_dpy, self.x_window, &mut attrs);
+            x::XGetWindowAttributes(self.dpy.x_display, self.x_window, &mut attrs);
             attrs.map_state != x::IsUnmapped
         }
     }
@@ -1529,18 +1523,18 @@ impl<'dpy> Window<'dpy> {
     pub(super) fn enter_fullscreen(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
     pub(super) fn leave_fullscreen(&self) -> WindowOpResult<()> { WindowOpResult::Unimplemented }
     pub(super) fn clear_icon(&self) -> WindowOpResult<()> {
-        let x_dpy = self.dpy.x_dpy;
+        let x_display = self.dpy.x_display;
         let x_window = self.x_window;
         #[allow(non_snake_case)]
         let _NET_WM_ICON = self.dpy.atoms._NET_WM_ICON;
 
         unsafe {
-            x::XDeleteProperty(x_dpy, x_window, _NET_WM_ICON);
+            x::XDeleteProperty(x_display, x_window, _NET_WM_ICON);
         }
         WindowOpResult::Success(())
     }
     pub(super) fn set_icon(&self, icon: Icon) -> WindowOpResult<()> {
-        let x_dpy = self.dpy.x_dpy;
+        let x_display = self.dpy.x_display;
         let x_window = self.x_window;
         #[allow(non_snake_case)]
         let _NET_WM_ICON = self.dpy.atoms._NET_WM_ICON;
@@ -1562,10 +1556,10 @@ impl<'dpy> Window<'dpy> {
         }
         unsafe { 
             x::XChangeProperty(
-                x_dpy, x_window, _NET_WM_ICON, x::XA_CARDINAL, 32, 
+                x_display, x_window, _NET_WM_ICON, x::XA_CARDINAL, 32, 
                 x::PropModeReplace, prop.as_ptr() as _, prop.len() as _
             );
-            x::XFlush(x_dpy);
+            x::XFlush(x_display);
         }
 
         WindowOpResult::Success(())
@@ -1603,13 +1597,13 @@ impl<'dpy> Window<'dpy> {
             let mut title_ptr = title_ptr.as_bytes_with_nul().as_ptr() as *mut u8;
             let title_ptr = &mut title_ptr as *mut _;
             let status = x::Xutf8TextListToTextProperty(
-                self.dpy.x_dpy, mem::transmute(title_ptr), 1, x::XUTF8StringStyle, &mut title_prop
+                self.dpy.x_display, mem::transmute(title_ptr), 1, x::XUTF8StringStyle, &mut title_prop
             );
             if status == x::Success as i32 {
-                x::XSetTextProperty(self.dpy.x_dpy, self.x_window, &mut title_prop, self.dpy.atoms._NET_WM_NAME);
+                x::XSetTextProperty(self.dpy.x_display, self.x_window, &mut title_prop, self.dpy.atoms._NET_WM_NAME);
                 x::XFree(title_prop.value as *mut _);
             }
-            x::XFlush(self.dpy.x_dpy);
+            x::XFlush(self.dpy.x_display);
         }
         WindowOpResult::Success(())
     }

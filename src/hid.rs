@@ -70,13 +70,44 @@ pub struct Axis1DState {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Axis2DState {
     pub value: Vec2<AxisValue>,
-    pub info: AbsAxis1DInfo,
+    pub info: AbsAxis2DInfo,
 }
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Axis3DState {
     pub value: Vec3<AxisValue>,
-    pub info: AbsAxis1DInfo,
+    pub info: AbsAxis3DInfo,
 }
+
+fn axis_normalize_single(x: AxisValue, min: AxisValue, max: AxisValue) -> f64 {
+    if x < 0 {
+        x as f64 / min as f64
+    } else {
+        x as f64 / max as f64
+    }
+}
+
+impl Axis1DState {
+    pub fn normalized(&self) -> f64 {
+        axis_normalize_single(self.value, self.info.range.start, self.info.range.end)
+    }
+}
+impl Axis2DState {
+    pub fn normalized(&self) -> Vec2<f64> {
+        let x = axis_normalize_single(self.value.x, self.info.range.start.x, self.info.range.end.x);
+        let y = axis_normalize_single(self.value.y, self.info.range.start.y, self.info.range.end.y);
+        Vec2 { x, y }
+    }
+}
+impl Axis3DState {
+    pub fn normalized(&self) -> Vec3<f64> {
+        let x = axis_normalize_single(self.value.x, self.info.range.start.x, self.info.range.end.x);
+        let y = axis_normalize_single(self.value.y, self.info.range.start.y, self.info.range.end.y);
+        let z = axis_normalize_single(self.value.z, self.info.range.start.z, self.info.range.end.z);
+        Vec3 { x, y, z }
+    }
+}
+
+
 
 pub trait Hid {
     fn info(&self) -> &HidInfo;

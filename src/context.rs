@@ -2,23 +2,25 @@ use os::*;
 use gl::*;
 use cursor::*;
 use window::*;
+use event::{PollIter, PeekIter, WaitIter};
+use timeout::Timeout;
 use std::rc::Rc;
 use std::path::Path;
 use Extent2;
 
 #[derive(Debug)]
-pub struct Context(OsContext);
+pub struct Context(pub(crate) OsContext);
 
 /// Error types returned by this module.
 #[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub enum Error {
-    Unsupported { reason: Option<String>, },
-    Failed { reason: String },
+    Unsupported(Option<String>),
+    Failed(String),
 }
 
 
-impl<'c> Context {
+impl Context {
     /// Attempts to get one handle to the platform-specific display backend.
     /// 
     /// You should need only one.
@@ -27,7 +29,7 @@ impl<'c> Context {
     }
 
     /// X11-only specialization of `open()` where you can specify
-    /// the name given to `XOpenContext()`.
+    /// the name given to `XOpenDisplay()`.
     #[cfg(target_os="linux")] // FIXME: and BSDs too !
     pub fn open_x11_display_name(name: Option<&::std::ffi::CStr>) -> Result<Self, Error> {
         // NOTE: Keep full module path to CStr to prevent unused import in other platforms.
@@ -48,6 +50,17 @@ impl<'c> Context {
         w.show();
         Ok(w)
     }
+
+    pub fn poll_event_iter<'c>(&'c mut self) -> PollIter<'c> {
+        PollIter { context: self }
+    }
+    pub fn peek_event_iter<'c>(&'c mut self) -> PeekIter<'c> {
+        PeekIter { context: self }
+    }
+    pub fn wait_event_iter<'c>(&'c mut self, timeout: Timeout) -> WaitIter<'c> {
+        WaitIter { context: self, timeout }
+    }
+
 
     /// Attempts to retrieve the best pixel format for OpenGL-enabled windows
     /// and OpenGL contexts, given relevant settings.

@@ -191,6 +191,7 @@ if ctxflags &     CONTEXT_FLAG_NO_ERROR_BIT_KHR != 0 { "no_error " } else {""},
         gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
     }
     // NOTE: show() before present(), because otherwise presenting won't take place the first time.
+    window.raise().unwrap();
     window.show().unwrap();
     window.present_gl();
     sleep(Duration::from_secs(1));

@@ -3,7 +3,7 @@
 //! This is an attempt at an SDL2 rewrite in Rust. The end goal is to get
 //! rid of the dependency on SDL2's DLL for Rust apps.
 
-#![doc(html_root_url = "https://docs.rs/dmc/0.1.0")]
+#![doc(html_root_url = "https://docs.rs/dmc/0.2.0")]
 //#![feature(test)]
 //#![warn(missing_docs)]
 #![doc(test(attr(deny(warnings))))]
@@ -18,6 +18,7 @@ extern crate vek;
 
 pub use vek::{
     Vec2, Vec3, Vec4, Extent2, Extent3, Rgba, Rgb,
+    Rect,
 };
 
 // Nontrivial modules go first
@@ -51,25 +52,27 @@ pub use knowledge::Knowledge::*;
 
 #[cfg(target_os="linux")]
 #[path="os/linux.rs"]
-mod os;
+pub mod os;
 #[cfg(any(target_os="freebsd", target_os="dragonfly", target_os="openbsd", target_os="netbsd"))]
 #[path="os/bsd.rs"]
-mod os;
+pub mod os;
 #[cfg(target_os="windows")]
 #[path="os/windows.rs"]
-mod os;
+pub mod os;
 #[cfg(target_os="macos")] /* AppKit */ 
 #[path="os/macos.rs"]
-mod os;
+pub mod os;
 #[cfg(target_os="android")]
 #[path="os/android.rs"]
-mod os;
+pub mod os;
 #[cfg(target_os="ios")] /* UIKit */ 
 #[path="os/ios.rs"]
-mod os;
+pub mod os;
 #[cfg(target_os="winrt")]
 #[path="os/winrt.rs"]
-mod os;
+pub mod os;
 #[cfg(target_os="emscripten")]
 #[path="os/emscripten.rs"]
-mod os;
+pub mod os;
+
+pub use os::OsGLProc;

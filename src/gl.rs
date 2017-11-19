@@ -79,7 +79,7 @@ impl Default for GLPixelFormatSettings {
 }
 
 /// OS-specific OpenGL pixel format.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct GLPixelFormat(pub(crate) OsGLPixelFormat);
 
 
@@ -273,12 +273,8 @@ pub struct GLContext(pub(crate) OsGLContext);
 impl GLContext {
     /// Retrieves the OpenGL function pointer for the given name.
     // XXX Will the "C" calling convention be correct in all cases ?
-    pub fn get_proc_address(&self, name: &str) -> Option<unsafe extern "C" fn()> {
+    pub unsafe fn get_proc_address(&self, name: *const c_char) -> Option<OsGLProc> {
         self.0.get_proc_address(name)
-    }
-    /// Retrieves the OpenGL function pointer for the given name (C-string version).
-    pub unsafe fn get_proc_address_raw(&self, name: *const c_char) -> Option<unsafe extern "C" fn()> {
-        self.0.get_proc_address_raw(name)
     }
 }
 

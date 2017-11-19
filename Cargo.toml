@@ -1,13 +1,13 @@
 [package]
 authors = ["Yoan Lecoq <yoanlecoq.io@gmail.com>"]
-description = "(work in progress) Idiomatic platform layer in the likes of the SDL2 or SFML."
+description = "(work in progress) Idiomatic platform layer in the likes of SDL2 and SFML."
 documentation = "https://docs.rs/dmc"
 keywords = ["sdl2", "window", "opengl"]
 categories = [ "multimedia", "game-engines" ]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/yoanlcq/dmc"
 name = "dmc"
-version = "0.1.0" # remember to update html_root_url
+version = "0.2.0" # remember to update html_root_url
 
 
 [dependencies]
@@ -17,5 +17,5 @@ libc = "0.2.26"
 vek = { git = "https://github.com/yoanlcq/vek", features = ["vec2", "vec3", "extent2", "extent3", "rgb", "rgba"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies.x11]
-version = "2.15.0"
-features = ["xlib", "glx"]
+version = "2.16.0"
+features = ["xlib", "glx", "xinput"]

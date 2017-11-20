@@ -67,10 +67,13 @@ use std::sync::atomic::{ATOMIC_BOOL_INIT, AtomicBool, Ordering};
 use std::slice;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::cell::Cell;
 use std::path::Path;
+use std::time::{Instant, Duration};
 
 use self::x11::xlib as x;
 use self::x11::xinput as xi;
+use self::x11::xinput2 as xi2;
 use self::x11::glx::*;
 use self::x11::glx::arb::*;
 
@@ -79,7 +82,8 @@ use self::libc::getpid;
 use gl::*;
 use window::*;
 use cursor::*;
-use event::Event;
+use event::*;
+use hid::*;
 use timeout::Timeout;
 use super::{Extent2, Vec2, Rgba, Rect};
 use decision::Decision;
@@ -89,6 +93,8 @@ use semver::Semver;
 static mut G_XLIB_ERROR_OCCURED: AtomicBool = ATOMIC_BOOL_INIT;
 static mut G_GLX_ERROR_BASE: i32 = 0;
 static mut G_GLX_EVENT_BASE: i32 = 0;
+static mut G_XI_ERROR_BASE: i32 = 0;
+static mut G_XI_EVENT_BASE: i32 = 0;
 
 // WISH: Grab from _XPrintDefaultError in Xlib's sources
 unsafe extern fn xlib_generic_error_handler(_shared_context: *mut x::Display, e: *mut x::XErrorEvent) -> c_int {
@@ -121,6 +127,7 @@ pub type udev_device = ();
 
 
 // TODO: Send a PR to x11-rs.
+// Missing items for X11
 pub mod xx {
     pub const GLX_CONTEXT_ES_PROFILE_BIT_EXT             : i32 = 0x00000004;
     pub const GLX_CONTEXT_ES2_PROFILE_BIT_EXT            : i32 = 0x00000004;
@@ -128,6 +135,12 @@ pub mod xx {
     pub const GLX_CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB: i32 = 0x8256;
     pub const GLX_NO_RESET_NOTIFICATION_ARB              : i32 = 0x8261;
     pub const GLX_LOSE_CONTEXT_ON_RESET_ARB              : i32 = 0x8252;
+}
+
+// TODO: Send a PR to x11-rs.
+// Missing items for XInput
+pub mod xxi {
+    pub const NoSuchExtension: i32 = 1;
 }
 
 pub const _NET_WM_STATE_REMOVE: u32 = 0;
@@ -367,6 +380,12 @@ atoms!(
 
 
 
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct XI {
+    pub version: Semver,
+    pub error_base: c_int,
+    pub event_base: c_int,
+}
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Glx {
@@ -385,12 +404,16 @@ pub struct SharedContext {
     pub screen_num: c_int,
     pub root: x::Window,
     pub glx: Option<Glx>,
+    pub xi: Option<XI>,
     pub usable_viewport: Rect<i32, u32>,
     pub udev_mon: udev_monitor,
+    pub previous_x_key_release_time: Cell<x::Time>,
+    pub previous_x_key_release_keycode: Cell<c_uint>,
+    pub previous_abs_mouse_position: Cell<Vec2<i32>>,
 }
 
 #[derive(Debug)]
-pub struct OsContext(pub Rc<SharedContext>);
+pub struct OsContext(Rc<SharedContext>);
 
 #[derive(Debug)]
 pub struct OsHid {
@@ -422,18 +445,18 @@ pub struct OsCursor {
     pub shared_context: Rc<SharedContext>,
 }
 
+
 impl Deref for OsContext {
     type Target = Rc<SharedContext>;
-    fn deref(&self) -> &Rc<SharedContext> {
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 impl DerefMut for OsContext {
-    fn deref_mut(&mut self) -> &mut Rc<SharedContext> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 
 // Dummy drop, so we don't write one by accident.
 impl Drop for OsContext {
@@ -451,13 +474,14 @@ impl Drop for SharedContext {
 
 impl Drop for OsWindow {
     fn drop(&mut self) {
+        let x_display = self.shared_context.x_display;
         unsafe {
             match self.glx_window {
-                Some(w) => glXDestroyWindow(self.shared_context.x_display, w),
+                Some(w) => glXDestroyWindow(x_display, w),
                 None => (),
             };
-            x::XDestroyWindow(self.shared_context.x_display, self.x_window);
-            x::XFreeColormap(self.shared_context.x_display, self.colormap);
+            x::XDestroyWindow(x_display, self.x_window);
+            x::XFreeColormap(x_display, self.colormap);
         }
     }
 }
@@ -472,9 +496,10 @@ impl Drop for OsGLPixelFormat {
 
 impl Drop for OsGLContext {
     fn drop(&mut self) {
+        let x_display = self.shared_context.x_display;
         unsafe {
             // Defers destruction until it's not current to any thread.
-            glXDestroyContext(self.shared_context.x_display, self.glx_context);
+            glXDestroyContext(x_display, self.glx_context);
         }
     }
 }
@@ -729,13 +754,18 @@ impl OsContext {
             let root = x::XRootWindowOfScreen(screen);
             let atoms = PreparedAtoms::fetch(x_display);
             let glx = Self::query_glx(x_display, screen_num);
+            let xi = Self::query_xi(x_display, screen_num);
             let usable_viewport = Self::query_usable_viewport(x_display, screen_num, &atoms);
             let udev_mon = ();
             let shared_context = SharedContext { 
-                x_display, atoms, screen, screen_num, root, glx,
+                x_display, atoms, screen, screen_num, root, glx, xi,
                 usable_viewport, udev_mon,
+                previous_x_key_release_time: Cell::new(0),
+                previous_x_key_release_keycode: Cell::new(0),
+                previous_abs_mouse_position: Cell::new(Default::default()),
             };
-            Ok(OsContext(Rc::new(shared_context)))
+            let shared_context = Rc::new(shared_context);
+            Ok(OsContext(shared_context))
         }
     }
 
@@ -777,6 +807,60 @@ impl OsContext {
         }
         usable
     }
+
+    fn query_xi(x_display: *mut x::Display, screen_num: c_int) -> Option<XI> {
+
+        let iname: *const c_char = b"XInputExtension\0" as *const _ as _;
+        let (error_base, event_base) = unsafe {
+            let (mut error_base, mut event_base, mut xi_opcode) = mem::uninitialized();
+            let has_xi2 = x::XQueryExtension(
+                x_display, iname, &mut xi_opcode,
+                &mut event_base, &mut error_base
+            );
+            if has_xi2 == x::False {
+                return None;
+            }
+            (error_base, event_base)
+        };
+        unsafe {
+            G_XI_ERROR_BASE = error_base;
+            G_XI_EVENT_BASE = event_base;
+        }
+        let version = unsafe {
+            xi::XGetExtensionVersion(x_display, iname)
+        };
+        let version = if !version.is_null() && version != xxi::NoSuchExtension as _ {
+            unsafe {
+                let major = (*version).major_version;
+                let minor = (*version).minor_version;
+                x::XFree(version as _);
+                info!("XInput extension version is {}.{}", major, minor);
+                Semver::new(major as _, minor as _, 0)
+            }
+        } else {
+            return None;
+        };
+        info!("XInput error_base = {}, event_base = {}", error_base, event_base);
+        let mut major = 2;
+        let mut minor = 2;
+        unsafe {
+            xi2::XIQueryVersion(x_display, &mut major, &mut minor);
+        }
+        Some(XI { event_base, error_base, version })
+        /*
+        XGetExtensionVersion();
+        XIQueryVersion();
+        XIQueryDevice();
+        XIFreeDeviceInfo();
+        XSelectInput();
+        XISelectEvents();
+        XNextEvent();
+        XGetEventData();
+        XFreeEventData();
+        */
+    }
+
+
 
     fn query_glx(x_display: *mut x::Display, screen_num: c_int) -> Option<Glx> {
 
@@ -1077,15 +1161,14 @@ impl OsContext {
         Ok(OsWindow { 
             shared_context: self.0.clone(), x_window, colormap, glx_window,
         })
-
     }
     pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<OsGLPixelFormat, Error> {
         let x_display = self.x_display;
 
-        if self.glx.is_none() {
-            return Err(Failed("The GLX extension is not present".to_owned()));
-        }
-        let glx = self.glx.as_ref().unwrap();
+        let glx = match self.glx.as_ref() {
+            None => return Err(Failed("The GLX extension is not present".to_owned())),
+            Some(glx) => glx,
+        };
 
         if glx.version < Semver::new(1,3,0) {
             // Not actually mutated, but glXChooseVisual wants *mut...
@@ -1301,11 +1384,10 @@ impl OsContext {
     pub fn create_gl_context(&self, pf: &OsGLPixelFormat, cs: &GLContextSettings) -> Result<OsGLContext, Error> {
         let x_display = self.x_display;
 
-        if self.glx.is_none() {
-            return Err(Failed("Creating an OpenGL context requires GLX".to_owned()));
-        }
-
-        let glx = self.glx.as_ref().unwrap();
+        let glx = match self.glx.as_ref() {
+            None => return Err(Failed("Creating an OpenGL context requires GLX".to_owned())),
+            Some(glx) => glx,
+        };
 
         let &OsGLPixelFormat { visual_info, fbconfig, .. } = pf;
 
@@ -1368,7 +1450,7 @@ impl OsContext {
     pub fn create_animated_cursor(&self, _anim: &[CursorFrame]) -> Result<OsCursor, Error> { unimplemented!{} }
     pub fn system_cursor(&self, _s: SystemCursor) -> Result<OsCursor, Error> { unimplemented!{} }
 
-    pub fn poll_next_event(&self) -> Option<Event> {
+    pub fn poll_next_event(&mut self) -> Option<Event> {
         unsafe {
             let x_display = self.x_display;
             let mut x_event: x::XEvent = mem::uninitialized();
@@ -1386,59 +1468,278 @@ impl OsContext {
             }
         }
     }
-    pub fn wait_next_event(&self, timeout: Timeout) -> Option<Event> {
+    pub fn wait_next_event(&mut self, timeout: Timeout) -> Option<Event> {
         unsafe {
             let x_display = self.x_display;
             let mut x_event: x::XEvent = mem::uninitialized();
-            loop {
-                match timeout {
-                    Timeout::Infinite => {
+            match timeout {
+                Timeout::Infinite => loop {
+                    x::XNextEvent(x_display, &mut x_event);
+                    let e = self.convert_x_event_into_event(x_event);
+                    if let Ok(e) = e {
+                        return Some(e);
+                    }
+                },
+                Timeout::Set(duration) => {
+                    // Welp, just poll repeatedly instead
+                    let now = Instant::now();
+                    while now.elapsed() < duration {
+                        let event_count = x::XPending(x_display);
+                        if event_count <= 0 {
+                            continue;
+                        }
                         x::XNextEvent(x_display, &mut x_event);
-                    },
-                    Timeout::Set(duration) => unimplemented!{},
-                };
-                let e = self.convert_x_event_into_event(x_event);
-                if let Ok(e) = e {
-                    return Some(e);
-                }
-            }
+                        let e = self.convert_x_event_into_event(x_event);
+                        if let Ok(e) = e {
+                            return Some(e);
+                        }
+                    }
+                },
+            };
+            unreachable!{}
         }
     }
-    fn convert_x_event_into_event(&self, x_event: x::XEvent) -> Result<Event, ()> {
+    fn x_window_to_window(&self, x_window: x::Window) -> Option<Rc<Window>> {
+        unimplemented!{}
+    }
+    fn dummy_keyboard(&self) -> Rc<Keyboard> {
+        unimplemented!{}
+    }
+    fn dummy_mouse(&self) -> Rc<Mouse> {
+        unimplemented!{}
+    }
+    fn x_keycode_to_vkey(&self, x_keycode: c_uint) -> VKey { unimplemented!{} }
+    // XLookupKeysym
+    fn x_keycode_to_key(&self, x_keycode: c_uint) -> Key { unimplemented!{} }
+
+    fn convert_x_event_into_event(&mut self, x_event: x::XEvent) -> Result<Event, ()> {
         match x_event.get_type() {
-            KeyPress => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            KeyRelease => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            ButtonPress => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            ButtonRelease => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            MotionNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            EnterNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            LeaveNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            FocusIn => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            FocusOut => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            KeymapNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            Expose => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            GraphicsExpose => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            NoExpose => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            CirculateRequest => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            ConfigureRequest => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            MapRequest => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            ResizeRequest => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            CirculateNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            ConfigureNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) }, 
-            CreateNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            DestroyNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            GravityNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            MapNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            MappingNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            ReparentNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            UnmapNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            VisibilityNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            ColormapNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            ClientMessage => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            PropertyNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            SelectionClear => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            SelectionNotify => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
-            SelectionRequest => { warn!("Unhandled event type {}", x_event.get_type()); Err(()) },
+            KeyPress => {
+                let x_event = unsafe { x_event.key };
+                let is_repeat = {
+                    self.previous_x_key_release_time.get() == x_event.time
+                 && self.previous_x_key_release_keycode.get() == x_event.keycode
+                };
+                let event = Event::KeyboardKeyPressed {
+                    keyboard: self.dummy_keyboard(),
+                    window: self.x_window_to_window(x_event.window),
+                    vkey: self.x_keycode_to_vkey(x_event.keycode),
+                    key: self.x_keycode_to_key(x_event.keycode),
+                    is_repeat,
+                };
+                Ok(event)
+            },
+            KeyRelease => {
+                let x_event = unsafe { x_event.key };
+                self.previous_x_key_release_time.set(x_event.time);
+                self.previous_x_key_release_keycode.set(x_event.keycode);
+                let event = Event::KeyboardKeyReleased {
+                    keyboard: self.dummy_keyboard(),
+                    window: self.x_window_to_window(x_event.window),
+                    vkey: self.x_keycode_to_vkey(x_event.keycode),
+                    key: self.x_keycode_to_key(x_event.keycode),
+                };
+                Ok(event)
+            },
+            ClientMessage => {
+                let x_event = unsafe { x_event.client_message };
+                let atoms = &self.atoms;
+                if(x_event.data.get_long(0) == atoms.WM_DELETE_WINDOW as _) {
+                    if let Some(window) = self.x_window_to_window(x_event.window) {
+                        return Ok(Event::WindowCloseRequested { window });
+                    }
+                }
+                warn!("Unhandled ClientMessage event: {:?}", x_event);
+                Err(())
+            },
+            ButtonPress => {
+                let x_event = unsafe { x_event.button };
+                let position = Vec2 { x: x_event.x as _, y: x_event.y as _ };
+                let abs_position = Vec2 { x: x_event.x_root as _, y: x_event.y_root as _ };
+                let displacement = abs_position - self.previous_abs_mouse_position.get();
+                let click = Click::Single;
+                let window = self.x_window_to_window(x_event.window);
+                let mouse = self.dummy_mouse();
+                let event = if x_event.button <= 3 {
+                    let button = match x_event.button {
+                        1 => MouseButton::Left,
+                        2 => MouseButton::Middle,
+                        3 => MouseButton::Right,
+                        _ => unreachable!(),
+                    };
+                    Event::MouseButtonPressed {
+                        mouse, window, position, abs_position, button, click, displacement,
+                    }
+                } else {
+                    let scroll = Vec2::new(0, match x_event.button {
+                        4 => 1,
+                        5 => -1,
+                        _ => return Err(()),
+                    });
+                    Event::MouseScroll {
+                        mouse, window, position, abs_position, scroll, displacement,
+                    }
+                };
+                self.previous_abs_mouse_position.set(abs_position);
+                Ok(event)
+            },
+            ButtonRelease => {
+                let x_event = unsafe { x_event.button };
+                let position = Vec2 { x: x_event.x as _, y: x_event.y as _ };
+                let abs_position = Vec2 { x: x_event.x_root as _, y: x_event.y_root as _ };
+                let displacement = abs_position - self.previous_abs_mouse_position.get();
+                let button = match x_event.button {
+                    1 => MouseButton::Left,
+                    2 => MouseButton::Middle,
+                    3 => MouseButton::Right,
+                    _ => return Err(()), // "scroll" buttons.
+                };
+                let window = self.x_window_to_window(x_event.window);
+                let mouse = self.dummy_mouse();
+                let event = Event::MouseButtonReleased {
+                    mouse, window, position, abs_position, button, displacement,
+                };
+                self.previous_abs_mouse_position.set(abs_position);
+                Ok(event)
+            },
+            MotionNotify => {
+                let x_event = unsafe { x_event.motion };
+                let position = Vec2 { x: x_event.x as _, y: x_event.y as _ };
+                let abs_position = Vec2 { x: x_event.x_root as _, y: x_event.y_root as _ };
+                let window = self.x_window_to_window(x_event.window);
+                let displacement = abs_position - self.previous_abs_mouse_position.get();
+                let mouse = self.dummy_mouse();
+                let event = Event::MouseMotion {
+                    mouse, window, position, abs_position, displacement,
+                };
+                self.previous_abs_mouse_position.set(abs_position);
+                Ok(event)
+            }
+            EnterNotify      => {
+                let x_event = unsafe { x_event.crossing };
+                let window = match self.x_window_to_window(x_event.window) {
+                    None => return Err(()),
+                    Some(w) => w,
+                };
+                let position = Vec2 { x: x_event.x as _, y: x_event.y as _ };
+                let abs_position = Vec2 { x: x_event.x_root as _, y: x_event.y_root as _ };
+                let mouse = self.dummy_mouse();
+                let event = match x_event.mode {
+                    x::NotifyNormal => Event::MouseEnter {
+                        mouse, window, position, abs_position,
+                    },
+                    x::NotifyGrab => Event::MouseFocusGained {
+                        mouse, window, position, abs_position,
+                    },
+                    _ => unreachable!{},
+                };
+                self.previous_abs_mouse_position.set(abs_position);
+                Ok(event)
+            },
+            LeaveNotify      => {
+                let x_event = unsafe { x_event.crossing };
+                let window = match self.x_window_to_window(x_event.window) {
+                    None => return Err(()),
+                    Some(w) => w,
+                };
+                let position = Vec2 { x: x_event.x as _, y: x_event.y as _ };
+                let abs_position = Vec2 { x: x_event.x_root as _, y: x_event.y_root as _ };
+                let displacement = abs_position - self.previous_abs_mouse_position.get();
+                let mouse = self.dummy_mouse();
+                let event = match x_event.mode {
+                    x::NotifyNormal => Event::MouseLeave {
+                        mouse, window, position, abs_position, displacement,
+                    },
+                    x::NotifyUngrab => Event::MouseFocusLost {
+                        mouse, window, position, abs_position, displacement,
+                    },
+                    _ => unreachable!{},
+                };
+                self.previous_abs_mouse_position.set(abs_position);
+                Ok(event)
+            },
+            FocusIn          => {
+                let x_event = unsafe { x_event.focus_change };
+                let window = match self.x_window_to_window(x_event.window) {
+                    None => return Err(()),
+                    Some(w) => w,
+                };
+                let keyboard = self.dummy_keyboard();
+                let event = Event::KeyboardFocusGained {
+                    keyboard, window,
+                };
+                Ok(event)
+            },
+            FocusOut         => {
+                let x_event = unsafe { x_event.focus_change };
+                let window = match self.x_window_to_window(x_event.window) {
+                    None => return Err(()),
+                    Some(w) => w,
+                };
+                let keyboard = self.dummy_keyboard();
+                let event = Event::KeyboardFocusLost {
+                    keyboard, window,
+                };
+                Ok(event)
+            },
+            KeymapNotify     => Err(()),
+            Expose           => {
+                let x_event = unsafe { x_event.expose };
+                let window = match self.x_window_to_window(x_event.window) {
+                    None => return Err(()),
+                    Some(w) => w,
+                };
+                Ok(Event::WindowContentDamaged { window })
+            },
+            GraphicsExpose   => {
+                let x_event = unsafe { x_event.expose };
+                let window = match self.x_window_to_window(x_event.window) {
+                    None => return Err(()),
+                    Some(w) => w,
+                };
+                Ok(Event::WindowContentDamaged { window })
+            },
+            NoExpose         => Err(()),
+            CirculateRequest => Err(()), // FIXME: Shouldn't we handle these *Request events ?
+            ConfigureRequest => Err(()),
+            MapRequest       => Err(()),
+            ResizeRequest    => Err(()),
+            CirculateNotify  => Err(()),
+            CreateNotify     => Err(()),
+            DestroyNotify    => Err(()),
+            GravityNotify    => {
+                // Window moved because its parent's size changed.
+                Err(())
+            },
+            ConfigureNotify  => {
+                let x_event = unsafe { x_event.configure };
+                let position = Vec2 { x: x_event.x as _, y: x_event.y as _ };
+                let size = Extent2 { w: x_event.width as _, h: x_event.height as _ };
+                let window = match self.x_window_to_window(x_event.window) {
+                    None => return Err(()),
+                    Some(w) => w,
+                };
+                Ok(Event::WindowMovedResized { window, position, size })
+            }, 
+            MapNotify        => Err(()),
+            MappingNotify    => {
+                // Keyboard/mouse was remapped.
+                let mut x_event = unsafe { x_event.mapping };
+                x::XRefreshKeyboardMapping(&mut x_event);
+                Err(())
+            },
+            ReparentNotify   => Err(()),
+            UnmapNotify      => Err(()),
+            VisibilityNotify => Err(()),
+            ColormapNotify   => Err(()),
+            PropertyNotify   => Err(()),
+            SelectionClear   => Err(()),
+            SelectionNotify  => Err(()),
+            SelectionRequest => Err(()),
+            _ => {
+                trace!("Unknown event type {}", x_event.get_type());
+                Err(())
+            }
         }
     }
 }
@@ -1468,26 +1769,27 @@ impl OsWindow {
     }
     pub fn set_title(&self, title: &str) -> Result<(), Error> {
         unsafe {
+            let x_display = self.shared_context.x_display;
+            let atoms = &self.shared_context.atoms;
             let mut title_prop: x::XTextProperty = mem::uninitialized();
             let title_ptr = CString::new(title).unwrap_or_default();
             let mut title_ptr = title_ptr.as_bytes_with_nul().as_ptr() as *mut u8;
             let title_ptr = &mut title_ptr as *mut _;
             let status = x::Xutf8TextListToTextProperty(
-                self.shared_context.x_display, mem::transmute(title_ptr), 1, x::XUTF8StringStyle, &mut title_prop
+                x_display, mem::transmute(title_ptr), 1, x::XUTF8StringStyle, &mut title_prop
             );
             if status == x::Success as i32 {
-                x::XSetTextProperty(self.shared_context.x_display, self.x_window, &mut title_prop, self.shared_context.atoms._NET_WM_NAME);
+                x::XSetTextProperty(x_display, self.x_window, &mut title_prop, atoms._NET_WM_NAME);
                 x::XFree(title_prop.value as *mut _);
             }
-            x::XFlush(self.shared_context.x_display);
+            x::XFlush(x_display);
             Ok(())
         }
     }
     pub fn set_icon(&self, icon: Icon) -> Result<(), Error> {
         let x_display = self.shared_context.x_display;
+        let atoms = &self.shared_context.atoms;
         let x_window = self.x_window;
-        #[allow(non_snake_case)]
-        let _NET_WM_ICON = self.shared_context.atoms._NET_WM_ICON;
 
         let (w, h) = (icon.size.w, icon.size.h);
         let mut prop = Vec::<u32>::with_capacity((2 + w * h) as _);
@@ -1506,7 +1808,7 @@ impl OsWindow {
         }
         unsafe { 
             x::XChangeProperty(
-                x_display, x_window, _NET_WM_ICON, x::XA_CARDINAL, 32, 
+                x_display, x_window, atoms._NET_WM_ICON, x::XA_CARDINAL, 32, 
                 x::PropModeReplace, prop.as_ptr() as _, prop.len() as _
             );
             x::XFlush(x_display);
@@ -1515,12 +1817,11 @@ impl OsWindow {
     }
     pub fn clear_icon(&self) -> Result<(), Error> {
         let x_display = self.shared_context.x_display;
+        let atoms = &self.shared_context.atoms;
         let x_window = self.x_window;
-        #[allow(non_snake_case)]
-        let _NET_WM_ICON = self.shared_context.atoms._NET_WM_ICON;
 
         unsafe {
-            x::XDeleteProperty(x_display, x_window, _NET_WM_ICON);
+            x::XDeleteProperty(x_display, x_window, atoms._NET_WM_ICON);
         }
         Ok(())
     }
@@ -1584,26 +1885,29 @@ impl OsWindow {
         // TODO: Consider bypassing the compositor
         // Also consider setting motif wm hints as an alternative implementation
         unsafe {
+
+            let x_display = self.shared_context.x_display;
+            let screen = self.shared_context.screen_num;
+            let atoms = &self.shared_context.atoms;
+            let x_window = self.x_window;
+            let root = x::XRootWindow(x_display, screen);
+
             let event_mask = x::SubstructureNotifyMask | x::SubstructureRedirectMask;
 
             let mut e = x::XClientMessageEvent {
                 type_: x::ClientMessage,
                 serial: 0,
                 send_event: x::True,
-                display: self.shared_context.x_display,
-                window: self.x_window,
-                message_type: self.shared_context.atoms._NET_WM_STATE,
+                display: x_display,
+                window: x_window,
+                message_type: atoms._NET_WM_STATE,
                 format: 32,
                 data: Default::default(),
             };
             e.data.set_long(0, action as _);
-            e.data.set_long(1, self.shared_context.atoms._NET_WM_STATE_FULLSCREEN as _);
+            e.data.set_long(1, atoms._NET_WM_STATE_FULLSCREEN as _);
             e.data.set_long(2, 0); // No second property
             e.data.set_long(3, 1); // Normal window
-
-            let x_display = self.shared_context.x_display;
-            let screen = self.shared_context.screen_num;
-            let root = x::XRootWindow(x_display, screen);
 
             x::XSendEvent(
                 x_display, root, x::False,
@@ -1681,27 +1985,32 @@ impl OsWindow {
             None => ptr::null_mut(),
             Some(c) => c.glx_context,
         };
+        let x_display = self.shared_context.x_display;
         unsafe {
             match self.glx_window {
                 Some(w) => glXMakeContextCurrent(
-                    self.shared_context.x_display, w, w, glx_context
+                    x_display, w, w, glx_context
                 ),
                 None => glXMakeCurrent(
-                    self.shared_context.x_display, self.x_window, glx_context
+                    x_display, self.x_window, glx_context
                 ),
             };
         }
     }
     pub fn gl_swap_buffers(&self) {
+        let x_display = self.shared_context.x_display;
         unsafe {
-            glXSwapBuffers(self.shared_context.x_display, match self.glx_window {
+            glXSwapBuffers(x_display, match self.glx_window {
                 Some(w) => w,
                 None => self.x_window,
             });
         }
     }
     pub fn set_gl_swap_interval(&mut self, interval: GLSwapInterval) -> Result<(), Error> {
-        let glx = self.shared_context.glx.as_ref().unwrap();
+        let glx = match self.shared_context.glx.as_ref() {
+            None => return Err(Failed("GLX is not supported!".to_owned())),
+            Some(glx) => glx,
+        };
         let interval: c_int = match interval {
             GLSwapInterval::LimitFps(_) => unreachable!{}, // Already implemented by wrapper
             GLSwapInterval::VSync => 1,

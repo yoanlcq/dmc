@@ -846,6 +846,60 @@ impl OsContext {
         unsafe {
             xi2::XIQueryVersion(x_display, &mut major, &mut minor);
         }
+
+
+        /*
+        XIEventMask mask[2];
+        XIEventMask *m;
+        m = &mask[0];
+        m->deviceid = (deviceid == -1) ? XIAllDevices : deviceid;
+        m->mask_len = XIMaskLen(XI_LASTEVENT);
+        m->mask = calloc(m->mask_len, sizeof(char));
+        XISetMask(m->mask, XI_ButtonPress);
+        XISetMask(m->mask, XI_ButtonRelease);
+        XISetMask(m->mask, XI_KeyPress);
+        XISetMask(m->mask, XI_KeyRelease);
+        XISetMask(m->mask, XI_Motion);
+        XISetMask(m->mask, XI_DeviceChanged);
+        XISetMask(m->mask, XI_Enter);
+        XISetMask(m->mask, XI_Leave);
+        XISetMask(m->mask, XI_FocusIn);
+        XISetMask(m->mask, XI_FocusOut);
+        XISetMask(m->mask, XI_TouchBegin);
+        XISetMask(m->mask, XI_TouchUpdate);
+        XISetMask(m->mask, XI_TouchEnd);
+
+        if (m->deviceid == XIAllDevices)
+            XISetMask(m->mask, XI_HierarchyChanged);
+        XISetMask(m->mask, XI_PropertyEvent);
+
+        m = &mask[1];
+        m->deviceid = (deviceid == -1) ? XIAllMasterDevices : deviceid;
+        m->mask_len = XIMaskLen(XI_LASTEVENT);
+        m->mask = calloc(m->mask_len, sizeof(char));
+        XISetMask(m->mask, XI_RawKeyPress);
+        XISetMask(m->mask, XI_RawKeyRelease);
+        XISetMask(m->mask, XI_RawButtonPress);
+        XISetMask(m->mask, XI_RawButtonRelease);
+        XISetMask(m->mask, XI_RawMotion);
+        XISetMask(m->mask, XI_RawTouchBegin);
+        XISetMask(m->mask, XI_RawTouchUpdate);
+        XISetMask(m->mask, XI_RawTouchEnd);
+
+        XISelectEvents(display, win, &mask[0], use_root ? 2 : 1);
+        if (!use_root) {
+            XISelectEvents(display, DefaultRootWindow(display), &mask[1], 1);
+            XMapWindow(display, win);
+        }
+        XSync(display, False);
+
+        free(mask[0].mask);
+        free(mask[1].mask);
+
+        XEvent event;
+        XMaskEvent(display, ExposureMask, &event);
+        XSelectInput(display, win, 0);
+        */
         Some(XI { event_base, error_base, version })
         /*
         XGetExtensionVersion();
@@ -1736,6 +1790,29 @@ impl OsContext {
             SelectionClear   => Err(()),
             SelectionNotify  => Err(()),
             SelectionRequest => Err(()),
+            xi2::XI_DeviceChanged   => { warn!("XI event: {}", "DeviceChanged"    ); Err(()) },
+            xi2::XI_KeyPress        => { warn!("XI event: {}", "KeyPress"         ); Err(()) },
+            xi2::XI_KeyRelease      => { warn!("XI event: {}", "KeyRelease"       ); Err(()) },
+            xi2::XI_ButtonPress     => { warn!("XI event: {}", "ButtonPress"      ); Err(()) },
+            xi2::XI_ButtonRelease   => { warn!("XI event: {}", "ButtonRelease"    ); Err(()) },
+            xi2::XI_Motion          => { warn!("XI event: {}", "Motion"           ); Err(()) },
+            xi2::XI_Enter           => { warn!("XI event: {}", "Enter"            ); Err(()) },
+            xi2::XI_Leave           => { warn!("XI event: {}", "Leave"            ); Err(()) },
+            xi2::XI_FocusIn         => { warn!("XI event: {}", "FocusIn"          ); Err(()) },
+            xi2::XI_FocusOut        => { warn!("XI event: {}", "FocusOut"         ); Err(()) },
+            xi2::XI_HierarchyChanged=> { warn!("XI event: {}", "HierarchyChanged" ); Err(()) },
+            xi2::XI_PropertyEvent   => { warn!("XI event: {}", "PropertyEvent"    ); Err(()) },
+            xi2::XI_RawKeyPress     => { warn!("XI event: {}", "RawKeyPress"      ); Err(()) },
+            xi2::XI_RawKeyRelease   => { warn!("XI event: {}", "RawKeyRelease"    ); Err(()) },
+            xi2::XI_RawButtonPress  => { warn!("XI event: {}", "RawButtonPress"   ); Err(()) },
+            xi2::XI_RawButtonRelease=> { warn!("XI event: {}", "RawButtonRelease" ); Err(()) },
+            xi2::XI_RawMotion       => { warn!("XI event: {}", "RawMotion"        ); Err(()) },
+            xi2::XI_TouchBegin      => { warn!("XI event: {}", "TouchBegin"       ); Err(()) },
+            xi2::XI_TouchUpdate     => { warn!("XI event: {}", "TouchUpdate"      ); Err(()) },
+            xi2::XI_TouchEnd        => { warn!("XI event: {}", "TouchEnd"         ); Err(()) },
+            xi2::XI_RawTouchBegin   => { warn!("XI event: {}", "RawTouchBegin"    ); Err(()) },
+            xi2::XI_RawTouchUpdate  => { warn!("XI event: {}", "RawTouchUpdate"   ); Err(()) },
+            xi2::XI_RawTouchEnd     => { warn!("XI event: {}", "RawTouchEnd"      ); Err(()) },
             _ => {
                 trace!("Unknown event type {}", x_event.get_type());
                 Err(())

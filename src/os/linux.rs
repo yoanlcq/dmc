@@ -406,7 +406,6 @@ pub struct SharedContext {
     pub glx: Option<Glx>,
     pub xi: Option<XI>,
     pub im: Option<x::XIM>,
-    pub ic: Option<x::XIC>,
     pub usable_viewport: Rect<i32, u32>,
     pub udev_mon: udev_monitor,
     pub previous_x_key_release_time: Cell<x::Time>,
@@ -430,6 +429,7 @@ pub struct OsWindow {
     pub x_window: x::Window,
     pub colormap: x::Colormap,
     pub glx_window: Option<GLXWindow>,
+    pub ic: Option<x::XIC>,
 }
 #[derive(Debug)]
 pub struct OsGLContext {
@@ -756,33 +756,22 @@ impl OsContext {
             let root = x::XRootWindowOfScreen(screen);
             let atoms = PreparedAtoms::fetch(x_display);
 
-            let (im, ic) = unsafe {
+            let im = unsafe {
                 let im = x::XOpenIM(
                     x_display, ptr::null_mut(), ptr::null_mut(), ptr::null_mut()
                 );
                 if im.is_null() {
-                    (None, None)
+                    None
                 } else {
-                    let ic = x::XCreateIC(
-                        im, /*x::XNClientWindow, m_window, x::XNFocusWindow,
-                        m_window,*/ x::XNInputStyle,
-                        x::XIMPreeditNothing | x::XIMStatusNothing,
-                        ptr::null_mut() as *mut c_void,
-                    );
-                    if ic.is_null() {
-                        (Some(im), None)
-                    } else {
-                        (Some(im), Some(ic))
-                    }
+                    Some(im)
                 }
             };
-
             let glx = Self::query_glx(x_display, screen_num);
             let xi = Self::query_xi(x_display, screen_num);
             let usable_viewport = Self::query_usable_viewport(x_display, screen_num, &atoms);
             let udev_mon = ();
             let shared_context = SharedContext { 
-                x_display, atoms, screen, screen_num, root, glx, xi, im, ic,
+                x_display, atoms, screen, screen_num, root, glx, xi, im,
                 usable_viewport, udev_mon,
                 previous_x_key_release_time: Cell::new(0),
                 previous_x_key_release_keycode: Cell::new(0),
@@ -1236,8 +1225,26 @@ impl OsContext {
             )})
         } else { None };
 
+        let ic = unsafe {
+            if let Some(im) = self.im {
+                let ic = x::XCreateIC(im, 
+                    x::XNClientWindow, x_window,
+                    x::XNFocusWindow, x_window,
+                    x::XNInputStyle, x::XIMPreeditNothing | x::XIMStatusNothing,
+                    ptr::null_mut() as *mut c_void,
+                );
+                if ic.is_null() {
+                    None
+                } else {
+                    Some(ic)
+                }
+            } else {
+                None
+            }
+        };
+
         Ok(OsWindow { 
-            shared_context: self.0.clone(), x_window, colormap, glx_window,
+            shared_context: self.0.clone(), x_window, colormap, glx_window, ic
         })
     }
     pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<OsGLPixelFormat, Error> {

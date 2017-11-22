@@ -62,7 +62,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::ptr;
 use std::mem;
 use std::ffi::*;
-use std::os::raw::{c_char, c_uchar, c_int, c_uint, c_long, c_ulong};
+use std::os::raw::{c_char, c_uchar, c_int, c_uint, c_long, c_ulong, c_void};
 use std::sync::atomic::{ATOMIC_BOOL_INIT, AtomicBool, Ordering};
 use std::slice;
 use std::ops::{Deref, DerefMut};
@@ -405,6 +405,8 @@ pub struct SharedContext {
     pub root: x::Window,
     pub glx: Option<Glx>,
     pub xi: Option<XI>,
+    pub im: Option<x::XIM>,
+    pub ic: Option<x::XIC>,
     pub usable_viewport: Rect<i32, u32>,
     pub udev_mon: udev_monitor,
     pub previous_x_key_release_time: Cell<x::Time>,
@@ -753,12 +755,34 @@ impl OsContext {
             let screen_num = x::XDefaultScreen(x_display);
             let root = x::XRootWindowOfScreen(screen);
             let atoms = PreparedAtoms::fetch(x_display);
+
+            let (im, ic) = unsafe {
+                let im = x::XOpenIM(
+                    x_display, ptr::null_mut(), ptr::null_mut(), ptr::null_mut()
+                );
+                if im.is_null() {
+                    (None, None)
+                } else {
+                    let ic = x::XCreateIC(
+                        im, /*x::XNClientWindow, m_window, x::XNFocusWindow,
+                        m_window,*/ x::XNInputStyle,
+                        x::XIMPreeditNothing | x::XIMStatusNothing,
+                        ptr::null_mut() as *mut c_void,
+                    );
+                    if ic.is_null() {
+                        (Some(im), None)
+                    } else {
+                        (Some(im), Some(ic))
+                    }
+                }
+            };
+
             let glx = Self::query_glx(x_display, screen_num);
             let xi = Self::query_xi(x_display, screen_num);
             let usable_viewport = Self::query_usable_viewport(x_display, screen_num, &atoms);
             let udev_mon = ();
             let shared_context = SharedContext { 
-                x_display, atoms, screen, screen_num, root, glx, xi,
+                x_display, atoms, screen, screen_num, root, glx, xi, im, ic,
                 usable_viewport, udev_mon,
                 previous_x_key_release_time: Cell::new(0),
                 previous_x_key_release_keycode: Cell::new(0),
@@ -1486,8 +1510,20 @@ impl OsContext {
     pub fn create_gl_context_from_lib<P: AsRef<Path>>(&self, _pf: &OsGLPixelFormat, _cs: &GLContextSettings, _path: P) -> Result<OsGLContext, Error> {
         Err(Unsupported(Some("This is not implemented yet!".to_owned())))
     }
-    pub fn allow_session_termination(&mut self) -> Result<(), Error> { unimplemented!{} }
-    pub fn disallow_session_termination(&mut self, reason: Option<String>) -> Result<(), Error> { unimplemented!{} }
+
+    // WISH: The proper way is to install a signal handler which catch SIGTERM.
+    // See https://stackoverflow.com/a/22009848
+    pub fn allow_session_termination(&mut self) -> Result<(), Error> {
+        Err(Error::Unsupported(Some(Self::unsupported_sigterm().to_owned())))
+    }
+    pub fn disallow_session_termination(&mut self, _reason: Option<String>) -> Result<(), Error> {
+        Err(Error::Unsupported(Some(Self::unsupported_sigterm().to_owned())))
+    }
+    fn unsupported_sigterm() -> &'static str {
+        "Detecting session termination on Linux requires handling SIGTERM, which is an intrusive operation and therefore not implemented right now."
+    }
+
+
     pub fn query_best_cursor_size(&self, size_hint: Extent2<u32>) -> Extent2<u32> {
         let mut best_w: c_uint = 0;
         let mut best_h: c_uint = 0;
@@ -1500,9 +1536,18 @@ impl OsContext {
         }
         Extent2 { w: best_w as _, h: best_h as _ }
     }
-    pub fn create_cursor(&self, _img: CursorFrame) -> Result<OsCursor, Error> { unimplemented!{} }
-    pub fn create_animated_cursor(&self, _anim: &[CursorFrame]) -> Result<OsCursor, Error> { unimplemented!{} }
-    pub fn system_cursor(&self, _s: SystemCursor) -> Result<OsCursor, Error> { unimplemented!{} }
+    // For these, we need extensions :
+    // - Xcursor
+    // - XRender
+    pub fn create_cursor(&self, _img: CursorFrame) -> Result<OsCursor, Error> {
+        unimplemented!{}
+    }
+    pub fn create_animated_cursor(&self, _anim: &[CursorFrame]) -> Result<OsCursor, Error> {
+        unimplemented!{}
+    }
+    pub fn system_cursor(&self, _s: SystemCursor) -> Result<OsCursor, Error> {
+        unimplemented!{}
+    }
 
     pub fn poll_next_event(&mut self) -> Option<Event> {
         unsafe {
@@ -1515,7 +1560,7 @@ impl OsContext {
                     return None;
                 }
                 x::XNextEvent(x_display, &mut x_event);
-                let e = self.convert_x_event_into_event(x_event);
+                let e = self.x_event_to_event(x_event);
                 if let Ok(e) = e {
                     return Some(e);
                 }
@@ -1529,7 +1574,7 @@ impl OsContext {
             match timeout {
                 Timeout::Infinite => loop {
                     x::XNextEvent(x_display, &mut x_event);
-                    let e = self.convert_x_event_into_event(x_event);
+                    let e = self.x_event_to_event(x_event);
                     if let Ok(e) = e {
                         return Some(e);
                     }
@@ -1543,7 +1588,7 @@ impl OsContext {
                             continue;
                         }
                         x::XNextEvent(x_display, &mut x_event);
-                        let e = self.convert_x_event_into_event(x_event);
+                        let e = self.x_event_to_event(x_event);
                         if let Ok(e) = e {
                             return Some(e);
                         }
@@ -1566,7 +1611,7 @@ impl OsContext {
     // XLookupKeysym
     fn x_keycode_to_key(&self, x_keycode: c_uint) -> Key { unimplemented!{} }
 
-    fn convert_x_event_into_event(&mut self, x_event: x::XEvent) -> Result<Event, ()> {
+    fn x_event_to_event(&mut self, x_event: x::XEvent) -> Result<Event, ()> {
         match x_event.get_type() {
             KeyPress => {
                 let x_event = unsafe { x_event.key };
@@ -1580,6 +1625,8 @@ impl OsContext {
                     vkey: self.x_keycode_to_vkey(x_event.keycode),
                     key: self.x_keycode_to_key(x_event.keycode),
                     is_repeat,
+                    char: self.x_lookup_string(x_event),
+                    text: self.x_get_text(x_event),
                 };
                 Ok(event)
             },
@@ -1614,28 +1661,34 @@ impl OsContext {
                 let click = Click::Single;
                 let window = self.x_window_to_window(x_event.window);
                 let mouse = self.dummy_mouse();
-                let event = if x_event.button <= 3 {
-                    let button = match x_event.button {
-                        1 => MouseButton::Left,
-                        2 => MouseButton::Middle,
-                        3 => MouseButton::Right,
-                        _ => unreachable!(),
-                    };
-                    Event::MouseButtonPressed {
-                        mouse, window, position, abs_position, button, click, displacement,
-                    }
-                } else {
-                    let scroll = Vec2::new(0, match x_event.button {
-                        4 => 1,
-                        5 => -1,
-                        _ => return Err(()),
-                    });
-                    Event::MouseScroll {
-                        mouse, window, position, abs_position, scroll, displacement,
-                    }
-                };
                 self.previous_abs_mouse_position.set(abs_position);
-                Ok(event)
+                // http://xahlee.info/linux/linux_x11_mouse_button_number.html
+                let button = match x_event.button {
+                    1 => Some(MouseButton::Left),
+                    2 => Some(MouseButton::Middle),
+                    3 => Some(MouseButton::Right),
+                    8 => Some(MouseButton::Back),
+                    9 => Some(MouseButton::Forward),
+                    _ => None,
+                };
+                let scroll = match x_event.button {
+                    4 => Some(Vec2::new(0,  1)),
+                    5 => Some(Vec2::new(0, -1)),
+                    6 => Some(Vec2::new(-1, 0)),
+                    7 => Some(Vec2::new( 1, 0)),
+                    _ => None,
+                };
+                if let Some(button) = button {
+                    return Ok(Event::MouseButtonPressed {
+                        mouse, window, position, abs_position, button, click, displacement,
+                    });
+                }
+                if let Some(scroll) = scroll {
+                    return Ok(Event::MouseScroll {
+                        mouse, window, position, abs_position, scroll, displacement,
+                    });
+                }
+                Err(())
             },
             ButtonRelease => {
                 let x_event = unsafe { x_event.button };

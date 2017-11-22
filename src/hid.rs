@@ -173,9 +173,6 @@ impl Mouse {
 //
 
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct Key;
-
 #[derive(Debug)]
 pub struct Keyboard {
     os_hid: OsHid,
@@ -186,8 +183,31 @@ pub struct Keyboard {
 
 macro_rules! vkeys {
     ($($VKey:ident $vkey:ident,)+) => {
+        /// `VKey` means "Virtual Key", that is, the raw value reported by the
+        /// OS which corresponds to a standard QWERTY keyboard.
+        /// In SDL2 parlance, it is called "KeyCode".
+        ///
+        /// These are not to be confused with "physical keys", which
+        /// are the result of translating a virtual key code according to
+        /// the actual keyboard's layout.
+        /// For instance, on an AZERTY keyboard, the "a" key is reported as
+        /// `VKey::Q` and `Key::A`.
+        ///
+        /// As such, `VKey`s are a good choice for universal ZQSD-style input
+        /// in games.
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
         pub enum VKey {
+            $($VKey),+
+        }
+        /// A `Key` is understood as a "physical key", that is, the value
+        /// that indicates the actual meaning of the key with regards to the
+        /// user's keyboard layout.
+        /// In SDL2 parlance, it is called "ScanCode".
+        ///
+        /// These are NOT appropriate for text input. For this, fetch the
+        /// `text` member of the `KeyboardKeyPressed` event.
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum Key {
             $($VKey),+
         }
         #[derive(Debug, Clone, Hash, PartialEq, Eq)]

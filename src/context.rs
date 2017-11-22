@@ -117,7 +117,7 @@ impl Context {
     pub fn create_animated_cursor(&self, _anim: &[CursorFrame]) -> Result<Cursor, Error> {
         unimplemented!{}
     }
-    pub fn system_cursor(&self, _s: SystemCursor) -> Result<Cursor, Error> {
+    pub fn create_system_cursor(&self, _s: SystemCursor) -> Result<Cursor, Error> {
         unimplemented!{}
     }
 }

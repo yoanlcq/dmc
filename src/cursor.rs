@@ -13,11 +13,11 @@ pub enum SystemCursor {
     Wait,
     Crosshair,
     WaitArrow,
-    SizeNorthWestToSouthEast,
-    SizeNorthEastToSouthWest,
-    SizeVertical,
-    SizeHorizontal,
-    SizeAll,
+    ResizeNWToSE,
+    ResizeNEToSW,
+    ResizeV,
+    ResizeH,
+    ResizeHV,
     Deny,
 }
 

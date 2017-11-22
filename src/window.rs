@@ -235,6 +235,8 @@ impl Window {
     /// Attempts to maximize the window (as in, take as much space as
     /// possible).
     pub fn maximize(&self) -> Result<(), Error> { self.os_window.maximize() }
+    pub fn unmaximize(&self) -> Result<(), Error> { self.os_window.unmaximize() }
+    pub fn toggle_maximize(&self) -> Result<(), Error> { self.os_window.toggle_maximize() }
     /// Attempts to minimize the window (as in, minimize to task bar).
     pub fn minimize(&self) -> Result<(), Error> { self.os_window.minimize() }
     /// The reciprocal of `minimize()`.
@@ -253,6 +255,7 @@ impl Window {
     /// 
     /// See `enter_fullscreen()`.
     pub fn leave_fullscreen(&self) -> Result<(), Error> { self.os_window.leave_fullscreen() }
+    pub fn toggle_fullscreen(&self) -> Result<(), Error> { self.os_window.toggle_fullscreen() }
 
     /// Unconditionnally prevents the window's size from going below the
     /// given threshold.
@@ -291,6 +294,10 @@ impl Window {
     pub fn set_cursor_position(&self, _pos: Vec2<u32>) -> Result<(), Error> { unimplemented!{} }
     pub fn cursor_position(&self) -> Result<Vec2<u32>, Error> { unimplemented!{} }
 
+
+    pub fn demand_attention(&self) -> Result<(), Error> {
+        self.os_window.demand_attention()
+    }
 
     /// Lowers to the plaftorm-specific "<xxglxx>ContextMakeCurrent()".
     /// Please note that making a context current is a thread-wide operation.

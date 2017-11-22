@@ -95,6 +95,7 @@ static mut G_GLX_ERROR_BASE: i32 = 0;
 static mut G_GLX_EVENT_BASE: i32 = 0;
 static mut G_XI_ERROR_BASE: i32 = 0;
 static mut G_XI_EVENT_BASE: i32 = 0;
+static mut G_XI_OPCODE: i32 = 0;
 
 // WISH: Grab from _XPrintDefaultError in Xlib's sources
 unsafe extern fn xlib_generic_error_handler(_shared_context: *mut x::Display, e: *mut x::XErrorEvent) -> c_int {
@@ -143,9 +144,48 @@ pub mod xxi {
     pub const NoSuchExtension: i32 = 1;
 }
 
-pub const _NET_WM_STATE_REMOVE: u32 = 0;
-pub const _NET_WM_STATE_ADD   : u32 = 1;
-pub const _NET_WM_STATE_TOGGLE: u32 = 2;
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[repr(u32)]
+pub enum NetWMStateAction {
+    Remove = 0,
+    Add    = 1,
+    Toggle = 2,
+}
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[repr(u32)]
+pub enum BypassCompositor {
+    NoPreference = 0,
+    Yes = 1,
+    No = 2,
+}
+
+pub mod mwm {
+    use super::{c_long, c_ulong};
+    pub const HINTS_FUNCTIONS   : c_ulong = 1 << 0;
+    pub const HINTS_DECORATIONS : c_ulong = 1 << 1;
+    pub const DECOR_ALL         : c_ulong = 1 << 0;
+    pub const DECOR_BORDER      : c_ulong = 1 << 1;
+    pub const DECOR_RESIZEH     : c_ulong = 1 << 2;
+    pub const DECOR_TITLE       : c_ulong = 1 << 3;
+    pub const DECOR_MENU        : c_ulong = 1 << 4;
+    pub const DECOR_MINIMIZE    : c_ulong = 1 << 5;
+    pub const DECOR_MAXIMIZE    : c_ulong = 1 << 6;
+    pub const FUNC_ALL          : c_ulong = 1 << 0;
+    pub const FUNC_RESIZE       : c_ulong = 1 << 1;
+    pub const FUNC_MOVE         : c_ulong = 1 << 2;
+    pub const FUNC_MINIMIZE     : c_ulong = 1 << 3;
+    pub const FUNC_MAXIMIZE     : c_ulong = 1 << 4;
+    pub const FUNC_CLOSE        : c_ulong = 1 << 5;
+
+    #[repr(C)]
+    pub struct WMHints {
+        pub flags      : c_ulong,
+        pub functions  : c_ulong,
+        pub decorations: c_ulong,
+        pub input_mode : c_long,
+        pub state      : c_ulong,
+    }
+}
 
 
 macro_rules! glx_ext {
@@ -263,6 +303,9 @@ atoms!(
     WM_PROTOCOLS
     WM_DELETE_WINDOW
     WM_TAKE_FOCUS
+
+    // Motif
+    _MOTIF_WM_HINTS
 
     // EWMH atoms
     _NET_SUPPORTED
@@ -405,7 +448,7 @@ pub struct SharedContext {
     pub root: x::Window,
     pub glx: Option<Glx>,
     pub xi: Option<XI>,
-    pub im: Option<x::XIM>,
+    pub xim: Option<x::XIM>,
     pub usable_viewport: Rect<i32, u32>,
     pub udev_mon: udev_monitor,
     pub previous_x_key_release_time: Cell<x::Time>,
@@ -429,7 +472,7 @@ pub struct OsWindow {
     pub x_window: x::Window,
     pub colormap: x::Colormap,
     pub glx_window: Option<GLXWindow>,
-    pub ic: Option<x::XIC>,
+    pub xic: Option<x::XIC>,
 }
 #[derive(Debug)]
 pub struct OsGLContext {
@@ -468,6 +511,9 @@ impl Drop for OsContext {
 impl Drop for SharedContext {
     fn drop(&mut self) {
         unsafe {
+            if let Some(xim) = self.xim {
+                x::XCloseIM(xim);
+            }
             x::XCloseDisplay(self.x_display);
             // FIXME: close udev_monitor
         } 
@@ -478,6 +524,9 @@ impl Drop for OsWindow {
     fn drop(&mut self) {
         let x_display = self.shared_context.x_display;
         unsafe {
+            if let Some(xic) = self.xic {
+                x::XDestroyIC(xic);
+            }
             match self.glx_window {
                 Some(w) => glXDestroyWindow(x_display, w),
                 None => (),
@@ -756,14 +805,14 @@ impl OsContext {
             let root = x::XRootWindowOfScreen(screen);
             let atoms = PreparedAtoms::fetch(x_display);
 
-            let im = unsafe {
-                let im = x::XOpenIM(
+            let xim = unsafe {
+                let xim = x::XOpenIM(
                     x_display, ptr::null_mut(), ptr::null_mut(), ptr::null_mut()
                 );
-                if im.is_null() {
+                if xim.is_null() {
                     None
                 } else {
-                    Some(im)
+                    Some(xim)
                 }
             };
             let glx = Self::query_glx(x_display, screen_num);
@@ -771,7 +820,7 @@ impl OsContext {
             let usable_viewport = Self::query_usable_viewport(x_display, screen_num, &atoms);
             let udev_mon = ();
             let shared_context = SharedContext { 
-                x_display, atoms, screen, screen_num, root, glx, xi, im,
+                x_display, atoms, screen, screen_num, root, glx, xi, xim,
                 usable_viewport, udev_mon,
                 previous_x_key_release_time: Cell::new(0),
                 previous_x_key_release_keycode: Cell::new(0),
@@ -824,20 +873,21 @@ impl OsContext {
     fn query_xi(x_display: *mut x::Display, screen_num: c_int) -> Option<XI> {
 
         let iname: *const c_char = b"XInputExtension\0" as *const _ as _;
-        let (error_base, event_base) = unsafe {
+        let (error_base, event_base, xi_opcode) = unsafe {
             let (mut error_base, mut event_base, mut xi_opcode) = mem::uninitialized();
             let has_xi2 = x::XQueryExtension(
-                x_display, iname, &mut xi_opcode,
-                &mut event_base, &mut error_base
+                x_display, iname,
+                &mut xi_opcode, &mut event_base, &mut error_base
             );
             if has_xi2 == x::False {
                 return None;
             }
-            (error_base, event_base)
+            (error_base, event_base, xi_opcode)
         };
         unsafe {
             G_XI_ERROR_BASE = error_base;
             G_XI_EVENT_BASE = event_base;
+            G_XI_OPCODE = xi_opcode;
         }
         let version = unsafe {
             xi::XGetExtensionVersion(x_display, iname)
@@ -1120,8 +1170,9 @@ impl OsContext {
         };
         // TODO: leverage the UrgencyHint for messageboxes and stuff
         let wmhints = x::XWMHints {
-            flags: x::InputHint /*| x::WindowGroupHint | x::IconPixmapHint | ...*/,
+            flags: x::InputHint, //| x::StateHint, //| x::WindowGroupHint | x::IconPixmapHint | ...
             input: x::True,
+            // initial_state: x::NormalState,
             .. unsafe { mem::zeroed() }
             /*
             initial_state,
@@ -1165,7 +1216,7 @@ impl OsContext {
 
             let always_on_top = false;
             let skip_taskbar = false;
-            let input_focus = false;
+            let input_focus = true;
             let mut atoms: [x::Atom; 16] = [0; 16];
             let mut count = 0;
             if always_on_top {
@@ -1211,7 +1262,7 @@ impl OsContext {
             // TODO: Test this.
             // Raise the window so that it appears on top of the stack when it
             // is shown
-            // x::XRaiseWindow(x_display, x_window);
+            x::XRaiseWindow(x_display, x_window);
         }
 
         let wants_glx_window = {
@@ -1225,18 +1276,18 @@ impl OsContext {
             )})
         } else { None };
 
-        let ic = unsafe {
-            if let Some(im) = self.im {
-                let ic = x::XCreateIC(im, 
+        let xic = unsafe {
+            if let Some(xim) = self.xim {
+                let xic = x::XCreateIC(xim, 
                     x::XNClientWindow, x_window,
                     x::XNFocusWindow, x_window,
                     x::XNInputStyle, x::XIMPreeditNothing | x::XIMStatusNothing,
                     ptr::null_mut() as *mut c_void,
                 );
-                if ic.is_null() {
+                if xic.is_null() {
                     None
                 } else {
-                    Some(ic)
+                    Some(xic)
                 }
             } else {
                 None
@@ -1244,7 +1295,7 @@ impl OsContext {
         };
 
         Ok(OsWindow { 
-            shared_context: self.0.clone(), x_window, colormap, glx_window, ic
+            shared_context: self.0.clone(), x_window, colormap, glx_window, xic
         })
     }
     pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<OsGLPixelFormat, Error> {
@@ -1546,6 +1597,11 @@ impl OsContext {
     // For these, we need extensions :
     // - Xcursor
     // - XRender
+    // XRecolorCursor
+    // XCreatePixmapCursor
+    // XRenderCreateCursor
+    // XRenderCreateAnimCursor
+    // XFreeCursor
     pub fn create_cursor(&self, _img: CursorFrame) -> Result<OsCursor, Error> {
         unimplemented!{}
     }
@@ -1618,7 +1674,221 @@ impl OsContext {
     // XLookupKeysym
     fn x_keycode_to_key(&self, x_keycode: c_uint) -> Key { unimplemented!{} }
 
+    fn xi_event_to_event(&mut self, cookie: &x::XGenericEventCookie) -> Result<Event, ()> {
+        match cookie.evtype {
+            // XIDeviceChangedEvent
+            xi2::XI_DeviceChanged   => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceChangedEvent) };
+                /*
+                    pub time: Time,
+                        pub deviceid: c_int,
+                            pub sourceid: c_int,
+                                pub reason: c_int,
+                                    pub num_classes: c_int,
+                                        pub classes: *mut *mut XIAnyClassInfo,
+                                        */
+                warn!("XI event: {}", "DeviceChanged"    );
+                Err(())
+            },
+
+            // XIHierarchyEvent
+            xi2::XI_HierarchyChanged=> {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIHierarchyEvent) };
+                /*
+                    pub time: Time,
+                        pub flags: c_int,
+                            pub num_info: c_int,
+                                pub info: *mut XIHierarchyInfo,
+                                */
+                warn!("XI event: {}", "HierarchyChanged" );
+                Err(())
+            },
+
+            // XIEnterEvent
+            xi2::XI_Enter           => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIEnterEvent) };
+                /*
+                    pub time: Time,
+                        pub deviceid: c_int,
+                            pub sourceid: c_int,
+                                pub detail: c_int,
+                                    pub root: Window,
+                                        pub event: Window,
+                                            pub child: Window,
+                                                pub root_x: c_double,
+                                                    pub root_y: c_double,
+                                                        pub event_x: c_double,
+                                                            pub event_y: c_double,
+                                                                pub mode: c_int,
+                                                                    pub focus: c_int,
+                                                                        pub same_screen: c_int,
+                                                                            pub buttons: XIButtonState,
+                                                                                pub mods: XIModifierState,
+                                                                                    pub group: XIGroupState,
+                                                                                    */
+                warn!("XI event: {}", "Enter"            );
+                Err(())
+            },
+            xi2::XI_Leave           => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIEnterEvent) };
+                warn!("XI event: {}", "Leave"            );
+                Err(())
+            },
+            xi2::XI_FocusIn         => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIEnterEvent) };
+                warn!("XI event: {}", "FocusIn"          );
+                Err(())
+            },
+            xi2::XI_FocusOut        => { 
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIEnterEvent) };
+                warn!("XI event: {}", "FocusOut"         );
+                Err(())
+            },
+
+            // XIPropertyEvent
+            xi2::XI_PropertyEvent   => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIPropertyEvent) };
+                /*
+                    pub time: Time,
+                        pub deviceid: c_int,
+                            pub property: Atom,
+                                pub what: c_int,
+                                */
+                warn!("XI event: {}", "PropertyEvent"    );
+                Err(())
+            },
+
+            // XIDeviceEvent
+            xi2::XI_KeyPress        => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceEvent) };
+                let &xi2::XIDeviceEvent {
+                    time, deviceid, sourceid, detail, root,
+                    event: x_window, child, root_x, root_y,
+                    event_x, event_y, flags, buttons, valuators, mods, group,
+                    ..
+                } = x_event;
+                let window = self.x_window_to_window(x_window);
+                if let Some(window) = window.as_ref() {
+                    window.os_window.set_net_wm_user_time(time);
+                }
+                warn!("XI event: {}", "KeyPress"         );
+                Err(())
+            },
+            xi2::XI_KeyRelease      => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceEvent) };
+                warn!("XI event: {}", "KeyRelease"       );
+                Err(())
+            },
+            xi2::XI_ButtonPress     => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceEvent) };
+                // event.window.set_net_wm_user_time(x_event.time);
+                warn!("XI event: {}", "ButtonPress"      );
+                Err(())
+            },
+            xi2::XI_ButtonRelease   => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceEvent) };
+                warn!("XI event: {}", "ButtonRelease"    );
+                Err(())
+            },
+            xi2::XI_Motion          => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceEvent) };
+                warn!("XI event: {}", "Motion"           );
+                Err(())
+            },
+            xi2::XI_TouchBegin      => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceEvent) };
+                // event.window.set_net_wm_user_time(x_event.time);
+                warn!("XI event: {}", "TouchBegin"       );
+                Err(())
+            },
+            xi2::XI_TouchUpdate     => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceEvent) };
+                warn!("XI event: {}", "TouchUpdate"      );
+                Err(())
+            },
+            xi2::XI_TouchEnd        => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIDeviceEvent) };
+                warn!("XI event: {}", "TouchEnd"         );
+                Err(())
+            },
+
+            // XIRawEvent
+            xi2::XI_RawKeyPress     => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIRawEvent) };
+                /*
+                    pub time: Time,
+                        pub deviceid: c_int,
+                            pub sourceid: c_int,
+                                pub detail: c_int,
+                                    pub flags: c_int,
+                                        pub valuators: XIValuatorState,
+                                            pub raw_values: *mut c_double,
+                                            */
+                warn!("XI event: {}", "RawKeyPress"      );
+                Err(())
+            },
+            xi2::XI_RawKeyRelease   => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIRawEvent) };
+                warn!("XI event: {}", "RawKeyRelease"    );
+                Err(())
+            },
+            xi2::XI_RawButtonPress  => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIRawEvent) };
+                warn!("XI event: {}", "RawButtonPress"   );
+                Err(())
+            },
+            xi2::XI_RawButtonRelease=> {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIRawEvent) };
+                warn!("XI event: {}", "RawButtonRelease" );
+                Err(())
+            },
+            xi2::XI_RawMotion       => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIRawEvent) };
+                warn!("XI event: {}", "RawMotion"        );
+                Err(())
+            },
+            xi2::XI_RawTouchBegin   => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIRawEvent) };
+                warn!("XI event: {}", "RawTouchBegin"    );
+                Err(())
+            },
+            xi2::XI_RawTouchUpdate  => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIRawEvent) };
+                warn!("XI event: {}", "RawTouchUpdate"   );
+                Err(())
+            },
+            xi2::XI_RawTouchEnd     => {
+                let x_event = unsafe { &*(cookie.data as *const xi2::XIRawEvent) };
+                warn!("XI event: {}", "RawTouchEnd"      );
+                Err(())
+            },
+            _ => {
+                warn!("Unrecognized XI event: {:?}", cookie);
+                Err(())
+            }
+        }
+    }
+    fn x_lookup_string(&self, x_event: &x::XKeyEvent) -> Option<String> {
+        unimplemented!{}
+    }
+    fn x_get_text(&self, x_event: &x::XKeyEvent) -> Option<String> {
+        unimplemented!{}
+    }
     fn x_event_to_event(&mut self, x_event: x::XEvent) -> Result<Event, ()> {
+
+        unsafe {
+            let x_display = self.x_display;
+            let mut cookie = x::XGenericEventCookie::from(&x_event);
+            if x::XGetEventData(x_display, &mut cookie) == x::True {
+                if cookie.type_ == x::GenericEvent && cookie.extension == G_XI_OPCODE {
+                    let e = self.xi_event_to_event(&cookie);
+                    x::XFreeEventData(x_display, &mut cookie);
+                    return e;
+                }
+            }
+            x::XFreeEventData(x_display, &mut cookie); // Even if XGetEventData() failed.
+        }
+
         match x_event.get_type() {
             KeyPress => {
                 let x_event = unsafe { x_event.key };
@@ -1626,14 +1896,18 @@ impl OsContext {
                     self.previous_x_key_release_time.get() == x_event.time
                  && self.previous_x_key_release_keycode.get() == x_event.keycode
                 };
+                let window = self.x_window_to_window(x_event.window);
+                if let Some(window) = window.as_ref() {
+                    window.os_window.set_net_wm_user_time(x_event.time);
+                }
                 let event = Event::KeyboardKeyPressed {
                     keyboard: self.dummy_keyboard(),
-                    window: self.x_window_to_window(x_event.window),
+                    window,
                     vkey: self.x_keycode_to_vkey(x_event.keycode),
                     key: self.x_keycode_to_key(x_event.keycode),
                     is_repeat,
-                    char: self.x_lookup_string(x_event),
-                    text: self.x_get_text(x_event),
+                    char: self.x_lookup_string(&x_event),
+                    text: self.x_get_text(&x_event),
                 };
                 Ok(event)
             },
@@ -1650,12 +1924,26 @@ impl OsContext {
                 Ok(event)
             },
             ClientMessage => {
-                let x_event = unsafe { x_event.client_message };
+                let mut x_event = unsafe { x_event.client_message };
                 let atoms = &self.atoms;
-                if(x_event.data.get_long(0) == atoms.WM_DELETE_WINDOW as _) {
+                if x_event.message_type != atoms.WM_PROTOCOLS {
+                    return Err(());
+                }
+                if x_event.format != 32 {
+                    return Err(());
+                }
+                if x_event.data.get_long(0) == atoms.WM_DELETE_WINDOW as _ {
                     if let Some(window) = self.x_window_to_window(x_event.window) {
                         return Ok(Event::WindowCloseRequested { window });
                     }
+                }
+                if x_event.data.get_long(0) == atoms._NET_WM_PING as _ {
+                    x_event.window = x::XDefaultRootWindow(self.x_display);
+                    x::XSendEvent(self.x_display, x_event.window, x::False, 
+                        x::SubstructureNotifyMask | x::SubstructureRedirectMask,
+                        &mut x_event as *mut _ as *mut _
+                    );
+                    return Err(()); // We handled it but we have no equivalent in our API.
                 }
                 warn!("Unhandled ClientMessage event: {:?}", x_event);
                 Err(())
@@ -1669,6 +1957,9 @@ impl OsContext {
                 let window = self.x_window_to_window(x_event.window);
                 let mouse = self.dummy_mouse();
                 self.previous_abs_mouse_position.set(abs_position);
+                if let Some(window) = window.as_ref() {
+                    window.os_window.set_net_wm_user_time(x_event.time);
+                }
                 // http://xahlee.info/linux/linux_x11_mouse_button_number.html
                 let button = match x_event.button {
                     1 => Some(MouseButton::Left),
@@ -1723,6 +2014,9 @@ impl OsContext {
                 let window = self.x_window_to_window(x_event.window);
                 let displacement = abs_position - self.previous_abs_mouse_position.get();
                 let mouse = self.dummy_mouse();
+                if let Some(window) = window.as_ref() {
+                    window.os_window.set_net_wm_user_time(x_event.time);
+                }
                 let event = Event::MouseMotion {
                     mouse, window, position, abs_position, displacement,
                 };
@@ -1778,6 +2072,9 @@ impl OsContext {
                     None => return Err(()),
                     Some(w) => w,
                 };
+                if let Some(xic) = window.os_window.xic {
+                    x::XSetICFocus(xic);
+                }
                 let keyboard = self.dummy_keyboard();
                 let event = Event::KeyboardFocusGained {
                     keyboard, window,
@@ -1790,6 +2087,9 @@ impl OsContext {
                     None => return Err(()),
                     Some(w) => w,
                 };
+                if let Some(xic) = window.os_window.xic {
+                    x::XUnsetICFocus(xic);
+                }
                 let keyboard = self.dummy_keyboard();
                 let event = Event::KeyboardFocusLost {
                     keyboard, window,
@@ -1850,29 +2150,6 @@ impl OsContext {
             SelectionClear   => Err(()),
             SelectionNotify  => Err(()),
             SelectionRequest => Err(()),
-            xi2::XI_DeviceChanged   => { warn!("XI event: {}", "DeviceChanged"    ); Err(()) },
-            xi2::XI_KeyPress        => { warn!("XI event: {}", "KeyPress"         ); Err(()) },
-            xi2::XI_KeyRelease      => { warn!("XI event: {}", "KeyRelease"       ); Err(()) },
-            xi2::XI_ButtonPress     => { warn!("XI event: {}", "ButtonPress"      ); Err(()) },
-            xi2::XI_ButtonRelease   => { warn!("XI event: {}", "ButtonRelease"    ); Err(()) },
-            xi2::XI_Motion          => { warn!("XI event: {}", "Motion"           ); Err(()) },
-            xi2::XI_Enter           => { warn!("XI event: {}", "Enter"            ); Err(()) },
-            xi2::XI_Leave           => { warn!("XI event: {}", "Leave"            ); Err(()) },
-            xi2::XI_FocusIn         => { warn!("XI event: {}", "FocusIn"          ); Err(()) },
-            xi2::XI_FocusOut        => { warn!("XI event: {}", "FocusOut"         ); Err(()) },
-            xi2::XI_HierarchyChanged=> { warn!("XI event: {}", "HierarchyChanged" ); Err(()) },
-            xi2::XI_PropertyEvent   => { warn!("XI event: {}", "PropertyEvent"    ); Err(()) },
-            xi2::XI_RawKeyPress     => { warn!("XI event: {}", "RawKeyPress"      ); Err(()) },
-            xi2::XI_RawKeyRelease   => { warn!("XI event: {}", "RawKeyRelease"    ); Err(()) },
-            xi2::XI_RawButtonPress  => { warn!("XI event: {}", "RawButtonPress"   ); Err(()) },
-            xi2::XI_RawButtonRelease=> { warn!("XI event: {}", "RawButtonRelease" ); Err(()) },
-            xi2::XI_RawMotion       => { warn!("XI event: {}", "RawMotion"        ); Err(()) },
-            xi2::XI_TouchBegin      => { warn!("XI event: {}", "TouchBegin"       ); Err(()) },
-            xi2::XI_TouchUpdate     => { warn!("XI event: {}", "TouchUpdate"      ); Err(()) },
-            xi2::XI_TouchEnd        => { warn!("XI event: {}", "TouchEnd"         ); Err(()) },
-            xi2::XI_RawTouchBegin   => { warn!("XI event: {}", "RawTouchBegin"    ); Err(()) },
-            xi2::XI_RawTouchUpdate  => { warn!("XI event: {}", "RawTouchUpdate"   ); Err(()) },
-            xi2::XI_RawTouchEnd     => { warn!("XI event: {}", "RawTouchEnd"      ); Err(()) },
             _ => {
                 trace!("Unknown event type {}", x_event.get_type());
                 Err(())
@@ -1883,6 +2160,21 @@ impl OsContext {
 
 
 impl OsWindow {
+
+    pub(crate) fn set_net_wm_user_time(&self, time: x::Time) {
+        let atom = self.shared_context.atoms._NET_WM_USER_TIME;
+        if atom == 0 {
+            return;
+        }
+        unsafe {
+            x::XChangeProperty(self.shared_context.x_display, self.x_window,
+                atom, x::XA_CARDINAL, 32, x::PropModeReplace,
+                &time as *const _ as *const _, 1
+            );
+        }
+    }
+
+
     pub fn show(&self) -> Result<(), Error> {
         unsafe {
             let x_display = self.shared_context.x_display;
@@ -1962,13 +2254,41 @@ impl OsWindow {
         }
         Ok(())
     }
-    // XChangeWindowAttributes() ??
-    // XSetWMProperties() ??
-    // http://wiki.tcl.tk/13409
-    // _MOTIF_WM_HINTS (https://people.gnome.org/~tthurman/docs/metacity/xprops_8h-source.html)
-    // _NET_WM_WINDOW_TYPE
+    // NOTE: _NET_WM_WINDOW_TYPE might be useful too, but doesn't grant much control
     pub fn set_style(&self, style: &WindowStyle) -> Result<(), Error> {
-        unimplemented!{}
+        let wmhints_atom = self.shared_context.atoms._MOTIF_WM_HINTS;
+        if wmhints_atom == 0 {
+            return Err(Failed("Setting window style requires the _MOTIF_WM_HINTS atom!".to_owned()));
+        }
+        let flags = mwm::HINTS_FUNCTIONS | mwm::HINTS_DECORATIONS;
+        let mut decorations = 0;
+        let mut functions = 0;
+        let &WindowStyle { title_bar, borders } = style;
+        if let Some(title_bar) = title_bar {
+            decorations |= mwm::DECOR_BORDER | mwm::DECOR_TITLE | mwm::DECOR_MENU;
+            functions   |= mwm::FUNC_MOVE;
+            if title_bar.minimize_button {
+                decorations |= mwm::DECOR_MINIMIZE;
+                functions   |= mwm::FUNC_MINIMIZE;
+            }
+            if title_bar.maximize_button {
+                decorations |= mwm::DECOR_MAXIMIZE;
+                functions   |= mwm::FUNC_MAXIMIZE;
+            }
+            if title_bar.maximize_button {
+                functions   |= mwm::FUNC_CLOSE;
+            }
+        }
+        let hints = mwm::WMHints {
+            flags, decorations, functions, input_mode: 0, state: 0,
+        };
+        unsafe {
+            x::XChangeProperty(self.shared_context.x_display, self.x_window,
+                wmhints_atom, wmhints_atom, 32, x::PropModeReplace,
+                &hints as *const _ as *const _, 5
+            );
+        }
+        Ok(())
     }
     pub fn recenter(&self) -> Result<(), Error> {
         unimplemented!{}
@@ -2003,11 +2323,45 @@ impl OsWindow {
     pub fn query_canvas_size(&self) -> Extent2<u32> {
         self.query_screenspace_size()
     }
-    // XChangeProperty(), _NET_WM_ACTION_MINIMIZE and _NET_WM_ACTION_RESIZE as allowed actions 
-    pub fn maximize(&self) -> Result<(), Error> { unimplemented!{} }
-    pub fn minimize(&self) -> Result<(), Error> { unimplemented!{} }
-    pub fn restore(&self) -> Result<(), Error> { unimplemented!{} }
-    // XRaiseWindow
+    pub fn maximize(&self) -> Result<(), Error> {
+        self.set_net_wm_state(NetWMStateAction::Add,
+            self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_VERT,
+            self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_HORZ
+        );
+        Ok(())
+    }
+    pub fn unmaximize(&self) -> Result<(), Error> {
+        self.set_net_wm_state(NetWMStateAction::Remove,
+            self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_VERT,
+            self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_HORZ
+        );
+        Ok(())
+    }
+    pub fn toggle_maximize(&self) -> Result<(), Error> {
+        self.set_net_wm_state(NetWMStateAction::Toggle,
+            self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_VERT,
+            self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_HORZ
+        );
+        Ok(())
+    }
+    pub fn minimize(&self) -> Result<(), Error> {
+        let status = unsafe {
+            x::XIconifyWindow(
+                self.shared_context.x_display, self.x_window,
+                self.shared_context.screen_num
+            )
+        };
+        if status != 0 {
+            return Ok(());
+        }
+        Err(Failed(format!("XIconifyWindow() returned {}", status)))
+    }
+    pub fn restore(&self) -> Result<(), Error> {
+        unsafe {
+            x::XMapWindow(self.shared_context.x_display, self.x_window);
+        }
+        Ok(())
+    }
     pub fn raise(&self) -> Result<(), Error> {
         unsafe {
             let x_display = self.shared_context.x_display;
@@ -2018,9 +2372,7 @@ impl OsWindow {
         }
     }
     
-    fn set_wm_state_fullscreen(&self, action: u32) {
-        // TODO: Consider bypassing the compositor
-        // Also consider setting motif wm hints as an alternative implementation
+    fn set_net_wm_state(&self, action: NetWMStateAction, prop1: x::Atom, prop2: x::Atom) {
         unsafe {
 
             let x_display = self.shared_context.x_display;
@@ -2042,9 +2394,10 @@ impl OsWindow {
                 data: Default::default(),
             };
             e.data.set_long(0, action as _);
-            e.data.set_long(1, atoms._NET_WM_STATE_FULLSCREEN as _);
-            e.data.set_long(2, 0); // No second property
+            e.data.set_long(1, prop1 as _);
+            e.data.set_long(2, prop2 as _);
             e.data.set_long(3, 1); // Normal window
+            // ^ https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html#sourceindication
 
             x::XSendEvent(
                 x_display, root, x::False,
@@ -2053,25 +2406,75 @@ impl OsWindow {
             x::XSync(x_display, x::False);
         }
     }
-
-    pub fn toggle_fullscreen(&self) -> Result<(), Error> {
-        self.set_wm_state_fullscreen(_NET_WM_STATE_TOGGLE);
+    fn set_net_wm_state_fullscreen(&self, action: NetWMStateAction) -> Result<(), Error> {
+        self.set_net_wm_state(action,
+            self.shared_context.atoms._NET_WM_STATE_FULLSCREEN, 0
+        );
         Ok(())
+    }
+    fn set_bypass_compositor(&self, doit: BypassCompositor) -> Result<(), Error> {
+        let net_wm_bypass_compositor = self.shared_context.atoms._NET_WM_BYPASS_COMPOSITOR;
+        if net_wm_bypass_compositor == 0 {
+            return Err(Failed(format!("Can't set _NET_WM_BYPASS_COMPOSITOR to {:?}", doit)));
+        }
+        let mut value: c_ulong = doit as _;
+        unsafe {
+            x::XChangeProperty(
+                self.shared_context.x_display, self.x_window,
+                net_wm_bypass_compositor, x::XA_CARDINAL, 32,
+                x::PropModeReplace, &mut value as *mut _ as *mut _, 1
+            );
+        }
+        Ok(())
+    }
+    pub fn toggle_fullscreen(&self) -> Result<(), Error> {
+        // XXX assuming we can't know
+        let _ = self.set_bypass_compositor(BypassCompositor::NoPreference);
+        self.set_net_wm_state_fullscreen(NetWMStateAction::Toggle)
     }
     pub fn enter_fullscreen(&self) -> Result<(), Error> {
-        self.set_wm_state_fullscreen(_NET_WM_STATE_ADD);
-        Ok(())
+        let _ = self.set_bypass_compositor(BypassCompositor::Yes);
+        self.set_net_wm_state_fullscreen(NetWMStateAction::Add)
     }
     pub fn leave_fullscreen(&self) -> Result<(), Error> {
-        self.set_wm_state_fullscreen(_NET_WM_STATE_REMOVE);
+        let _ = self.set_bypass_compositor(BypassCompositor::NoPreference);
+        self.set_net_wm_state_fullscreen(NetWMStateAction::Remove)
+    }
+    pub fn demand_attention(&self) -> Result<(), Error> {
+        self.set_net_wm_state(
+            NetWMStateAction::Add,
+            self.shared_context.atoms._NET_WM_STATE_DEMANDS_ATTENTION, 0
+        );
         Ok(())
     }
+
     pub fn set_minimum_size(&self, size: Extent2<u32>) -> Result<(), Error> {
-        unimplemented!{}
+        let x_display = self.shared_context.x_display;
+        let x_window = self.x_window;
+        unsafe {
+            let mut hints = x::XAllocSizeHints();
+            (*hints).flags = x::PMinSize;
+            (*hints).min_width = size.w as _;
+            (*hints).min_height = size.h as _;
+            x::XSetWMNormalHints(x_display, x_window, hints);
+            x::XFree(hints as _);
+        }
+        Ok(())
     }
     pub fn set_maximum_size(&self, size: Extent2<u32>) -> Result<(), Error> {
-        unimplemented!{}
+        let x_display = self.shared_context.x_display;
+        let x_window = self.x_window;
+        unsafe {
+            let mut hints = x::XAllocSizeHints();
+            (*hints).flags = x::PMaxSize;
+            (*hints).max_width = size.w as _;
+            (*hints).max_height = size.h as _;
+            x::XSetWMNormalHints(x_display, x_window, hints);
+            x::XFree(hints as _);
+        }
+        Ok(())
     }
+    // WISH: Maybe use XTranslateCoordinates() instead ?
     pub fn position(&self) -> Result<Vec2<i32>, Error> {
         let Rect { x, y, .. } = self.get_geometry();
         Ok(Vec2 { x, y })
@@ -2104,18 +2507,21 @@ impl OsWindow {
         }
     }
 
-    // XQueryBestCursor
-    // XCreatePixmapCursor
-    // XDefineCursor, XUndefineCursor
-    // XRecolorCursor
-    // XFreeCursor
-    pub fn is_cursor_shown(&self) -> Result<bool, Error> { unimplemented!{} }
-    pub fn show_cursor(&self) -> Result<(), Error> { unimplemented!{} }
+    // Create and set an invisible cursor.
     pub fn hide_cursor(&self) -> Result<(), Error> { unimplemented!{} }
+    // Use the current cursor instead of the invisible one.
+    pub fn show_cursor(&self) -> Result<(), Error> { unimplemented!{} }
+    // Test if the active cursor is the invisible one
+    pub fn is_cursor_shown(&self) -> Result<bool, Error> { unimplemented!{} }
+    // Move the Rc into member, then XDefineCursor()
     pub fn set_cursor(&self, _cursor: Rc<Cursor>) -> Result<(), Error> { unimplemented!{} }
+    // Just return the Rc member
     pub fn cursor(&self) -> Result<Rc<Cursor>, Error> { unimplemented!{} }
+
+    // XWarpPointer()
     pub fn set_cursor_position(&self, _pos: Vec2<u32>) -> Result<(), Error> { unimplemented!{} }
-    pub fn cursor_position(&self) -> Result<Vec2<u32>, Error> { unimplemented!{} }
+    // XQueryPointer()
+    pub fn query_cursor_position(&self) -> Result<Vec2<u32>, Error> { unimplemented!{} }
 
     pub fn make_gl_context_current(&self, gl_context: Option<&OsGLContext>) {
         let glx_context = match gl_context {

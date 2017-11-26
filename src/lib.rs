@@ -32,6 +32,8 @@ pub mod hid;
 pub use hid::*;
 pub mod event;
 pub use event::{Event, Click};
+pub mod image;
+pub use image::Image;
 
 pub mod semver;
 pub use semver::Semver;

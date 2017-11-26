@@ -57,6 +57,8 @@
 
 extern crate x11;
 extern crate libc;
+extern crate libudev_sys as udev;
+extern crate libevdev_sys;
 
 use std::fmt::{self, Debug, Formatter};
 use std::ptr;
@@ -66,18 +68,21 @@ use std::os::raw::{c_char, c_uchar, c_int, c_uint, c_long, c_ulong, c_void};
 use std::sync::atomic::{ATOMIC_BOOL_INIT, AtomicBool, Ordering};
 use std::slice;
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
-use std::cell::Cell;
+use std::rc::{Rc, Weak};
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::time::{Instant, Duration};
+use std::collections::HashMap;
 
 use self::x11::xlib as x;
 use self::x11::xinput as xi;
 use self::x11::xinput2 as xi2;
+use self::x11::xrender;
+use self::x11::keysym::*;
 use self::x11::glx::*;
 use self::x11::glx::arb::*;
 
-use self::libc::getpid;
+use self::libevdev_sys::evdev;
 
 use gl::*;
 use window::*;
@@ -93,6 +98,8 @@ use semver::Semver;
 static mut G_XLIB_ERROR_OCCURED: AtomicBool = ATOMIC_BOOL_INIT;
 static mut G_GLX_ERROR_BASE: i32 = 0;
 static mut G_GLX_EVENT_BASE: i32 = 0;
+static mut G_XRENDER_ERROR_BASE: i32 = 0;
+static mut G_XRENDER_EVENT_BASE: i32 = 0;
 static mut G_XI_ERROR_BASE: i32 = 0;
 static mut G_XI_EVENT_BASE: i32 = 0;
 static mut G_XI_OPCODE: i32 = 0;
@@ -123,10 +130,6 @@ pub mod types {
         direct: x::Bool, attrib_list: *const c_int) -> GLXContext;
 }
 
-pub type udev_monitor = ();
-pub type udev_device = ();
-
-
 // TODO: Send a PR to x11-rs.
 // Missing items for X11
 pub mod xx {
@@ -144,6 +147,20 @@ pub mod xxi {
     pub const NoSuchExtension: i32 = 1;
 }
 
+pub mod xxrender {
+    #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+    #[repr(u32)]
+    pub enum PictStandard {
+        ARGB32 = 0,
+        RGB24  = 1,
+        A8	   = 2,
+        A4	   = 3,
+        A1	   = 4,
+        NUM	   = 5,
+    }
+}
+
+
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 #[repr(u32)]
 pub enum NetWMStateAction {
@@ -157,6 +174,23 @@ pub enum BypassCompositor {
     NoPreference = 0,
     Yes = 1,
     No = 2,
+}
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum NetWMWindowType {
+    Desktop,
+    Dock,
+    Toolbar,
+    Menu,
+    Utility,
+    Splash,
+    Dialog,
+    DropdownMenu,
+    PopupMenu,
+    Tooltip,
+    Notification,
+    Combo,
+    DND,
+    Normal,
 }
 
 pub mod mwm {
@@ -272,6 +306,166 @@ xc_glyphs!{
     XC_watch 150
     XC_xterm 152
 }
+
+macro_rules! keys_to_x_keysyms {
+    ($($Key:ident $x_keysym:ident,)+) => {
+        fn key_to_x_keysym(key: Key) -> Option<x::KeySym> {
+            match key {
+                $(Key::$Key => Some($x_keysym as _),)+
+                Key::Other(x) => Some(x as _),
+                _ => None,
+            }
+        }
+        fn x_keysym_to_key(x_keysym: x::KeySym) -> Key {
+            match x_keysym as _ {
+                $($x_keysym => Key::$Key,)+
+                x @ _ => Key::Other(x as _),
+            }
+        }
+    };
+}
+
+keys_to_x_keysyms!{
+    Num1             XK_1            ,
+    Num2             XK_2            ,
+    Num3             XK_3            ,
+    Num4             XK_4            ,
+    Num5             XK_5            ,
+    Num6             XK_6            ,
+    Num7             XK_7            ,
+    Num8             XK_8            ,
+    Num9             XK_9            ,
+    Num0             XK_0            ,
+    A                XK_a               ,
+    B                XK_b               ,
+    C                XK_c               ,
+    D                XK_d               ,
+    E                XK_e               ,
+    F                XK_f               ,
+    G                XK_g               ,
+    H                XK_h               ,
+    I                XK_i               ,
+    J                XK_j               ,
+    K                XK_k               ,
+    L                XK_l               ,
+    M                XK_m               ,
+    N                XK_n               ,
+    O                XK_o               ,
+    P                XK_p               ,
+    Q                XK_q               ,
+    R                XK_r               ,
+    S                XK_s               ,
+    T                XK_t               ,
+    U                XK_u               ,
+    V                XK_v               ,
+    W                XK_w               ,
+    X                XK_x               ,
+    Y                XK_y               ,
+    Z                XK_z               ,
+    F1               XK_F1              ,
+    F2               XK_F2              ,
+    F3               XK_F3              ,
+    F4               XK_F4              ,
+    F5               XK_F5              ,
+    F6               XK_F6              ,
+    F7               XK_F7              ,
+    F8               XK_F8              ,
+    F9               XK_F9              ,
+    F10              XK_F10             ,
+    F11              XK_F11             ,
+    F12              XK_F12             ,
+
+    Esc              XK_Escape             ,
+    Space            XK_space           ,
+    Backspace        XK_BackSpace       ,
+    Tab              XK_Tab             ,
+    Enter            XK_Return           ,
+
+    CapsLock         XK_Caps_Lock       ,
+    NumLock          XK_Num_Lock        ,
+    ScrollLock       XK_Scroll_Lock     ,
+
+    Minus            XK_minus           ,
+    Equal            XK_equal           ,
+    LeftBrace        XK_braceleft     ,
+    RightBrace       XK_braceright     ,
+    Semicolon        XK_semicolon       ,
+    Apostrophe       XK_apostrophe      ,
+    Grave            XK_grave           ,
+    Comma            XK_comma           ,
+    Dot              XK_period          ,
+    Slash            XK_slash           ,
+    Backslash        XK_backslash       ,
+
+    LCtrl            XK_Control_L          ,
+    RCtrl            XK_Control_R          ,
+    LShift           XK_Shift_L         ,
+    RShift           XK_Shift_R         ,
+    LAlt             XK_Alt_L           ,
+    RAlt             XK_Alt_R           ,
+    LSystem          XK_Super_L        ,
+    RSystem          XK_Super_R        ,
+    LMeta            XK_Meta_L         ,
+    RMeta            XK_Meta_R         ,
+    Compose          XK_Multi_key         ,
+
+    Home             XK_Home            ,
+    End              XK_End             ,
+
+    Up               XK_Up              ,
+    Down             XK_Down            ,
+    Left             XK_Left            ,
+    Right            XK_Right           ,
+
+    PageUp           XK_Prior ,
+    PageDown         XK_Next  ,
+
+    Insert           XK_Insert          ,
+    Delete           XK_Delete          ,
+
+    SysRQ            XK_Sys_Req           ,
+    LineFeed         XK_Linefeed        ,
+
+    Kp0              XK_KP_0            ,
+    Kp1              XK_KP_1            ,
+    Kp2              XK_KP_2            ,
+    Kp3              XK_KP_3            ,
+    Kp4              XK_KP_4            ,
+    Kp5              XK_KP_5            ,
+    Kp6              XK_KP_6            ,
+    Kp7              XK_KP_7            ,
+    Kp8              XK_KP_8            ,
+    Kp9              XK_KP_9            ,
+    KpPlus           XK_KP_Add         ,
+    KpMinus          XK_KP_Subtract        ,
+    KpAsterisk       XK_KP_Multiply     ,
+    KpSlash          XK_KP_Divide        ,
+    KpDot            XK_KP_Decimal          ,
+    KpEnter          XK_KP_Enter        ,
+    KpEqual          XK_KP_Equal        ,
+    KpComma          XK_KP_Separator        ,
+
+    Mute             XF86XK_AudioMute            ,
+    VolumeDown       XF86XK_AudioLowerVolume      ,
+    VolumeUp         XF86XK_AudioRaiseVolume      ,
+    Power            XF86XK_PowerOff           ,
+    Pause            XK_Pause           ,
+
+    ZenkakuHankaku   XK_Zenkaku_Hankaku  ,
+    Katakana         XK_Katakana        ,
+    Hiragana         XK_Hiragana        ,
+    Henkan           XK_Henkan          ,
+    KatakanaHiragana XK_Hiragana_Katakana,
+    Muhenkan         XK_Muhenkan        ,
+
+    /*
+    Hangul           XK_Hangul         ,
+    Hanja            XK_Hangul_Hanja           ,
+    */
+    Yen              XK_yen             ,
+}
+
+
 
 
 macro_rules! glx_ext {
@@ -525,6 +719,14 @@ pub struct Glx {
     pub event_base: c_int,
 }
 
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct XRender {
+    pub version: Semver,
+    pub error_base: c_int,
+    pub event_base: c_int,
+    pub argb32_pict_format: *mut xrender::XRenderPictFormat,
+}
+
 #[derive(Debug)]
 pub struct SharedContext {
     pub x_display: *mut x::Display,
@@ -532,14 +734,18 @@ pub struct SharedContext {
     pub screen: *mut x::Screen, // NOTE: Nothing says it needs to be freed, so we don't.
     pub screen_num: c_int,
     pub root: x::Window,
+    pub invisible_x_cursor: x::Cursor,
     pub glx: Option<Glx>,
     pub xi: Option<XI>,
     pub xim: Option<x::XIM>,
+    pub xrender: Option<XRender>,
     pub usable_viewport: Rect<i32, u32>,
-    pub udev_mon: udev_monitor,
     pub previous_x_key_release_time: Cell<x::Time>,
     pub previous_x_key_release_keycode: Cell<c_uint>,
     pub previous_abs_mouse_position: Cell<Vec2<i32>>,
+    pub weak_windows: RefCell<HashMap<x::Window, Weak<Window>>>, // NOTE: this wants VecMap instead, but it's unstable as of today.
+    pub udev: *mut udev::udev,
+    pub udev_monitor: *mut udev::udev_monitor,
 }
 
 #[derive(Debug)]
@@ -548,8 +754,9 @@ pub struct OsContext(Rc<SharedContext>);
 #[derive(Debug)]
 pub struct OsHid {
     pub shared_context: Rc<SharedContext>,
-    pub udev_dev: udev_device,
-    pub evdev_fd: i32,
+    pub udev_device: *mut udev::udev_device,
+    pub fd: c_int,
+    pub evdev: *mut evdev::libevdev,
     pub xi_devices: Vec<xi::XDevice>,
 }
 #[derive(Debug)]
@@ -559,6 +766,8 @@ pub struct OsWindow {
     pub colormap: x::Colormap,
     pub glx_window: Option<GLXWindow>,
     pub xic: Option<x::XIC>,
+    pub shows_cursor: Cell<bool>,
+    pub user_cursor: RefCell<Option<Rc<Cursor>>>,
 }
 #[derive(Debug)]
 pub struct OsGLContext {
@@ -575,6 +784,7 @@ pub struct OsGLPixelFormat {
 pub struct OsCursor {
     pub shared_context: Rc<SharedContext>,
     pub x_cursor: x::Cursor,
+    pub frames: Vec<xrender::XAnimCursor>,
 }
 
 
@@ -603,7 +813,8 @@ impl Drop for SharedContext {
                 x::XCloseIM(xim);
             }
             x::XCloseDisplay(self.x_display);
-            // FIXME: close udev_monitor
+            udev::udev_monitor_unref(self.udev_monitor);
+            udev::udev_unref(self.udev);
         } 
     }
 }
@@ -622,12 +833,26 @@ impl Drop for OsWindow {
             x::XDestroyWindow(x_display, self.x_window);
             x::XFreeColormap(x_display, self.colormap);
         }
+        self.shared_context.weak_windows.borrow_mut().remove(&self.x_window);
+    }
+}
+
+impl Drop for OsHid {
+    fn drop(&mut self) {
+        unsafe {
+            evdev::libevdev_free(self.evdev);
+            libc::close(self.fd);
+            udev::udev_device_unref(self.udev_device);
+        }
     }
 }
 
 impl Drop for OsCursor {
     fn drop(&mut self) {
         unsafe {
+            for frame in &self.frames {
+                x::XFreeCursor(self.shared_context.x_display, frame.cursor);
+            }
             x::XFreeCursor(self.shared_context.x_display, self.x_cursor);
         }
     }
@@ -899,7 +1124,7 @@ impl OsContext {
 
             let screen = x::XDefaultScreenOfDisplay(x_display);
             let screen_num = x::XDefaultScreen(x_display);
-            let root = x::XRootWindowOfScreen(screen);
+            let root = x::XDefaultRootWindow(x_display);
             let atoms = PreparedAtoms::fetch(x_display);
 
             let xim = unsafe {
@@ -914,14 +1139,28 @@ impl OsContext {
             };
             let glx = Self::query_glx(x_display, screen_num);
             let xi = Self::query_xi(x_display, screen_num);
+            let xrender = Self::query_xrender(x_display, screen_num);
             let usable_viewport = Self::query_usable_viewport(x_display, screen_num, &atoms);
-            let udev_mon = ();
+            let weak_windows = RefCell::new(Default::default());
+            let udev = udev::udev_new();
+            let udev_monitor = udev::udev_monitor_new_from_netlink(udev, b"udev\0" as *const _ as _);
+            let _status = udev::udev_monitor_enable_receiving(udev_monitor);
+            let invisible_x_cursor = {
+                let data = 0 as c_char;
+                let mut col: x::XColor = mem::zeroed();
+                let pix = x::XCreateBitmapFromData(x_display, root, &data, 1, 1);
+                let cur = x::XCreatePixmapCursor(x_display, pix, pix, &mut col, &mut col, 0, 0);
+                x::XFreePixmap(x_display, pix);
+                cur
+            };
             let shared_context = SharedContext { 
-                x_display, atoms, screen, screen_num, root, glx, xi, xim,
-                usable_viewport, udev_mon,
+                x_display, atoms, screen, screen_num, root, glx, xi, xim, xrender,
+                udev, udev_monitor,
+                usable_viewport,
                 previous_x_key_release_time: Cell::new(0),
                 previous_x_key_release_keycode: Cell::new(0),
                 previous_abs_mouse_position: Cell::new(Default::default()),
+                weak_windows, invisible_x_cursor,
             };
             let shared_context = Rc::new(shared_context);
             Ok(OsContext(shared_context))
@@ -1075,6 +1314,39 @@ impl OsContext {
     }
 
 
+    fn query_xrender(x_display: *mut x::Display, screen_num: c_int) -> Option<XRender> {
+        let (error_base, event_base) = unsafe {
+            let (mut error_base, mut event_base) = mem::uninitialized();
+            let has_it = xrender::XRenderQueryExtension(x_display, &mut error_base, &mut event_base);
+            if has_it == x::False {
+                return None;
+            }
+            (error_base, event_base)
+        };
+        unsafe {
+            G_XRENDER_ERROR_BASE = error_base;
+            G_XRENDER_EVENT_BASE = event_base;
+        }
+        info!("XRender error_base = {}, event_base = {}", error_base, event_base);
+
+        let (major, minor) = unsafe {
+            let (mut major, mut minor) = (1, 0);
+            let success = xrender::XRenderQueryVersion(x_display, &mut major, &mut minor);
+            if success == x::False {
+               return None;
+            }
+            (major as u32, minor as u32)
+        };
+        let version = Semver::new(major, minor, 0);
+        info!("XRender extension version {}.{}", major, minor);
+
+        let argb32_pict_format = unsafe {
+            xrender::XRenderFindStandardFormat(
+                x_display, xxrender::PictStandard::ARGB32 as _
+            )
+        };
+        Some(XRender { version, error_base, event_base, argb32_pict_format })
+    }
 
     fn query_glx(x_display: *mut x::Display, screen_num: c_int) -> Option<Glx> {
 
@@ -1133,6 +1405,12 @@ impl OsContext {
 
         Some(Glx { version, get_proc_address, ext, error_base, event_base })
     }
+
+    pub(crate) fn add_weak_window(&mut self, strong: &Rc<Window>) {
+        let weak = Rc::downgrade(strong);
+        self.weak_windows.borrow_mut().insert(strong.os_window.x_window, weak);
+    }
+
 
     pub fn create_window(&mut self, settings: &WindowSettings) -> Result<OsWindow, Error> {
         let x_display = self.x_display;
@@ -1227,7 +1505,7 @@ impl OsContext {
                 x_display, x_window, protocols.as_mut_ptr(), protocols.len() as _
             );
 
-            let pid = getpid();
+            let pid = libc::getpid();
             if pid > 0 {
                 x::XChangeProperty(
                     x_display, x_window, self.atoms._NET_WM_PID, 
@@ -1392,7 +1670,8 @@ impl OsContext {
         };
 
         Ok(OsWindow { 
-            shared_context: self.0.clone(), x_window, colormap, glx_window, xic
+            shared_context: self.0.clone(), x_window, colormap, glx_window,
+            xic, shows_cursor: Cell::new(true), user_cursor: RefCell::new(None),
         })
     }
     pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<OsGLPixelFormat, Error> {
@@ -1662,7 +1941,7 @@ impl OsContext {
     pub fn create_software_gl_context(&self, pf: &OsGLPixelFormat, cs: &GLContextSettings) -> Result<OsGLContext, Error> {
         Err(Unsupported(Some("This is not implemented yet! The plan is to load the Mesa driver, if present".to_owned())))
     }
-    pub fn create_gl_context_from_lib<P: AsRef<Path>>(&self, _pf: &OsGLPixelFormat, _cs: &GLContextSettings, _path: P) -> Result<OsGLContext, Error> {
+    pub fn create_gl_context_from_lib(&self, _pf: &OsGLPixelFormat, _cs: &GLContextSettings, _path: &Path) -> Result<OsGLContext, Error> {
         Err(Unsupported(Some("This is not implemented yet!".to_owned())))
     }
 
@@ -1691,19 +1970,55 @@ impl OsContext {
         }
         Extent2 { w: best_w as _, h: best_h as _ }
     }
-    // For these, we need extensions :
-    // - XRender
-    // TODO: Query the XRender extension
-    // XRecolorCursor
-    // XCreatePixmapCursor
-    // XRenderCreateCursor
-    // XRenderCreateAnimCursor
-    // XFreeCursor
-    pub fn create_cursor(&self, _img: CursorFrame) -> Result<OsCursor, Error> {
-        unimplemented!{}
+    fn cursordata_to_x_cursor(&self, xrender: &XRender, frame: &CursorData) -> x::Cursor {
+        unsafe {
+            let dpy = self.x_display;
+            let root = self.root;
+            let Extent2 { w, h } = frame.image.size;
+            let visual = x::XDefaultVisual(dpy, self.screen_num);
+            let pix = x::XCreatePixmap(dpy, root, w, h, 32);
+            let pix_gc = x::XCreateGC(dpy, pix, 0, ptr::null_mut());
+            let pix_img = x::XCreateImage(
+                dpy, visual, 32, x::ZPixmap, 0,
+                frame.image.pixels.as_ptr() as *const _ as *mut _,
+                w, h, 32, 4*(w as c_int)
+            );
+            x::XPutImage(dpy, pix, pix_gc, pix_img, 0, 0, 0, 0, w, h);
+            let pic_format = xrender.argb32_pict_format;
+            let pic = xrender::XRenderCreatePicture(dpy, pix, pic_format, 0, ptr::null_mut());
+            let Vec2 { x, y } = frame.hotspot;
+            let x_cursor = xrender::XRenderCreateCursor(dpy, pic, x as _, y as _);
+            xrender::XRenderFreePicture(dpy, pic);
+            x::XDestroyImage(pix_img);
+            x::XFreeGC(dpy, pix_gc);
+            x::XFreePixmap(dpy, pix);
+            x_cursor
+        }
     }
-    pub fn create_animated_cursor(&self, _anim: &[CursorFrame]) -> Result<OsCursor, Error> {
-        unimplemented!{}
+    pub fn create_rgba32_cursor(&self, frame: CursorData) -> Result<OsCursor, Error> {
+        let xrender = match self.xrender.as_ref() {
+            Some(x) => x,
+            None => return Err(Failed("Creating an RGBA cursor requires the XRender extension".to_owned())),
+        };
+        let x_cursor = self.cursordata_to_x_cursor(xrender, &frame);
+        Ok(OsCursor { shared_context: self.0.clone(), x_cursor, frames: vec![] })
+    }
+    pub fn create_animated_rgba32_cursor(&self, anim: &[CursorFrame]) -> Result<OsCursor, Error> {
+        let xrender = match self.xrender.as_ref() {
+            Some(x) => x,
+            None => return Err(Failed("Creating an animated RGBA cursor requires the XRender extension".to_owned())),
+        };
+        let mut frames: Vec<_> = anim.iter().map(|frame| {
+            let secs = frame.duration.as_secs() as u64;
+            let nano = frame.duration.subsec_nanos() as u64;
+            let delay = secs*1000 + nano/1_000_000;
+            let cursor = self.cursordata_to_x_cursor(xrender, &frame.data);
+            xrender::XAnimCursor { cursor, delay }
+        }).collect();
+        let x_cursor = unsafe {
+            xrender::XRenderCreateAnimCursor(self.x_display, frames.len() as _, frames.as_mut_ptr())
+        };
+        Ok(OsCursor { shared_context: self.0.clone(), x_cursor, frames })
     }
     pub fn create_system_cursor(&self, s: SystemCursor) -> Result<OsCursor, Error> {
         let glyph = match s {
@@ -1719,13 +2034,26 @@ impl OsContext {
             SystemCursor::ResizeH => XC_sb_h_double_arrow,
             SystemCursor::ResizeHV => XC_fleur,
             SystemCursor::Deny => XC_pirate,
+            SystemCursor::Question => XC_question_arrow,
+            SystemCursor::ReverseArrow => XC_right_ptr,
+            SystemCursor::TopSide => XC_top_side,
+            SystemCursor::BottomSide => XC_bottom_side,
+            SystemCursor::LeftSide => XC_left_side,
+            SystemCursor::RightSide => XC_right_side,
+            SystemCursor::BottomLeftCorner => XC_bottom_left_corner,
+            SystemCursor::BottomRightCorner => XC_bottom_right_corner,
+            SystemCursor::TopLeftCorner => XC_top_left_corner,
+            SystemCursor::TopRightCorner => XC_top_right_corner,
+            SystemCursor::Pencil => XC_pencil,
+            SystemCursor::Spraycan => XC_spraycan,
         };
         let x_cursor = unsafe {
             x::XCreateFontCursor(self.x_display, glyph)
         };
-        Ok(OsCursor { shared_context: self.0.clone(), x_cursor })
+        Ok(OsCursor { shared_context: self.0.clone(), x_cursor, frames: vec![] })
     }
 
+    // TODO: udev_monitor_receive_device()
     pub fn poll_next_event(&mut self) -> Option<Event> {
         unsafe {
             let x_display = self.x_display;
@@ -1776,7 +2104,9 @@ impl OsContext {
         }
     }
     fn x_window_to_window(&self, x_window: x::Window) -> Option<Rc<Window>> {
-        unimplemented!{}
+        let weak_windows = self.weak_windows.borrow();
+        let weak = weak_windows.get(&x_window)?;
+        weak.upgrade()
     }
     fn dummy_keyboard(&self) -> Rc<Keyboard> {
         unimplemented!{}
@@ -1784,9 +2114,15 @@ impl OsContext {
     fn dummy_mouse(&self) -> Rc<Mouse> {
         unimplemented!{}
     }
-    fn x_keycode_to_vkey(&self, x_keycode: c_uint) -> VKey { unimplemented!{} }
-    // XLookupKeysym
-    fn x_keycode_to_key(&self, x_keycode: c_uint) -> Key { unimplemented!{} }
+    fn x_key_event_to_key(&self,  x_event: &x::XKeyEvent) -> Key {
+        let keysym = unsafe {
+            x::XLookupKeysym(x_event as *const _ as *mut _, 0)
+        };
+        self.x_keysym_to_key(keysym)
+    }
+    fn x_keysym_to_key(&self, x_keysym: x::KeySym) -> Key {
+        unimplemented!{}
+    }
 
     fn xi_event_to_event(&mut self, cookie: &x::XGenericEventCookie) -> Result<Event, ()> {
         match cookie.evtype {
@@ -1982,11 +2318,39 @@ impl OsContext {
             }
         }
     }
-    fn x_lookup_string(&self, x_event: &x::XKeyEvent) -> Option<String> {
-        unimplemented!{}
-    }
-    fn x_get_text(&self, x_event: &x::XKeyEvent) -> Option<String> {
-        unimplemented!{}
+    fn x_utf8_lookup_string(&self, xic: x::XIC, x_event: &x::XKeyEvent) -> (Option<x::KeySym>, Option<String>) {
+        // Asserting because of undefined behaviour otherwise.
+        debug_assert_ne!(x_event.type_, x::KeyRelease);
+        unsafe {
+            let mut buf: Vec<u8> = Vec::with_capacity(32);
+            let mut keysym: x::KeySym = 0;
+            let mut status: x::Status = 0;
+            loop {
+                let actual_len = x::Xutf8LookupString(
+                    xic, x_event as *const _ as *mut _,
+                    buf.as_mut_ptr() as _, buf.capacity() as _,
+                    &mut keysym, &mut status
+                );
+                match status {
+                    x::XBufferOverflow => {
+                        buf.reserve_exact(actual_len as _);
+                        continue;
+                    },
+                    x::XLookupNone => return (None, None),
+                    x::XLookupKeySym => return (Some(keysym), None),
+                    x::XLookupChars => (),
+                    x::XLookupBoth => (),
+                    _ => unreachable!{},
+                };
+                buf.set_len(actual_len as _);
+                let s = String::from_utf8(buf).unwrap();
+                match status {
+                    x::XLookupChars => return (None, Some(s)),
+                    x::XLookupBoth => return (Some(keysym), Some(s)),
+                    _ => unreachable!{},
+                }
+            }
+        };
     }
     fn x_event_to_event(&mut self, x_event: x::XEvent) -> Result<Event, ()> {
 
@@ -2006,22 +2370,40 @@ impl OsContext {
         match x_event.get_type() {
             KeyPress => {
                 let x_event = unsafe { x_event.key };
+                let window = self.x_window_to_window(x_event.window);
                 let is_repeat = {
                     self.previous_x_key_release_time.get() == x_event.time
                  && self.previous_x_key_release_keycode.get() == x_event.keycode
                 };
-                let window = self.x_window_to_window(x_event.window);
-                if let Some(window) = window.as_ref() {
-                    window.os_window.set_net_wm_user_time(x_event.time);
-                }
+                let is_text = unsafe {
+                    let f = x::XFilterEvent(&x_event as *const _ as *mut _, 0);
+                    if f == x::False { true } else { false }
+                };
+                let (keysym, text) = match window.as_ref() {
+                    Some(window) => {
+                        window.os_window.set_net_wm_user_time(x_event.time);
+                        if let Some(xic) = window.os_window.xic {
+                            self.x_utf8_lookup_string(xic, &x_event)
+                        } else {
+                            (None, None)
+                        }
+                    },
+                    None => (None, None),
+                };
+                let keysym = match keysym {
+                    None => {
+                        warn!{"Discarding event {:?} because of unknown keysym", x_event};
+                        return Err(());
+                    },
+                    Some(x) => x,
+                };
                 let event = Event::KeyboardKeyPressed {
                     keyboard: self.dummy_keyboard(),
                     window,
-                    vkey: self.x_keycode_to_vkey(x_event.keycode),
-                    key: self.x_keycode_to_key(x_event.keycode),
+                    os_scancode: x_event.keycode as _,
+                    key: self.x_keysym_to_key(keysym),
                     is_repeat,
-                    char: self.x_lookup_string(&x_event),
-                    text: self.x_get_text(&x_event),
+                    text: if is_text { text } else { None },
                 };
                 Ok(event)
             },
@@ -2032,8 +2414,8 @@ impl OsContext {
                 let event = Event::KeyboardKeyReleased {
                     keyboard: self.dummy_keyboard(),
                     window: self.x_window_to_window(x_event.window),
-                    vkey: self.x_keycode_to_vkey(x_event.keycode),
-                    key: self.x_keycode_to_key(x_event.keycode),
+                    os_scancode: x_event.keycode as _,
+                    key: self.x_key_event_to_key(&x_event),
                 };
                 Ok(event)
             },
@@ -2075,20 +2457,25 @@ impl OsContext {
                     window.os_window.set_net_wm_user_time(x_event.time);
                 }
                 // http://xahlee.info/linux/linux_x11_mouse_button_number.html
-                let button = match x_event.button {
-                    1 => Some(MouseButton::Left),
-                    2 => Some(MouseButton::Middle),
-                    3 => Some(MouseButton::Right),
-                    8 => Some(MouseButton::Back),
-                    9 => Some(MouseButton::Forward),
-                    _ => None,
-                };
+                // On my R.AT 7, 10 is right scroll and 11 is left scroll.
                 let scroll = match x_event.button {
                     4 => Some(Vec2::new(0,  1)),
                     5 => Some(Vec2::new(0, -1)),
                     6 => Some(Vec2::new(-1, 0)),
                     7 => Some(Vec2::new( 1, 0)),
                     _ => None,
+                };
+                let button = match x_event.button {
+                    1 => Some(MouseButton::Left),
+                    2 => Some(MouseButton::Middle),
+                    3 => Some(MouseButton::Right),
+                    4 => None,
+                    5 => None,
+                    6 => None,
+                    7 => None,
+                    8 => Some(MouseButton::Back),
+                    9 => Some(MouseButton::Forward),
+                    b @ _ => Some(MouseButton::Extra(b)),
                 };
                 if let Some(button) = button {
                     return Ok(Event::MouseButtonPressed {
@@ -2437,6 +2824,33 @@ impl OsWindow {
     pub fn query_canvas_size(&self) -> Extent2<u32> {
         self.query_screenspace_size()
     }
+    pub fn set_net_wm_window_type(&self, t: &[NetWMWindowType]) -> Result<(), Error> {
+        let atoms = &self.shared_context.atoms;
+        let mut value: Vec<_> = t.iter().map(|t| match t {
+            Desktop       => atoms._NET_WM_WINDOW_TYPE_DESKTOP,
+            Dock          => atoms._NET_WM_WINDOW_TYPE_DOCK,
+            Toolbar       => atoms._NET_WM_WINDOW_TYPE_TOOLBAR,
+            Menu          => atoms._NET_WM_WINDOW_TYPE_MENU,
+            Utility       => atoms._NET_WM_WINDOW_TYPE_UTILITY,
+            Splash        => atoms._NET_WM_WINDOW_TYPE_SPLASH,
+            Dialog        => atoms._NET_WM_WINDOW_TYPE_DIALOG,
+            DropdownMenu  => atoms._NET_WM_WINDOW_TYPE_DROPDOWN_MENU,
+            PopupMenu     => atoms._NET_WM_WINDOW_TYPE_POPUP_MENU,
+            Tooltip       => atoms._NET_WM_WINDOW_TYPE_TOOLTIP,
+            Notification  => atoms._NET_WM_WINDOW_TYPE_NOTIFICATION,
+            Combo         => atoms._NET_WM_WINDOW_TYPE_COMBO,
+            DND           => atoms._NET_WM_WINDOW_TYPE_DND,
+            Normal        => atoms._NET_WM_WINDOW_TYPE_NORMAL,
+        }).collect();
+        unsafe {
+            x::XChangeProperty(
+                self.shared_context.x_display, self.x_window,
+                atoms._NET_WM_WINDOW_TYPE, x::XA_ATOM, 32,
+                x::PropModeReplace, value.as_mut_ptr() as *mut _, value.len() as _
+            );
+        }
+        Ok(())
+    }
     pub fn maximize(&self) -> Result<(), Error> {
         self.set_net_wm_state(NetWMStateAction::Add,
             self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_VERT,
@@ -2621,21 +3035,59 @@ impl OsWindow {
         }
     }
 
-    // Create and set an invisible cursor.
-    pub fn hide_cursor(&self) -> Result<(), Error> { unimplemented!{} }
-    // Use the current cursor instead of the invisible one.
-    pub fn show_cursor(&self) -> Result<(), Error> { unimplemented!{} }
-    // Test if the active cursor is the invisible one
-    pub fn is_cursor_shown(&self) -> Result<bool, Error> { unimplemented!{} }
-    // Move the Rc into member, then XDefineCursor()
-    pub fn set_cursor(&self, _cursor: Rc<Cursor>) -> Result<(), Error> { unimplemented!{} }
-    // Just return the Rc member
-    pub fn cursor(&self) -> Result<Rc<Cursor>, Error> { unimplemented!{} }
+    pub fn hide_cursor(&self) -> Result<(), Error> {
+        self.shows_cursor.set(false);
+        unsafe {
+            x::XDefineCursor(self.shared_context.x_display, self.x_window, self.shared_context.invisible_x_cursor);
+        }
+        Ok(())
+    }
+    pub fn show_cursor(&self) -> Result<(), Error> {
+        self.shows_cursor.set(true);
+        let user_cursor = self.user_cursor.borrow();
+        let user_cursor = match user_cursor.as_ref() {
+            None => return Ok(()),
+            Some(x) => x,
+        };
+        unsafe {
+            x::XDefineCursor(self.shared_context.x_display, self.x_window, user_cursor.0.x_cursor);
+        }
+        Ok(())
+    }
+    pub fn set_cursor(&self, cursor: Rc<Cursor>) -> Result<(), Error> {
+        *self.user_cursor.borrow_mut() = Some(cursor);
+        if self.shows_cursor.get() {
+            return self.show_cursor();
+        }
+        Ok(())
+    }
 
-    // XWarpPointer()
-    pub fn set_cursor_position(&self, _pos: Vec2<u32>) -> Result<(), Error> { unimplemented!{} }
-    // XQueryPointer()
-    pub fn query_cursor_position(&self) -> Result<Vec2<u32>, Error> { unimplemented!{} }
+    pub fn set_cursor_position(&self, pos: Vec2<u32>) -> Result<(), Error> {
+        unsafe {
+            x::XWarpPointer(
+                self.shared_context.x_display, 0, self.x_window,
+                0, 0, 0, 0, pos.x as _, pos.y as _
+            );
+        }
+        Ok(())
+    }
+    pub fn query_cursor_position(&self) -> Result<Vec2<u32>, Error> {
+        unsafe {
+            let mut root: x::Window = 0;
+            let mut child: x::Window = 0;
+            let mut root_x: c_int = 0;
+            let mut root_y: c_int = 0;
+            let mut x: c_int = 0;
+            let mut y: c_int = 0;
+            let mut mask: c_uint = 0;
+            let is_on_same_screen = x::XQueryPointer(
+                self.shared_context.x_display, self.x_window,
+                &mut root, &mut child, &mut root_x, &mut root_y,
+                &mut x, &mut y, &mut mask
+            );
+            Ok(Vec2::new(x as _, y as _))
+        }
+    }
 
     pub fn make_gl_context_current(&self, gl_context: Option<&OsGLContext>) {
         let glx_context = match gl_context {

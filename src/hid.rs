@@ -183,187 +183,233 @@ pub struct Keyboard {
 
 macro_rules! vkeys {
     ($($VKey:ident $vkey:ident,)+) => {
+        /*
         /// `VKey` means "Virtual Key", that is, the raw value reported by the
         /// OS which corresponds to a standard QWERTY keyboard.
-        /// In SDL2 parlance, it is called "KeyCode".
+        ///
+        /// The SDL2 equivalent is `SDL_Scancode`.
+        /// There is no X11 equivalent, because `Keycode` values are
+        /// driver-specific. They range from 8 to 255 but, unlike in Windows,
+        /// do not have a "standard" meaning: they are only meaningful
+        /// when converted to `Keysym`s.
         ///
         /// These are not to be confused with "physical keys", which
         /// are the result of translating a virtual key code according to
         /// the actual keyboard's layout.
-        /// For instance, on an AZERTY keyboard, the "a" key is reported as
-        /// `VKey::Q` and `Key::A`.
-        ///
-        /// As such, `VKey`s are a good choice for universal ZQSD-style input
-        /// in games.
-        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-        pub enum VKey {
-            $($VKey),+
-        }
+        */
+        //#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub type OsScancode = u8;
+
         /// A `Key` is understood as a "physical key", that is, the value
         /// that indicates the actual meaning of the key with regards to the
         /// user's keyboard layout.
-        /// In SDL2 parlance, it is called "ScanCode".
         ///
-        /// These are NOT appropriate for text input. For this, fetch the
-        /// `text` member of the `KeyboardKeyPressed` event.
+        /// The SDL2 equivalent is `SDL_Keycode`.
+        /// The X11 equivalent is `Keysym`.
+        ///
+        /// These are NOT appropriate for text input. For this, read the
+        /// `text` member of the `KeyboardKeyPressed` event instead.
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
         pub enum Key {
-            $($VKey),+
+            $($VKey),+,
+            Other(u64),
         }
+        /// Most platforms provide a (supposedly) efficient way to query
+        /// the whole keyboard's state in a single call.
+        ///
+        /// Under Windows, it's `GetKeyboardState()`.
+        /// Under X11, it's `XQueryKeymap()`.
         #[derive(Debug, Clone, Hash, PartialEq, Eq)]
         pub struct KeyboardState {
-            $($vkey: bool),+
+            // $(pub $vkey: bool),+
+            // TODO
         }
     };
 }
 
 vkeys!{
-    Num1             num1            ,
-    Num2             num2            ,
-    Num3             num3            ,
-    Num4             num4            ,
-    Num5             num5            ,
-    Num6             num6            ,
-    Num7             num7            ,
-    Num8             num8            ,
-    Num9             num9            ,
-    Num0             num0            ,
-    A                a               ,
-    B                b               ,
-    C                c               ,
-    D                d               ,
-    E                e               ,
-    F                f               ,
-    G                g               ,
-    H                h               ,
-    I                i               ,
-    J                j               ,
-    K                k               ,
-    L                l               ,
-    M                m               ,
-    N                n               ,
-    O                o               ,
-    P                p               ,
-    Q                q               ,
-    R                r               ,
-    S                s               ,
-    T                t               ,
-    U                u               ,
-    V                v               ,
-    W                w               ,
-    X                x               ,
-    Y                y               ,
-    Z                z               ,
-    F1               f1              ,
-    F2               f2              ,
-    F3               f3              ,
-    F4               f4              ,
-    F5               f5              ,
-    F6               f6              ,
-    F7               f7              ,
-    F8               f8              ,
-    F9               f9              ,
-    F10              f10             ,
-    F11              f11             ,
-    F12              f12             ,
+    Num1              num1                ,
+    Num2              num2                ,
+    Num3              num3                ,
+    Num4              num4                ,
+    Num5              num5                ,
+    Num6              num6                ,
+    Num7              num7                ,
+    Num8              num8                ,
+    Num9              num9                ,
+    Num0              num0                ,
+    A                 a                   ,
+    B                 b                   ,
+    C                 c                   ,
+    D                 d                   ,
+    E                 e                   ,
+    F                 f                   ,
+    G                 g                   ,
+    H                 h                   ,
+    I                 i                   ,
+    J                 j                   ,
+    K                 k                   ,
+    L                 l                   ,
+    M                 m                   ,
+    N                 n                   ,
+    O                 o                   ,
+    P                 p                   ,
+    Q                 q                   ,
+    R                 r                   ,
+    S                 s                   ,
+    T                 t                   ,
+    U                 u                   ,
+    V                 v                   ,
+    W                 w                   ,
+    X                 x                   ,
+    Y                 y                   ,
+    Z                 z                   ,
+    F1                f1                  ,
+    F2                f2                  ,
+    F3                f3                  ,
+    F4                f4                  ,
+    F5                f5                  ,
+    F6                f6                  ,
+    F7                f7                  ,
+    F8                f8                  ,
+    F9                f9                  ,
+    F10               f10                 ,
+    F11               f11                 ,
+    F12               f12                 ,
+    F13               f13                 ,
+    F14               f14                 ,
+    F15               f15                 ,
+    F16               f16                 ,
+    F17               f17                 ,
+    F18               f18                 ,
+    F19               f19                 ,
+    F20               f20                 ,
+    F21               f21                 ,
+    F22               f22                 ,
+    F23               f23                 ,
+    F24               f24                 ,
 
-    Esc              esc             ,
-    Space            space           ,
-    Backspace        backspace       ,
-    Tab              tab             ,
-    Enter            enter           ,
+    Esc               esc                 ,
+    Space             space               ,
+    Backspace         backspace           ,
+    Tab               tab                 ,
+    Enter             enter               ,
 
-    CapsLock         caps_lock       ,
-    NumLock          num_lock        ,
-    ScrollLock       scroll_lock     ,
+    CapsLock          caps_lock           ,
+    NumLock           num_lock            ,
+    ScrollLock        scroll_lock         ,
 
-    Minus            minus           ,
-    Equal            equal           ,
-    LeftBrace        left_brace      ,
-    RightBrace       right_brace     ,
-    Semicolon        semicolon       ,
-    Apostrophe       apostrophe      ,
-    Grave            grave           ,
-    Comma            comma           ,
-    Dot              dot             ,
-    Slash            slash           ,
-    Backslash        backslash       ,
+    Minus             minus               ,
+    Equal             equal               ,
+    LeftBrace         left_brace          ,
+    RightBrace        right_brace         ,
+    Semicolon         semicolon           ,
+    Apostrophe        apostrophe          ,
+    Grave             grave               ,
+    Comma             comma               ,
+    Dot               dot                 ,
+    Slash             slash               ,
+    Backslash         backslash           ,
 
-    LCtrl            l_ctrl          ,
-    RCtrl            r_ctrl          ,
-    LShift           l_shift         ,
-    RShift           r_shift         ,
-    LAlt             l_alt           ,
-    RAlt             r_alt           ,
-    LSystem          l_system        ,
-    RSystem          r_system        ,
-    LMeta            l_meta          ,
-    RMeta            r_meta          ,
-    Compose          compose         ,
+    LCtrl             l_ctrl              ,
+    RCtrl             r_ctrl              ,
+    LShift            l_shift             ,
+    RShift            r_shift             ,
+    LAlt              l_alt               ,
+    RAlt              r_alt               ,
+    LSystem           l_system            ,
+    RSystem           r_system            ,
+    LMeta             l_meta              ,
+    RMeta             r_meta              ,
+    Compose           compose             ,
 
-    ScrollUp         scrollup        ,
-    ScrollDown       scrolldown      ,
+    Home              home                ,
+    End               end                 ,
 
-    Home             home            ,
-    End              end             ,
+    Up                up                  ,
+    Down              down                ,
+    Left              left                ,
+    Right             right               ,
 
-    Up               up              ,
-    Down             down            ,
-    Left             left            ,
-    Right            right           ,
+    PageUp            page_up             ,
+    PageDown          page_down           ,
 
-    PageUp           page_up         ,
-    PageDown         page_down       ,
+    Insert            insert              ,
+    Delete            delete              ,
 
-    Insert           insert          ,
-    Delete           delete          ,
+    SysRQ             sysrq               ,
+    LineFeed          LineFeed            ,
 
-    SysRQ            sysrq           ,
-    LineFeed         LineFeed        ,
+    Kp0               kp_0                ,
+    Kp1               kp_1                ,
+    Kp2               kp_2                ,
+    Kp3               kp_3                ,
+    Kp4               kp_4                ,
+    Kp5               kp_5                ,
+    Kp6               kp_6                ,
+    Kp7               kp_7                ,
+    Kp8               kp_8                ,
+    Kp9               kp_9                ,
+    KpPlus            kp_plus             ,
+    KpMinus           kp_minus            ,
+    KpAsterisk        kp_asterisk         ,
+    KpSlash           kp_slash            ,
+    KpDot             kp_dot              ,
+    KpEnter           kp_enter            ,
+    KpEqual           kp_equal            ,
+    KpComma           kp_comma            ,
 
-    Kp0              kp_0            ,
-    Kp1              kp_1            ,
-    Kp2              kp_2            ,
-    Kp3              kp_3            ,
-    Kp4              kp_4            ,
-    Kp5              kp_5            ,
-    Kp6              kp_6            ,
-    Kp7              kp_7            ,
-    Kp8              kp_8            ,
-    Kp9              kp_9            ,
-    KpPlus           kp_plus         ,
-    KpMinus          kp_minus        ,
-    KpAsterisk       kp_asterisk     ,
-    KpSlash          kp_slash        ,
-    KpDot            kp_dot          ,
-    KpEnter          kp_enter        ,
-    KpLeftParen      kp_left_paren   ,
-    KpRightParen     kp_right_paren  ,
-    KpEqual          kp_equal        ,
-    KpPlusMinus      kp_plus_minus   ,
-    KpComma          kp_comma        ,
+    Mute              mute                ,
+    VolumeDown        volume_down         ,
+    VolumeUp          volume_up           ,
+    NextTrack         next_track          ,
+    PrevTrack         prev_track          ,
+    PlayPause         play_pause          ,
+    Stop              stop                ,
+                                       
+    BrowserBack       browser_back        ,
+    BrowserForward    browser_forward     ,
+    BrowserRefresh    browser_refresh     ,
+    BrowserStop       browser_stop        ,
+    BrowserSearch     browser_search      ,
+    BrowserFavorites  browser_favorites   ,
+    BrowserHome       browser_home        ,
+                      
+    LaunchMail        launch_mail         ,
+    LaunchMediaSelect launch_media_select ,
+    LaunchApp1        launch_app1         ,
+    LaunchApp2        launch_app2         ,
 
-    Macro            macro_          ,
-    Mute             mute            ,
-    Volumedown       volumedown      ,
-    Volumeup         volumeup        ,
-    Power            power           ,
-    Pause            pause           ,
-    Scale            scale           ,
+    Power             power               ,
+    Sleep             sleep               ,
+    Menu              menu                ,
+    Pause             pause               ,
+    Snapshot          snapshot            ,
+    Select            select              ,
+    Print             print               ,
+    Execute           execute             ,
+    Help              help                ,
+    Apps              apps                ,
+                      
+    OemPlus           oem_plus            ,
+    OemComma          oem_comma           ,
+    OemMinus          oem_minus           ,
+    OemPeriod         oem_period          ,
 
-    Zenkakuhankaku   zenkakuhankaku  ,
-    _102nd           _102nd          ,
-    Ro               ro              ,
-    Katakana         katakana        ,
-    Hiragana         hiragana        ,
-    Henkan           henkan          ,
-    Katakanahiragana katakanahiragana,
-    Muhenkan         muhenkan        ,
-    KpJpComma        kp_jp_comma     ,
+    ZenkakuHankaku    zenkaku_hankaku     ,
+    Katakana          katakana            ,
+    Hiragana          hiragana            ,
+    Henkan            henkan              ,
+    KatakanaHiragana  katakana_hiragana   ,
+    Muhenkan          muhenkan            ,
 
-    Hangeul          hangeul         ,
-    Hanja            hanja           ,
-    Yen              yen             ,
+    Hangul            hangul              ,
+    Hanja             hanja               ,
+    Yen               yen                 ,
+
+    Junja             junja               ,
+    Final             final_              ,
+    Kanji             kanji               ,                                
 }
 
 impl Hid for Keyboard {
@@ -371,11 +417,32 @@ impl Hid for Keyboard {
     fn is_connected(&self) -> bool { self.os_hid.is_connected() }
 }
 
+// WISH: get toggle state (e.g is Caps Lock on or off?)
 impl Keyboard {
+    // X11: XQueryKeymap()
     pub fn query_state(&self) -> Result<KeyboardState, ()> {
         unimplemented!{}
     }
-    pub fn query_vkey_state(&self, vkey: VKey) -> Result<bool, ()> {
+    // X11: No equivalent. Use XQueryKeymap()...
+    pub fn query_key_state(&self, key: Key) -> Result<bool, ()> {
+        unimplemented!{}
+    }
+    // X11: XKeycodeToKeysym()
+    pub fn key_from_scancode(&self, scancode: OsScancode) -> Result<Key, ()> {
+        unimplemented!{}
+    }
+    // X11: XKeysymToKeycode()
+    pub fn scancode_from_key(&self, key: Key) -> Result<OsScancode, ()> {
+        unimplemented!{}
+    }
+    // XKeysymToString
+    pub fn query_key_name(&self, key: Key) -> Result<String, ()> {
+        unimplemented!{}
+    }
+}
+
+impl KeyboardState {
+    pub fn key(&self, scancode: OsScancode) -> bool {
         unimplemented!{}
     }
 }
@@ -551,8 +618,8 @@ pub struct PenTabletFeatures {
     pad_button_count: u32,
     stylus_button_count: u32,
     pressure: AbsAxis1DInfo,
-    tilt: Vec2<AbsAxis1DInfo>,
-    raw_position: Vec2<AbsAxis1DInfo>,
+    tilt: AbsAxis2DInfo,
+    raw_position: AbsAxis2DInfo,
 }
 
 /*

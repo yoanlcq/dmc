@@ -5,22 +5,10 @@ use context::Error;
 use super::{Extent2, Vec2, Rgba};
 use decision::Decision;
 use cursor::Cursor;
+use image::Image;
 
-// TODO
-pub struct Icon {
-    pub size: Extent2<u32>,
-}
+pub type Icon = Image<Rgba<u8>>;
 
-use std::ops::Index;
-impl<V: Into<Vec2<u32>>> Index<V> for Icon {
-    type Output = Rgba<u8>;
-    fn index(&self, v: V) -> &Self::Output {
-        unimplemented!{}
-    }
-}
-
-
-// TODO
 #[derive(Debug)]
 pub struct Window {
     pub(crate) os_window: OsWindow,
@@ -285,14 +273,21 @@ impl Window {
     pub fn resize(&self, size: Extent2<u32>) -> Result<(), Error> {
         self.os_window.resize(size)
     }
-
-    pub fn is_cursor_shown(&self) -> Result<bool, Error> { unimplemented!{} }
-    pub fn show_cursor(&self) -> Result<(), Error> { unimplemented!{} }
-    pub fn hide_cursor(&self) -> Result<(), Error> { unimplemented!{} }
-    pub fn set_cursor(&self, _cursor: Rc<Cursor>) -> Result<(), Error> { unimplemented!{} }
-    pub fn cursor(&self) -> Result<Rc<Cursor>, Error> { unimplemented!{} }
-    pub fn set_cursor_position(&self, _pos: Vec2<u32>) -> Result<(), Error> { unimplemented!{} }
-    pub fn cursor_position(&self) -> Result<Vec2<u32>, Error> { unimplemented!{} }
+    pub fn show_cursor(&self) -> Result<(), Error> {
+        self.os_window.show_cursor()
+    }
+    pub fn hide_cursor(&self) -> Result<(), Error> {
+        self.os_window.hide_cursor()
+    }
+    pub fn set_cursor(&self, cursor: Rc<Cursor>) -> Result<(), Error> {
+        self.os_window.set_cursor(cursor)
+    }
+    pub fn set_cursor_position(&self, pos: Vec2<u32>) -> Result<(), Error> {
+        self.os_window.set_cursor_position(pos)
+    }
+    pub fn query_cursor_position(&self) -> Result<Vec2<u32>, Error> {
+        self.os_window.query_cursor_position()
+    }
 
 
     pub fn demand_attention(&self) -> Result<(), Error> {

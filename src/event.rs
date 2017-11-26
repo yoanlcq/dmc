@@ -103,8 +103,8 @@ def_events!{
     // Keyboard
     KeyboardConnected     { keyboard: Rc<Keyboard>, },
     KeyboardDisconnected  { keyboard: Rc<Keyboard>, },
-    KeyboardKeyPressed    { keyboard: Rc<Keyboard>, window: Option<Rc<Window>>, vkey: VKey, key: Key, is_repeat: bool, text: Option<String>, char: Option<String>, },
-    KeyboardKeyReleased   { keyboard: Rc<Keyboard>, window: Option<Rc<Window>>, vkey: VKey, key: Key, },
+    KeyboardKeyPressed    { keyboard: Rc<Keyboard>, window: Option<Rc<Window>>, os_scancode: OsScancode, key: Key, is_repeat: bool, text: Option<String>, },
+    KeyboardKeyReleased   { keyboard: Rc<Keyboard>, window: Option<Rc<Window>>, os_scancode: OsScancode, key: Key, },
     KeyboardFocusGained   { keyboard: Rc<Keyboard>, window: Rc<Window>, },
     KeyboardFocusLost     { keyboard: Rc<Keyboard>, window: Rc<Window>, },
 

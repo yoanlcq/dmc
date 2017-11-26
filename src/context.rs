@@ -40,7 +40,7 @@ impl Context {
     pub fn create_window(&mut self, settings: &WindowSettings) -> Result<Rc<Window>, Error> {
         let os_window = self.0.create_window(settings)?;
         let window = Rc::new(Window { os_window, fps_limit: None, });
-        // TODO add to internal list
+        self.0.add_weak_window(&window);
         Ok(window)
     }
     /// Same as `create_window()`, but immediately shows the window afterwards
@@ -93,8 +93,8 @@ impl Context {
 
     /// Attempts to create an OpenGL context from a dynamically-loaded 
     /// library.
-    pub fn create_gl_context_from_lib<P: AsRef<Path>>(&self, _pf: &GLPixelFormat, _cs: &GLContextSettings, _path: P) -> Result<GLContext, Error> {
-        unimplemented!()
+    pub fn create_gl_context_from_lib<P: AsRef<Path>>(&self, pf: &GLPixelFormat, cs: &GLContextSettings, path: P) -> Result<GLContext, Error> {
+        self.0.create_gl_context_from_lib(&pf.0, cs, path.as_ref()).map(GLContext)
     }
 
     // Reply TRUE to WM_QUERYENDSESSION, in which case we then get WM_ENDSESSION.
@@ -108,17 +108,17 @@ impl Context {
         self.0.disallow_session_termination(reason)
     }
 
-    pub fn query_best_cursor_size(&self, _size_hint: Extent2<u32>) -> Extent2<u32> {
-        unimplemented!{}
+    pub fn query_best_cursor_size(&self, size_hint: Extent2<u32>) -> Extent2<u32> {
+        self.0.query_best_cursor_size(size_hint)
     }
-    pub fn create_cursor(&self, _img: CursorFrame) -> Result<Cursor, Error> {
-        unimplemented!{}
+    pub fn create_rgba32_cursor(&self, frame: CursorData) -> Result<Cursor, Error> {
+        self.0.create_rgba32_cursor(frame).map(Cursor)
     }
-    pub fn create_animated_cursor(&self, _anim: &[CursorFrame]) -> Result<Cursor, Error> {
-        unimplemented!{}
+    pub fn create_animated_rgba32_cursor(&self, anim: &[CursorFrame]) -> Result<Cursor, Error> {
+        self.0.create_animated_rgba32_cursor(anim).map(Cursor)
     }
-    pub fn create_system_cursor(&self, _s: SystemCursor) -> Result<Cursor, Error> {
-        unimplemented!{}
+    pub fn create_system_cursor(&self, s: SystemCursor) -> Result<Cursor, Error> {
+        self.0.create_system_cursor(s).map(Cursor)
     }
 }
 

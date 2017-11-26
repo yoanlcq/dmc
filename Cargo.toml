@@ -14,8 +14,15 @@ version = "0.2.0" # remember to update html_root_url
 log = "0.3.8"
 num-traits = "0.1.40"
 libc = "0.2.26"
-vek = { git = "https://github.com/yoanlcq/vek", features = ["vec2", "vec3", "extent2", "extent3", "rgb", "rgba"] }
+#image = { version = "0.17.0", default-features = false }
+vek = { git = "https://github.com/yoanlcq/vek", features = ["image", "vec2", "vec3", "extent2", "extent3", "rgb", "rgba"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies.x11]
 version = "2.16.0"
 features = ["xlib", "glx", "xinput"]
+
+[target.'cfg(any(target_os = "linux"))'.dependencies]
+#libudev = "0.2"
+#evdev = "0.10.1"
+libevdev-sys = "0.1.1"
+libudev-sys = "0.1.3"

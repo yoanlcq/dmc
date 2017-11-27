@@ -2,7 +2,14 @@ use std::time::Instant;
 use std::ops::Range;
 use std::rc::Rc;
 use super::{Vec2, Vec3};
-use os::{OsContext, OsHid};
+use os::{
+    OsKeyboardState,
+    OsKeyboard,
+    OsMouse,
+    OsController,
+    OsTablet,
+    OsTouch,
+};
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum Bus {
@@ -18,20 +25,23 @@ pub enum Bus {
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HidToken(pub u32);
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct HidProductInfo {
+    pub vendor_id: u16,
+    pub product_id: u16, // NOTE: ID_MODEL_ID on udev
+    pub vendor_name: String,
+    pub product_name: String, // NOTE: ID_MODEL on udev
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HidInfo {
     pub token: HidToken,
-
     pub name: String,
-    pub product_name: String, // NOTE: ID_MODEL on udev
-    pub product_id: u16, // NOTE: ID_MODEL_ID on udev
-    pub vendor_name: String,
-    pub vendor_id: u16,
-    pub serial: String,
-    pub bus: Bus,
-    pub plug_time: Instant,
-
+    // pub serial: Option<String>,
+    pub product_info: Option<HidProductInfo>,
     //pub guid: Option<Guid>,
+    pub plug_time: Instant,
+    pub bus: Bus,
     //pub driver_version: Option<Semver>,
 }
 
@@ -134,12 +144,7 @@ pub enum MouseButton {
 
 
 #[derive(Debug)]
-pub struct Mouse {
-    os_hid: OsHid,
-    os_context: Rc<OsContext>,
-    info: HidInfo,
-    // some_extra_mousey_info: Foo,
-}
+pub struct Mouse(pub(crate) OsMouse);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct MouseState {
@@ -154,16 +159,16 @@ pub struct MouseState {
 }
 
 impl Hid for Mouse {
-    fn info(&self) -> &HidInfo { &self.info }
-    fn is_connected(&self) -> bool { self.os_hid.is_connected() }
+    fn info(&self) -> &HidInfo { self.0.info() }
+    fn is_connected(&self) -> bool { self.0.is_connected() }
 }
 
 impl Mouse {
     pub fn query_state(&self) -> Result<MouseState, ()> {
-        unimplemented!{}
+        self.0.query_state()
     }
     pub fn warp_absolute(&self, p: Vec2<u32>) -> Result<(), ()> {
-        unimplemented!{}
+        self.0.warp_absolute(p)
     }
 }
 
@@ -174,12 +179,7 @@ impl Mouse {
 
 
 #[derive(Debug)]
-pub struct Keyboard {
-    os_hid: OsHid,
-    os_context: Rc<OsContext>,
-    info: HidInfo,
-    // some_extra_keyboardey_info: Foo,
-}
+pub struct Keyboard(pub(crate) OsKeyboard);
 
 macro_rules! vkeys {
     ($($VKey:ident $vkey:ident,)+) => {
@@ -219,11 +219,9 @@ macro_rules! vkeys {
         ///
         /// Under Windows, it's `GetKeyboardState()`.
         /// Under X11, it's `XQueryKeymap()`.
-        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-        pub struct KeyboardState {
+        #[derive(Debug)]
+        pub struct KeyboardState(pub(crate) OsKeyboardState);
             // $(pub $vkey: bool),+
-            // TODO
-        }
     };
 }
 
@@ -413,37 +411,32 @@ vkeys!{
 }
 
 impl Hid for Keyboard {
-    fn info(&self) -> &HidInfo { &self.info }
-    fn is_connected(&self) -> bool { self.os_hid.is_connected() }
+    fn info(&self) -> &HidInfo { self.0.info() }
+    fn is_connected(&self) -> bool { self.0.is_connected() }
 }
 
 // WISH: get toggle state (e.g is Caps Lock on or off?)
 impl Keyboard {
-    // X11: XQueryKeymap()
     pub fn query_state(&self) -> Result<KeyboardState, ()> {
-        unimplemented!{}
+        self.0.query_state()
     }
-    // X11: No equivalent. Use XQueryKeymap()...
     pub fn query_key_state(&self, key: Key) -> Result<bool, ()> {
-        unimplemented!{}
+        self.0.query_key_state(key)
     }
-    // X11: XKeycodeToKeysym()
     pub fn key_from_scancode(&self, scancode: OsScancode) -> Result<Key, ()> {
-        unimplemented!{}
+        self.0.key_from_scancode(scancode)
     }
-    // X11: XKeysymToKeycode()
     pub fn scancode_from_key(&self, key: Key) -> Result<OsScancode, ()> {
-        unimplemented!{}
+        self.0.scancode_from_key(key)
     }
-    // XKeysymToString
     pub fn query_key_name(&self, key: Key) -> Result<String, ()> {
-        unimplemented!{}
+        self.0.query_key_name(key)
     }
 }
 
 impl KeyboardState {
     pub fn key(&self, scancode: OsScancode) -> bool {
-        unimplemented!{}
+        self.0.key(scancode)
     }
 }
 
@@ -575,30 +568,23 @@ controller_items!{
 
 
 #[derive(Debug)]
-pub struct Controller {
-    os_hid: OsHid,
-    os_context: Rc<OsContext>,
-    info: HidInfo,
-    features: ControllerFeatures,
-    kind: ControllerKind,
-    // some_extra_gamepadey_info: Foo,
-}
+pub struct Controller(pub(crate) OsController);
 
 impl Hid for Controller {
-    fn info(&self) -> &HidInfo { &self.info }
-    fn is_connected(&self) -> bool { self.os_hid.is_connected() }
+    fn info(&self) -> &HidInfo { self.0.info() }
+    fn is_connected(&self) -> bool { self.0.is_connected() }
 }
 
 impl Controller {
-    pub fn kind(&self) -> ControllerKind { unimplemented!{} }
-    pub fn features(&self) -> ControllerFeatures { unimplemented!{} }
+    pub fn kind(&self) -> ControllerKind { self.0.kind() }
+    pub fn features(&self) -> ControllerFeatures { self.0.features() }
     pub fn query_state(&self) -> Result<ControllerState, ()> {
-        unimplemented!{}
+        self.0.query_state()
     }
-    pub fn query_button (&self, btn : ControllerButton) -> Result<bool, ()> { unimplemented!{} }
-    pub fn query_1d_axis(&self, axis: ControllerAxis1D) -> Result<Axis1DState, ()> { unimplemented!{} }
-    pub fn query_2d_axis(&self, axis: ControllerAxis2D) -> Result<Axis2DState, ()> { unimplemented!{} }
-    pub fn query_3d_axis(&self, axis: ControllerAxis3D) -> Result<Axis3DState, ()> { unimplemented!{} }
+    pub fn query_button (&self, btn : ControllerButton) -> Result<bool, ()> { self.0.query_button(btn) }
+    pub fn query_1d_axis(&self, axis: ControllerAxis1D) -> Result<Axis1DState, ()> { self.0.query_1d_axis(axis) }
+    pub fn query_2d_axis(&self, axis: ControllerAxis2D) -> Result<Axis2DState, ()> { self.0.query_2d_axis(axis) }
+    pub fn query_3d_axis(&self, axis: ControllerAxis3D) -> Result<Axis3DState, ()> { self.0.query_3d_axis(axis) }
 }
 
 
@@ -614,7 +600,7 @@ impl Controller {
 // 4DMouseRotation
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct PenTabletFeatures {
+pub struct TabletFeatures {
     pad_button_count: u32,
     stylus_button_count: u32,
     pressure: AbsAxis1DInfo,
@@ -638,7 +624,7 @@ pub enum ToolType {
     Pen, Eraser,
 }
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct PenTabletState {
+pub struct TabletState {
     pad_buttons: [bool; 32],
     stylus_buttons: [bool; 2],
     pressure: Axis1DState,
@@ -648,22 +634,16 @@ pub struct PenTabletState {
 }
 
 #[derive(Debug)]
-pub struct PenTablet {
-    os_hid: OsHid,
-    os_context: Rc<OsContext>,
-    info: HidInfo,
-    features: PenTabletFeatures,
-    // some_extra_info: Foo,
+pub struct Tablet(pub(crate) OsTablet);
+
+impl Hid for Tablet {
+    fn info(&self) -> &HidInfo { self.0.info() }
+    fn is_connected(&self) -> bool { self.0.is_connected() }
 }
 
-impl Hid for PenTablet {
-    fn info(&self) -> &HidInfo { &self.info }
-    fn is_connected(&self) -> bool { self.os_hid.is_connected() }
-}
-
-impl PenTablet {
-    pub fn features(&self) -> PenTabletFeatures { unimplemented!{} }
-    pub fn query_state(&self) -> Result<PenTabletState, ()> { unimplemented!{} }
+impl Tablet {
+    pub fn features(&self) -> TabletFeatures { self.0.features() }
+    pub fn query_state(&self) -> Result<TabletState, ()> { self.0.query_state() }
 }
 
 //
@@ -672,5 +652,5 @@ impl PenTablet {
 
 // TODO
 #[derive(Debug)]
-pub struct Touch;
+pub struct Touch(pub(crate) OsTouch);
 

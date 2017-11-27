@@ -752,14 +752,6 @@ pub struct SharedContext {
 pub struct OsContext(Rc<SharedContext>);
 
 #[derive(Debug)]
-pub struct OsHid {
-    pub shared_context: Rc<SharedContext>,
-    pub udev_device: *mut udev::udev_device,
-    pub fd: c_int,
-    pub evdev: *mut evdev::libevdev,
-    pub xi_devices: Vec<xi::XDevice>,
-}
-#[derive(Debug)]
 pub struct OsWindow {
     pub shared_context: Rc<SharedContext>,
     pub x_window: x::Window,
@@ -785,6 +777,114 @@ pub struct OsCursor {
     pub shared_context: Rc<SharedContext>,
     pub x_cursor: x::Cursor,
     pub frames: Vec<xrender::XAnimCursor>,
+}
+#[derive(Debug)]
+pub(crate) struct OsHidUdevXI2 {
+    pub shared_context: Rc<SharedContext>,
+    pub info: HidInfo,
+    pub udev_device: *mut udev::udev_device,
+    pub xi2_id: c_int,
+    pub xi2_info: *mut xi2::XIDeviceInfo,
+    pub xi2_info_count: c_int,
+}
+#[derive(Debug)]
+pub(crate) struct OsHidUdevEvdev {
+    pub shared_context: Rc<SharedContext>,
+    pub info: HidInfo,
+    pub udev_device: *mut udev::udev_device,
+    pub evdev: *mut evdev::libevdev,
+    pub fd: c_int,
+}
+#[derive(Debug)]
+pub struct OsMouse(pub(crate) OsHidUdevXI2);
+#[derive(Debug)]
+pub struct OsKeyboard(pub(crate) OsHidUdevXI2);
+#[derive(Debug)]
+pub struct OsTablet(pub(crate) OsHidUdevXI2);
+#[derive(Debug)]
+pub struct OsTouch(pub(crate) OsHidUdevXI2);
+#[derive(Debug)]
+pub struct OsController(pub(crate) OsHidUdevEvdev);
+#[derive(Debug)]
+pub struct OsKeyboardState {
+    pub shared_context: Rc<SharedContext>,
+    pub bits: [u8; 32],
+}
+
+impl Hid for OsHidUdevXI2 {
+    fn info(&self) -> &HidInfo { &self.info }
+    fn is_connected(&self) -> bool { unimplemented!{} }
+}
+impl Hid for OsHidUdevEvdev {
+    fn info(&self) -> &HidInfo { &self.info }
+    fn is_connected(&self) -> bool { unimplemented!{} }
+}
+
+macro_rules! impl_hid_for_stuff {
+    ($($OsDevice:ident)+) => { $(
+        impl Hid for $OsDevice {
+            fn info(&self) -> &HidInfo { self.0.info() }
+            fn is_connected(&self) -> bool { self.0.is_connected() }
+        }
+    )+ };
+}
+impl_hid_for_stuff!(OsMouse OsKeyboard OsTablet OsTouch OsController);
+
+
+impl OsMouse {
+    pub fn query_state(&self) -> Result<MouseState, ()> {
+        unimplemented!{}
+    }
+    pub fn warp_absolute(&self, p: Vec2<u32>) -> Result<(), ()> {
+        unimplemented!{}
+    }
+}
+impl OsKeyboard {
+    // X11: XQueryKeymap()
+    pub fn query_state(&self) -> Result<KeyboardState, ()> {
+        unimplemented!{}
+    }
+    // X11: No equivalent. Use XQueryKeymap()...
+    pub fn query_key_state(&self, key: Key) -> Result<bool, ()> {
+        unimplemented!{}
+    }
+    // X11: XKeycodeToKeysym()
+    pub fn key_from_scancode(&self, scancode: OsScancode) -> Result<Key, ()> {
+        unimplemented!{}
+    }
+    // X11: XKeysymToKeycode()
+    pub fn scancode_from_key(&self, key: Key) -> Result<OsScancode, ()> {
+        unimplemented!{}
+    }
+    // XKeysymToString
+    pub fn query_key_name(&self, key: Key) -> Result<String, ()> {
+        unimplemented!{}
+    }
+}
+impl OsKeyboardState {
+    pub fn key(&self, scancode: OsScancode) -> bool {
+        unimplemented!{}
+    }
+}
+impl OsController {
+    pub fn kind(&self) -> ControllerKind { unimplemented!{} }
+    pub fn features(&self) -> ControllerFeatures { unimplemented!{} }
+    pub fn query_state(&self) -> Result<ControllerState, ()> {
+        unimplemented!{}
+    }
+    pub fn query_button (&self, btn : ControllerButton) -> Result<bool, ()> {        unimplemented!{} }
+    pub fn query_1d_axis(&self, axis: ControllerAxis1D) -> Result<Axis1DState, ()> { unimplemented!{} }
+    pub fn query_2d_axis(&self, axis: ControllerAxis2D) -> Result<Axis2DState, ()> { unimplemented!{} }
+    pub fn query_3d_axis(&self, axis: ControllerAxis3D) -> Result<Axis3DState, ()> { unimplemented!{} }
+}
+
+impl OsTablet {
+    pub fn features(&self) -> TabletFeatures {
+        unimplemented!{}
+    }
+    pub fn query_state(&self) -> Result<TabletState, ()> {
+        unimplemented!{}
+    }
 }
 
 
@@ -837,11 +937,20 @@ impl Drop for OsWindow {
     }
 }
 
-impl Drop for OsHid {
+impl Drop for OsHidUdevEvdev {
     fn drop(&mut self) {
         unsafe {
             evdev::libevdev_free(self.evdev);
             libc::close(self.fd);
+            udev::udev_device_unref(self.udev_device);
+        }
+    }
+}
+
+impl Drop for OsHidUdevXI2 {
+    fn drop(&mut self) {
+        unsafe {
+            return unimplemented!{};
             udev::udev_device_unref(self.udev_device);
         }
     }
@@ -3171,12 +3280,6 @@ impl OsGLContext {
         unimplemented!("We don't know how the situation is in OSes other than Linux! This could require moving to x11-dl.");
         #[cfg(target_os = "linux")]
         glXGetProcAddressARB(name as *const _)
-    }
-}
-
-impl OsHid {
-    pub fn is_connected(&self) -> bool {
-        unimplemented!{}
     }
 }
 

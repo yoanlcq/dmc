@@ -123,16 +123,16 @@ def_events!{
     // + Q: Can we get the tablet's layout ? (answer: yes, use libwacom)
     // For future extensions, see http://www.wacomeng.com/windows/docs/NotesForTabletAwarePCDevelopers.html
     // FIXME pad_buttons
-    PenTabletConnected            { pen_tablet: Rc<PenTablet>, },
-    PenTabletDisconnected         { pen_tablet: Rc<PenTablet>, },
-    PenTabletPadButtonPressed     { pen_tablet: Rc<PenTablet>, window: Option<Rc<Window>>, button: u32, },
-    PenTabletPadButtonReleased    { pen_tablet: Rc<PenTablet>, window: Option<Rc<Window>>, button: u32, },
-    PenTabletStylusToolType       { pen_tablet: Rc<PenTablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, tool_type: ToolType, },
-    PenTabletStylusButtonPressed  { pen_tablet: Rc<PenTablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
-    PenTabletStylusButtonReleased { pen_tablet: Rc<PenTablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
-    PenTabletStylusMotion         { pen_tablet: Rc<PenTablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
-    PenTabletStylusPressed        { pen_tablet: Rc<PenTablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
-    PenTabletStylusReleased       { pen_tablet: Rc<PenTablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
+    TabletConnected            { pen_tablet: Rc<Tablet>, },
+    TabletDisconnected         { pen_tablet: Rc<Tablet>, },
+    TabletPadButtonPressed     { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, button: u32, },
+    TabletPadButtonReleased    { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, button: u32, },
+    TabletStylusToolType       { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, tool_type: ToolType, },
+    TabletStylusButtonPressed  { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
+    TabletStylusButtonReleased { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
+    TabletStylusMotion         { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
+    TabletStylusPressed        { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
+    TabletStylusRaised         { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
 
     // TODO: Haptic features for those three.
     // Gamepad

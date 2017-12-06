@@ -1,10 +1,9 @@
 use std::rc::Rc;
-use super::{Vec2, Extent2};
+use super::{Vec2, Extent2, Rect};
 use timeout::Timeout;
-use hid;
-use hid::*;
 use context::Context;
 use window::Window;
+use hid::*;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum Click {
@@ -62,8 +61,9 @@ def_events!{
     //
     WindowShown          { window: Rc<Window>, },
     WindowHidden         { window: Rc<Window>, },
-    WindowContentDamaged { window: Rc<Window>, },
-    WindowMovedResized   { window: Rc<Window>, position: Vec2<i32>, size: Extent2<u32>, /* by_user: bool, */ },
+    WindowDamaged        { window: Rc<Window>, zone: Rect<u32, u32>, more_to_follow: usize, },
+    WindowMoved          { window: Rc<Window>, position: Vec2<i32>, /* by_user: bool, */ },
+    WindowResized        { window: Rc<Window>, size: Extent2<u32>, /* by_user: bool, */ },
     WindowMinimized      { window: Rc<Window>, },
     WindowMaximized      { window: Rc<Window>, },
     WindowRestored       { window: Rc<Window>, },
@@ -90,14 +90,14 @@ def_events!{
     // (that is, pushing the wheel forwards) and negative otherwise.
     MouseConnected      { mouse: Rc<Mouse>, },
     MouseDisconnected   { mouse: Rc<Mouse>, },
-    MouseButtonPressed  { mouse: Rc<Mouse>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, displacement: Vec2<i32>, button: MouseButton, click: Click, },
-    MouseButtonReleased { mouse: Rc<Mouse>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, displacement: Vec2<i32>, button: MouseButton, },
-    MouseScroll         { mouse: Rc<Mouse>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, displacement: Vec2<i32>, scroll: Vec2<i32>, },
-    MouseMotion         { mouse: Rc<Mouse>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, displacement: Vec2<i32>, },
-    MouseEnter          { mouse: Rc<Mouse>, window:        Rc<Window> , position: Vec2<u32>, abs_position: Vec2<i32>,                          },
-    MouseLeave          { mouse: Rc<Mouse>, window:        Rc<Window> , position: Vec2<u32>, abs_position: Vec2<i32>, displacement: Vec2<i32>, },
-    MouseFocusGained    { mouse: Rc<Mouse>, window:        Rc<Window> , position: Vec2<u32>, abs_position: Vec2<i32>,                          },
-    MouseFocusLost      { mouse: Rc<Mouse>, window:        Rc<Window> , position: Vec2<u32>, abs_position: Vec2<i32>, displacement: Vec2<i32>, },
+    MouseButtonPressed  { mouse: Rc<Mouse>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, displacement: Vec2<f64>, button: MouseButton, click: Click, },
+    MouseButtonReleased { mouse: Rc<Mouse>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, displacement: Vec2<f64>, button: MouseButton, },
+    MouseScroll         { mouse: Rc<Mouse>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, displacement: Vec2<f64>, scroll: Vec2<i32>, },
+    MouseMotion         { mouse: Rc<Mouse>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, displacement: Vec2<f64>, },
+    MouseEnter          { mouse: Rc<Mouse>, window:        Rc<Window> , position: Vec2<f64>, abs_position: Vec2<f64>, },
+    MouseLeave          { mouse: Rc<Mouse>, window:        Rc<Window> , position: Vec2<f64>, abs_position: Vec2<f64>, displacement: Vec2<f64>, },
+    MouseFocusGained    { mouse: Rc<Mouse>, window:        Rc<Window> , position: Vec2<f64>, abs_position: Vec2<f64>, },
+    MouseFocusLost      { mouse: Rc<Mouse>, window:        Rc<Window> , position: Vec2<f64>, abs_position: Vec2<f64>, displacement: Vec2<f64>, },
     // TODO: Trackball features for the mouse.
 
     // Keyboard
@@ -127,12 +127,12 @@ def_events!{
     TabletDisconnected         { pen_tablet: Rc<Tablet>, },
     TabletPadButtonPressed     { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, button: u32, },
     TabletPadButtonReleased    { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, button: u32, },
-    TabletStylusToolType       { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, tool_type: ToolType, },
-    TabletStylusButtonPressed  { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
-    TabletStylusButtonReleased { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
-    TabletStylusMotion         { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
-    TabletStylusPressed        { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
-    TabletStylusRaised         { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<u32>, abs_position: Vec2<i32>, pressure: Axis1DState, tilt: Axis2DState, raw_position: Axis2DState, },
+    TabletStylusToolType       { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, tool_type: ToolType, },
+    TabletStylusButtonPressed  { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, pressure: Axis1DState, tilt: Axis2DState, high_res_position: Axis2DState, },
+    TabletStylusButtonReleased { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, pressure: Axis1DState, tilt: Axis2DState, high_res_position: Axis2DState, },
+    TabletStylusMotion         { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, pressure: Axis1DState, tilt: Axis2DState, high_res_position: Axis2DState, },
+    TabletStylusPressed        { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, pressure: Axis1DState, tilt: Axis2DState, high_res_position: Axis2DState, },
+    TabletStylusRaised         { pen_tablet: Rc<Tablet>, window: Option<Rc<Window>>, position: Vec2<f64>, abs_position: Vec2<f64>, pressure: Axis1DState, tilt: Axis2DState, high_res_position: Axis2DState, },
 
     // TODO: Haptic features for those three.
     // Gamepad
@@ -149,7 +149,6 @@ def_events!{
     // Axis current value is separated. Axis contains:
     // - Copy of axis info (minmax, deadzone, fuzz, etc)
     // - axis identifier (enum)
-
 }
 
 #[derive(Debug)]

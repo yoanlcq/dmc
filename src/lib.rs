@@ -9,8 +9,6 @@
 #![doc(test(attr(deny(warnings))))]
 #![cfg_attr(feature="cargo-clippy", allow(doc_markdown))]
 
-#![allow(warnings)] // FIXME: Remove before release
-
 extern crate num_traits;
 extern crate vek;
 #[macro_use] extern crate log;

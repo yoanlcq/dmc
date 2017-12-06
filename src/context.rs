@@ -47,7 +47,7 @@ impl Context {
     /// if it succeeds.
     pub fn create_window_and_show(&mut self, settings: &WindowSettings) -> Result<Rc<Window>, Error> {
         let w = self.create_window(settings)?;
-        w.show();
+        w.show()?;
         Ok(w)
     }
 

@@ -5,7 +5,6 @@
 
 use std::ops::{Index, IndexMut};
 use Vec2;
-use Rgba;
 use Extent2;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]

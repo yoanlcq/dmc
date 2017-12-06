@@ -1,6 +1,5 @@
 use std::time::Instant;
 use std::ops::Range;
-use std::rc::Rc;
 use super::{Vec2, Vec3};
 use os::{
     OsKeyboardState,
@@ -139,7 +138,7 @@ pub enum MouseButton {
     Task,
     Forward,
     Back,
-    Extra(u32),
+    Raw(u32),
 }
 
 
@@ -540,7 +539,7 @@ controller_items!{
         LShoulder l_shoulder, LShoulder2 l_shoulder2, 
         RShoulder r_shoulder, RShoulder2 r_shoulder2, 
         LStickClick l_stick_click,
-        RStickClick R_stick_click,
+        RStickClick r_stick_click,
         Select select, Start start, Mode mode,
         // Joystick
         Trigger trigger, Pinkie pinkie, Dead dead,

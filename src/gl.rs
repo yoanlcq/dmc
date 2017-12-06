@@ -1,7 +1,6 @@
 use Semver;
 use Decision;
 use os::*;
-use window::*;
 use std::os::raw::c_char;
 
 

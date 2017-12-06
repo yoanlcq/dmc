@@ -1,0 +1,111 @@
+This fiasco only exists on X11 with the wacom driver. (Source: Qt's TabletEvent)
+
+Commands:
+- xinput list
+- xinput list-props <dev>
+- xinput test-xi2
+- xinput test-xi2 <dev>
+- udevadm info /dev/input/eventXX
+- udevadm info -a /dev/input/eventXX
+- (A small custom utility using libwacom)
+
+XI2:
+pad
+- id: 15
+- name: "Wacom Bamboo Comic 2FG Pad pad"
+- Device Node: "/dev/input/event15"
+- Wacom Tool Type: "PAD" (atom)
+stylus
+- id: 16
+- name: "Wacom Bamboo Comic 2FG Pen stylus"
+- Device Node: "/dev/input/event13"
+- Wacom Tool Type: "STYLUS" (atom)
+eraser
+- id: 17
+- name: "Wacom Bamboo Comic 2FG Pen eraser"
+- Device Node: "/dev/input/event13"
+- Wacom Tool Type: "ERASER" (atom)
+touch
+- id: 18
+- name: "Wacom Bamboo Comic 2FG Finger touch"
+- Device Node: "/dev/input/event14"
+- Wacom Tool Type: "TOUCH" (atom)
+
+Udev:
+/dev/input/event15:
+E: LIBINPUT_DEVICE_GROUP=3/56a/d8/100:usb-0000:00:14.0-2
+E: ID_USB_INTERFACES=:030102:030000:
+E: ID_INPUT_TABLET=1
+E: ID_INPUT_TABLET_PAD=1
+
+/dev/input/event13:
+E: LIBINPUT_DEVICE_GROUP=3/56a/d8/100:usb-0000:00:14.0-2
+E: ID_USB_INTERFACES=:030102:030000:
+E: ID_INPUT_TABLET=1
+E: ID_INPUT_WIDTH_MM=216
+E: ID_INPUT_HEIGHT_MM=137
+
+/dev/input/event14:
+E: LIBINPUT_DEVICE_GROUP=3/56a/d8/100:usb-0000:00:14.0-2
+E: ID_USB_INTERFACES=:030102:030000:
+E: ID_INPUT_TABLET=1
+E: ID_INPUT_TOUCHPAD=1
+E: ID_INPUT_TOUCHPAD_INTEGRATION=external
+E: ID_INPUT_WIDTH_MM=185
+E: ID_INPUT_HEIGHT_MM=125
+E: LIBINPUT_MODEL_WACOM_TOUCHPAD=1
+
+Wacom:
+[Device]
+Name=Wacom Bamboo Fun medium (2+FG)
+DeviceMatch=usb:056a:00d8;
+Class=Bamboo
+Width=9
+Height=5
+IntegratedIn=
+Layout=bamboo-4fg-fun-m-pt.svg
+Styli=0xfffff;0xffffe;
+
+[Features]
+Reversible=true
+Stylus=true
+Ring=false
+Ring2=false
+Touch=true
+TouchSwitch=false
+StatusLEDs=
+NumStrips=0
+Buttons=4
+[Buttons]
+Left=A;B;C;D;
+Right=
+Top=
+Bottom=
+Touchstrip=
+Touchstrip2=
+OLEDs=
+Ring=
+Ring2=
+RingNumModes=0
+Ring2NumModes=0
+StripsNumModes=0
+
+[Stylus 0xfffff]
+Name=General Pen
+Buttons=2
+HasEraser=true
+IsEraser=false
+HasLens=false
+HasWheel=false
+Axes=Tilt;Distance;Pressure;
+Type=General
+
+[Stylus 0xffffe]
+Name=General Pen Eraser
+Buttons=2
+HasEraser=false
+IsEraser=true
+HasLens=false
+HasWheel=false
+Axes=Tilt;Distance;Pressure;
+Type=General

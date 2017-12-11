@@ -132,7 +132,7 @@ install:
 script:
   - cargo build --target $TARGET
   - cargo build --target $TARGET --release
-  - pushd examples/window
+  - pushd examples/window_gl
   - cargo build --target $TARGET
   - cargo build --target $TARGET --release
   - popd

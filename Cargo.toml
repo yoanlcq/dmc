@@ -19,7 +19,7 @@ vek = { version = "0.7", features = ["image", "vec2", "vec3", "extent2", "extent
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies.x11]
 version = "2.16.0"
-features = ["xlib", "glx", "xinput"]
+features = ["xlib", "glx", "xinput", "xrender"]
 
 [target.'cfg(any(target_os = "linux"))'.dependencies]
 #libudev = "0.2"

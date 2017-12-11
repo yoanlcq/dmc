@@ -13,7 +13,6 @@ use std::rc::Rc;
 use dmc::*;
 use dmc::gl::*;
 use dmc::decision::Decision;
-use dmc::Extent2;
 
 use gl::types::*;
 
@@ -63,15 +62,18 @@ fn main() {
     let window = Rc::get_mut(&mut window).unwrap();
     window.make_gl_context_current(Some(&gl_ctx));
 
-    gl::load_with(|s| match gl_ctx.get_proc_address(s) {
-        Some(p) => {
-            info!("Loaded `{}`", s);
-            p as *const _
-        },
-        None => {
-            info!("Couldn't load `{}`", s);
-            ptr::null()
-        },
+    gl::load_with(|s| {
+        let s = CString::new(s).unwrap();
+        match unsafe { gl_ctx.get_proc_address(s.as_ptr()) } {
+            Some(p) => {
+                info!("Loaded `{}`", s.to_string_lossy());
+                p as *const _
+            },
+            None => {
+                info!("Couldn't load `{}`", s.to_string_lossy());
+                ptr::null()
+            },
+        }
     });
 
 

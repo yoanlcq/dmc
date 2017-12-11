@@ -15,7 +15,7 @@ log = "0.3.8"
 num-traits = "0.1.40"
 libc = "0.2.26"
 #image = { version = "0.17.0", default-features = false }
-vek = { version = "0.6", features = ["image", "vec2", "vec3", "extent2", "extent3", "rgb", "rgba"] }
+vek = { version = "0.7", features = ["image", "vec2", "vec3", "extent2", "extent3", "rgb", "rgba"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies.x11]
 version = "2.16.0"

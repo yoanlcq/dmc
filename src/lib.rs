@@ -3,23 +3,35 @@
 //! This is an attempt at an SDL2 rewrite in Rust. The end goal is to get
 //! rid of the dependency on SDL2's DLL for Rust apps.
 
+// New design attempt:
+//
+// - C'est le contexte qui owne tout : les fenêtres, les devices, etc.
+//   Raison: Il a besoin d'établir le mapping.
+// - Les borrows et les lifetimes sont chiants.
+//   Utiliser des Rc, parce qu'on peut.
+//   En plus les lifetimes des objets dépendent de la plateforme.
+//   Un Event devrait être self-contained.
+// - Il n'y a pas de solution parfaite
+//   Les solutions existantes sont déjà des hacks. Pas thread-safe,
+//   qui stockent des infos redondantes, etc.
+
 #![doc(html_root_url = "https://docs.rs/dmc/0.2.0")]
-//#![feature(test)]
-//#![warn(missing_docs)]
-#![doc(test(attr(deny(warnings))))]
-#![cfg_attr(feature="cargo-clippy", allow(doc_markdown))]
+#![feature(optin_builtin_traits)]
 
-extern crate num_traits;
+#[macro_use]
+extern crate log;
+extern crate libc;
 extern crate vek;
-#[macro_use] extern crate log;
-
 
 pub use vek::{
     Vec2, Vec3, Vec4, Extent2, Extent3, Rgba, Rgb,
     Rect,
 };
 
-// Nontrivial modules go first
+mod version_cmp;
+
+pub mod error;
+pub use error::{ErrorKind, Error};
 pub mod context;
 pub use context::Context;
 pub mod window;
@@ -30,25 +42,8 @@ pub mod hid;
 pub use hid::*;
 pub mod event;
 pub use event::{Event, Click};
-pub mod image;
-pub use image::Image;
-
-pub mod semver;
-pub use semver::Semver;
-pub mod timeout;
-pub use timeout::Timeout;
 pub mod battery;
 pub use battery::{BatteryState, BatteryStatus};
-
-#[macro_use]
-mod option_alternative;
-pub mod decision;
-pub use decision::Decision;
-pub use decision::Decision::*;
-pub mod knowledge;
-pub use knowledge::Knowledge;
-pub use knowledge::Knowledge::*;
-
 
 #[cfg(target_os="linux")]
 #[path="os/linux.rs"]

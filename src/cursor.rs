@@ -1,7 +1,6 @@
 use os::OsCursor;
 use std::time::Duration;
-use image::Image;
-use super::{Vec2, Rgba};
+use super::{Vec2, Rgba, Extent2};
 
 #[derive(Debug)]
 pub struct Cursor(pub(crate) OsCursor);
@@ -42,8 +41,9 @@ pub struct CursorFrame {
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct CursorData {
     pub hotspot: Vec2<u32>,
-    pub image: Image<Rgba<u8>>,
-    pub and_mask: Image<bool>,
-    pub xor_mask: Image<bool>,
+    pub size: Extent2<u32>,
+    pub rgba_data: Vec<Rgba<u8>>,
+    pub and_mask: Vec<bool>,
+    pub xor_mask: Vec<bool>,
 }
 

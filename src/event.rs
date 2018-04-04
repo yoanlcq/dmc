@@ -1,6 +1,6 @@
 use std::rc::Rc;
+use std::time::Duration;
 use super::{Vec2, Extent2, Rect};
-use timeout::Timeout;
 use context::Context;
 use window::Window;
 use hid::*;
@@ -162,7 +162,7 @@ pub struct PeekIter<'c> {
 #[derive(Debug)]
 pub struct WaitIter<'c> {
     pub(crate) context: &'c mut Context,
-    pub(crate) timeout: Timeout,
+    pub(crate) timeout: Duration,
 }
 
 impl<'c> Iterator for PollIter<'c> {

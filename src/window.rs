@@ -1,13 +1,9 @@
 use std::rc::Rc;
 use gl::*;
 use os::*;
-use context::Error;
 use super::{Extent2, Vec2, Rgba};
-use decision::Decision;
 use cursor::Cursor;
-use image::Image;
-
-pub type Icon = Image<Rgba<u8>>;
+use error::Result as SResult;
 
 #[derive(Debug)]
 pub struct Window {
@@ -103,9 +99,9 @@ impl<'a, T: Into<Extent2<u32>>> From<T> for WindowSettings<'a> {
 #[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Borders {
     /// Thickness, in pixels. If `Auto`, use the window manager's default.
-    pub thickness: Decision<u16>,
+    pub thickness: Option<u16>,
     /// If `Auto`, use the window manager's default.
-    pub color: Decision<Rgba<u8>>,
+    pub color: Option<Rgba<u8>>,
 }
 
 #[allow(missing_docs)]
@@ -147,29 +143,29 @@ impl Window {
     /// If it didn't, there would be a small chance that swapping buffers
     /// happen before showing the window, even if you did the operations
     /// in the correct order.
-    pub fn show(&self) -> Result<(), Error> { self.os_window.show() }
+    pub fn show(&self) -> SResult<()> { self.os_window.show() }
     /// The obvious reciprocal of `show()`.
-    pub fn hide(&self) -> Result<(), Error> { self.os_window.hide() }
+    pub fn hide(&self) -> SResult<()> { self.os_window.hide() }
 
     /// Sets the window's title.
-    pub fn set_title(&self, title: &str) -> Result<(), Error> {
+    pub fn set_title(&self, title: &str) -> SResult<()> {
         self.os_window.set_title(title)
     }
     #[allow(missing_docs)]
-    pub fn set_icon(&self, icon: Icon) -> Result<(), Error> {
-        self.os_window.set_icon(icon)
+    pub fn set_icon(&self, size: Extent2<u32>, data: &[Rgba<u8>]) -> SResult<()> {
+        self.os_window.set_icon(size, data)
     }
     #[allow(missing_docs)]
-    pub fn clear_icon(&self) -> Result<(), Error> {
+    pub fn clear_icon(&self) -> SResult<()> {
         self.os_window.clear_icon()
     }
     /// Attempts to set the window's borders.
-    pub fn set_style(&self, style: &WindowStyle) -> Result<(), Error> {
+    pub fn set_style(&self, style: &WindowStyle) -> SResult<()> {
         self.os_window.set_style(style)
     }
     /// Centers a window relatively to the space it is in, with regards to
     /// its size.
-    pub fn recenter(&self) -> Result<(), Error> {
+    pub fn recenter(&self) -> SResult<()> {
         self.os_window.recenter()
     }
 
@@ -178,7 +174,7 @@ impl Window {
     /// 
     /// Valid values for `opacity` range from 0 to 1 (both inclusive).  
     /// You're expected to clamp the value yourself if needed.
-    pub fn set_opacity(&self, opacity: f32) -> Result<(), Error> {
+    pub fn set_opacity(&self, opacity: f32) -> SResult<()> {
         self.os_window.set_opacity(opacity)
     }
 
@@ -222,15 +218,15 @@ impl Window {
 
     /// Attempts to maximize the window (as in, take as much space as
     /// possible).
-    pub fn maximize(&self) -> Result<(), Error> { self.os_window.maximize() }
-    pub fn unmaximize(&self) -> Result<(), Error> { self.os_window.unmaximize() }
-    pub fn toggle_maximize(&self) -> Result<(), Error> { self.os_window.toggle_maximize() }
+    pub fn maximize(&self) -> SResult<()> { self.os_window.maximize() }
+    pub fn unmaximize(&self) -> SResult<()> { self.os_window.unmaximize() }
+    pub fn toggle_maximize(&self) -> SResult<()> { self.os_window.toggle_maximize() }
     /// Attempts to minimize the window (as in, minimize to task bar).
-    pub fn minimize(&self) -> Result<(), Error> { self.os_window.minimize() }
+    pub fn minimize(&self) -> SResult<()> { self.os_window.minimize() }
     /// The reciprocal of `minimize()`.
-    pub fn restore(&self) -> Result<(), Error> { self.os_window.restore() }
+    pub fn restore(&self) -> SResult<()> { self.os_window.restore() }
     /// Attempts to set the window on top of the stack and request focus.
-    pub fn raise(&self) -> Result<(), Error> { self.os_window.raise() }
+    pub fn raise(&self) -> SResult<()> { self.os_window.raise() }
     /// Attempts to go full-screen.
     /// 
     /// The `Window` struct doesn't keep track of an `is_fullscreen`
@@ -238,59 +234,59 @@ impl Window {
     /// won't perform the checks for you.
     /// However, for convenience, it saves the window's current size
     /// to automatically restore it whenever leaving full-screen mode.
-    pub fn enter_fullscreen(&self) -> Result<(), Error> { self.os_window.enter_fullscreen() }
+    pub fn enter_fullscreen(&self) -> SResult<()> { self.os_window.enter_fullscreen() }
     /// Attempts to leave full-screen mode.
     /// 
     /// See `enter_fullscreen()`.
-    pub fn leave_fullscreen(&self) -> Result<(), Error> { self.os_window.leave_fullscreen() }
-    pub fn toggle_fullscreen(&self) -> Result<(), Error> { self.os_window.toggle_fullscreen() }
+    pub fn leave_fullscreen(&self) -> SResult<()> { self.os_window.leave_fullscreen() }
+    pub fn toggle_fullscreen(&self) -> SResult<()> { self.os_window.toggle_fullscreen() }
 
     /// Unconditionnally prevents the window's size from going below the
     /// given threshold.
-    pub fn set_minimum_size(&self, size: Extent2<u32>) -> Result<(), Error> {
+    pub fn set_minimum_size(&self, size: Extent2<u32>) -> SResult<()> {
         self.os_window.set_minimum_size(size)
     }
     /// Unconditionnally prevents the window's size from going above the
     /// given threshold.
-    pub fn set_maximum_size(&self, size: Extent2<u32>) -> Result<(), Error> {
+    pub fn set_maximum_size(&self, size: Extent2<u32>) -> SResult<()> {
         self.os_window.set_maximum_size(size)
     }
     /// Moves the window to the given absolute position in 
     /// desktop-space.  
     /// 
     /// The anchor is the window's top-left corner.
-    pub fn position(&self) -> Result<Vec2<i32>, Error> {
+    pub fn position(&self) -> SResult<Vec2<i32>> {
         self.os_window.position()
     }
     /// Moves the window to the given absolute position in 
     /// desktop-space.  
     /// 
     /// The anchor is the window's top-left corner.
-    pub fn set_position(&self, pos: Vec2<i32>) -> Result<(), Error> {
+    pub fn set_position(&self, pos: Vec2<i32>) -> SResult<()> {
         self.os_window.set_position(pos)
     }
     /// Attempts to set the window's screen-space size.
-    pub fn resize(&self, size: Extent2<u32>) -> Result<(), Error> {
+    pub fn resize(&self, size: Extent2<u32>) -> SResult<()> {
         self.os_window.resize(size)
     }
-    pub fn show_cursor(&self) -> Result<(), Error> {
+    pub fn show_cursor(&self) -> SResult<()> {
         self.os_window.show_cursor()
     }
-    pub fn hide_cursor(&self) -> Result<(), Error> {
+    pub fn hide_cursor(&self) -> SResult<()> {
         self.os_window.hide_cursor()
     }
-    pub fn set_cursor(&self, cursor: Rc<Cursor>) -> Result<(), Error> {
+    pub fn set_cursor(&self, cursor: Rc<Cursor>) -> SResult<()> {
         self.os_window.set_cursor(cursor)
     }
-    pub fn set_cursor_position(&self, pos: Vec2<u32>) -> Result<(), Error> {
+    pub fn set_cursor_position(&self, pos: Vec2<u32>) -> SResult<()> {
         self.os_window.set_cursor_position(pos)
     }
-    pub fn query_cursor_position(&self) -> Result<Vec2<u32>, Error> {
+    pub fn query_cursor_position(&self) -> SResult<Vec2<u32>> {
         self.os_window.query_cursor_position()
     }
 
 
-    pub fn demand_attention(&self) -> Result<(), Error> {
+    pub fn demand_attention(&self) -> SResult<()> {
         self.os_window.demand_attention()
     }
 
@@ -327,7 +323,7 @@ impl Window {
     }
 
     /// Attempts to set the chain's swap interval. 
-    pub fn set_gl_swap_interval(&mut self, interval: GLSwapInterval) -> Result<(),Error> {
+    pub fn set_gl_swap_interval(&mut self, interval: GLSwapInterval) -> SResult<()> {
         self.fps_limit = None;
         if let GLSwapInterval::LimitFps(fps_limit) = interval {
             self.fps_limit = Some(fps_limit);

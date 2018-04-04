@@ -70,7 +70,7 @@ use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak};
 use std::cell::{Cell, RefCell};
 use std::path::Path;
-use std::time::{Instant};
+use std::time::{Instant, Duration};
 use std::collections::{HashMap, VecDeque};
 
 use self::x11::xlib as x;
@@ -87,11 +87,12 @@ use window::*;
 use cursor::*;
 use event::*;
 use hid::*;
-use timeout::Timeout;
 use super::{Extent2, Vec2, Rgba, Rect};
-use decision::Decision;
-use semver::Semver;
-
+use error::{
+    Result as SResult,
+    failed,
+};
+use version_cmp as vercmp;
 
 static mut G_XLIB_ERROR_OCCURED: AtomicBool = ATOMIC_BOOL_INIT;
 static mut G_GLX_ERROR_BASE: i32 = 0;
@@ -102,6 +103,7 @@ static mut G_XI_ERROR_BASE: i32 = 0;
 static mut G_XI_EVENT_BASE: i32 = 0;
 static mut G_XI_OPCODE: i32 = 0;
 
+
 #[allow(dead_code)]
 // WISH: Grab from _XPrintDefaultError in Xlib's sources
 unsafe extern fn xlib_generic_error_handler(_shared_context: *mut x::Display, e: *mut x::XErrorEvent) -> c_int {
@@ -111,7 +113,6 @@ unsafe extern fn xlib_generic_error_handler(_shared_context: *mut x::Display, e:
     error!("Received X error: XErrorEvent {{ type: {}, display: {:?}, resourceid: {}, serial: {}, error_code: {}, request_code: {}, minor_code: {} }}", e.type_, e.display, e.resourceid, e.serial, e.error_code, e.request_code, e.minor_code);
     0
 }
-
 
 
 pub mod types {
@@ -710,14 +711,14 @@ atoms!(
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct XI {
-    pub version: Semver,
+    pub version: (i16, i16),
     pub error_base: c_int,
     pub event_base: c_int,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Glx {
-    pub version: Semver,
+    pub version: (u32, u32),
     pub get_proc_address: types::glXGetProcAddress,
     pub ext: GlxExt,
     pub error_base: c_int,
@@ -726,7 +727,7 @@ pub struct Glx {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct XRender {
-    pub version: Semver,
+    pub version: (u32, u32),
     pub error_base: c_int,
     pub event_base: c_int,
     pub argb32_pict_format: *mut xrender::XRenderPictFormat,
@@ -1118,11 +1119,11 @@ impl Glx {
         } = &self.ext;
 
         let (major, minor, gl_variant) = match version {
-            Decision::Manual(v) => {
-                let v = v.to_semver();
-                (v.1.major, v.1.minor, v.0)
+            Some(v) => {
+                let GLVersion { major, minor, variant } = v;
+                (major, minor, variant)
             },
-            Decision::Auto => (3, 0, GLVariant::Desktop), // TODO: Shouldn't it be 3.2 ?
+            None => (3, 0, GLVariant::Desktop), // TODO: Shouldn't it be 3.2 ?
         };
 
         let flags = if debug { 
@@ -1145,8 +1146,8 @@ impl Glx {
 
         let profile_mask = match gl_variant {
             GLVariant::Desktop => match profile {
-                Decision::Auto => GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-                Decision::Manual(p) => match p {
+                None => GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+                Some(p) => match p {
                     GLProfile::Core =>
                         GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
                     GLProfile::Compatibility => 
@@ -1197,14 +1198,11 @@ impl Glx {
 }
 
 
-use context::Error;
-use context::Error::*;
-
 impl OsContext {
-    pub fn open() -> Result<Self, Error> {
-        Self::open_x11_display_name(None)
+    pub fn new() -> SResult<Self> {
+        Self::with_x11_display_name(None)
     }
-    pub fn open_x11_display_name(x_display_name: Option<&CStr>) -> Result<Self, Error> {
+    pub fn with_x11_display_name(x_display_name: Option<&CStr>) -> SResult<Self> {
         unsafe {
             // This thing is global to Xlib, and not inherent to X11.
             // We wouldn't have it if we used XCB.
@@ -1223,13 +1221,10 @@ impl OsContext {
                 }
             });
             if x_display.is_null() {
-                return Err(Failed(match x_display_name {
-                    None => "Failed to open default X display".to_owned(),
-                    Some(name) => {
-                        let name = name.to_string_lossy().into_owned();
-                        format!("No X display named `{}`", name)
-                    },
-                }));
+                return match x_display_name {
+                    None => failed("Failed to open default X display"),
+                    Some(name) => failed(format!("Failed to open X display `{}`", name.to_string_lossy())),
+                };
             }
 
             let protocol_version  = x::XProtocolVersion(x_display);
@@ -1356,7 +1351,7 @@ impl OsContext {
                 let minor = (*version).minor_version;
                 x::XFree(version as _);
                 info!("XInput extension version is {}.{}", major, minor);
-                Semver::new(major as _, minor as _, 0)
+                (major, minor)
             }
         } else {
             return None;
@@ -1459,7 +1454,7 @@ impl OsContext {
             }
             (major as u32, minor as u32)
         };
-        let version = Semver::new(major, minor, 0);
+        let version = (major, minor);
         info!("XRender extension version {}.{}", major, minor);
 
         let argb32_pict_format = unsafe {
@@ -1494,7 +1489,7 @@ impl OsContext {
             }
             (major as u32, minor as u32)
         };
-        let version = Semver::new(major, minor, 0);
+        let version = (major, minor);
 
         info!("GLX extension version {}.{}", major, minor);
 
@@ -1503,7 +1498,7 @@ impl OsContext {
         #[cfg(target_os = "linux")]
         let get_proc_address = glXGetProcAddressARB;
 
-        if version < Semver::new(1,1,0) {
+        if vercmp::lt(version, (1,1)) {
             warn!("The GLX version is less than 1.1! This is supposedly very rare and probably badly handled. Sorry!");
             return Some(Glx {
                 version, get_proc_address, ext: Default::default(),
@@ -1534,7 +1529,7 @@ impl OsContext {
     }
 
 
-    pub fn create_window(&mut self, settings: &WindowSettings) -> Result<OsWindow, Error> {
+    pub fn create_window(&mut self, settings: &WindowSettings) -> SResult<OsWindow> {
         let x_display = self.x_display;
         let parent = unsafe { x::XDefaultRootWindow(x_display) };
         
@@ -1548,7 +1543,7 @@ impl OsContext {
         let (visual, depth, colormap) = match *opengl {
             Some(ref pixel_format) => {
                 if self.glx.is_none() {
-                    return Err(Failed("Cannot create OpenGL-capable window without GLX".to_owned()));
+                    return failed("Cannot create OpenGL-capable window without GLX");
                 }
                 let vi = unsafe { *pixel_format.0.visual_info };
                 let colormap = unsafe {
@@ -1614,7 +1609,7 @@ impl OsContext {
         )};
 
         if x_window == 0 {
-            return Err(Failed("XCreateWindow() failed".to_owned()));
+            return failed("XCreateWindow() returned 0");
         }
 
         unsafe {
@@ -1763,7 +1758,7 @@ impl OsContext {
         }
 
         let wants_glx_window = {
-            opengl.is_some() && self.glx.as_ref().unwrap().version >= Semver::new(1,3,0)
+            opengl.is_some() && vercmp::ge(self.glx.as_ref().unwrap().version, (1,3))
         };
 
         let glx_window = if wants_glx_window {
@@ -1796,22 +1791,22 @@ impl OsContext {
             xic, shows_cursor: Cell::new(true), user_cursor: RefCell::new(None),
         })
     }
-    pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<OsGLPixelFormat, Error> {
+    pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> SResult<OsGLPixelFormat> {
         let x_display = self.x_display;
 
         let glx = match self.glx.as_ref() {
-            None => return Err(Failed("The GLX extension is not present".to_owned())),
+            None => return failed("The GLX extension is not present"),
             Some(glx) => glx,
         };
 
-        if glx.version < Semver::new(1,3,0) {
+        if vercmp::lt(glx.version, (1,3)) {
             // Not actually mutated, but glXChooseVisual wants *mut...
             let mut visual_attribs = glx.gen_visual_attribs(settings);
             let visual_info = unsafe { glXChooseVisual(
                 x_display, self.screen_num, visual_attribs.as_mut_ptr()
             )};
             if visual_info.is_null() {
-                return Err(Failed("glXChooseVisual() failed".to_owned()));
+                return failed("glXChooseVisual() returned NULL");
             }
             return Ok(OsGLPixelFormat { 
                 shared_context: self.0.clone(),
@@ -1827,7 +1822,7 @@ impl OsContext {
             x_display, self.screen_num, visual_attribs.as_ptr(), &mut fbcount
         )};
         if fbcs.is_null() || fbcount == 0 {
-            return Err(Failed("No matching FBConfig was found!".to_owned()));
+            return failed("No matching FBConfig was found");
         }
 
         // fbcs is an array of candidates, from which we choose the best.
@@ -2015,11 +2010,11 @@ impl OsContext {
             })
         }
     }
-    pub fn create_gl_context(&self, pf: &OsGLPixelFormat, cs: &GLContextSettings) -> Result<OsGLContext, Error> {
+    pub fn create_gl_context(&self, pf: &OsGLPixelFormat, cs: &GLContextSettings) -> SResult<OsGLContext> {
         let x_display = self.x_display;
 
         let glx = match self.glx.as_ref() {
-            None => return Err(Failed("Creating an OpenGL context requires GLX".to_owned())),
+            None => return failed("Creating an OpenGL context requires GLX"),
             Some(glx) => glx,
         };
 
@@ -2031,10 +2026,10 @@ impl OsContext {
         }
 
         let (funcname, glx_context) = unsafe {
-            if glx.version < Semver::new(1,3,0) {
+            if vercmp::lt(glx.version, (1,3)) {
                 ("glXCreateContext", glXCreateContext(x_display, visual_info, ptr::null_mut(), x::True))
-            } else if glx.version < Semver::new(1,4,0) 
-                   || (glx.version >= Semver::new(1,4,0) && !glx.ext.GLX_ARB_create_context)
+            } else if vercmp::lt(glx.version, (1,4))
+                   || (vercmp::ge(glx.version, (1,4)) && !glx.ext.GLX_ARB_create_context)
             {
                 ("glXCreateNewContext", glXCreateNewContext(
                     x_display, fbconfig.unwrap(), GLX_RGBA_TYPE, ptr::null_mut(), x::True
@@ -2052,7 +2047,7 @@ impl OsContext {
         unsafe {
             x::XSync(x_display, x::False);
             if glx_context.is_null() || G_XLIB_ERROR_OCCURED.load(Ordering::SeqCst) {
-                return Err(Failed(format!("{}() failed", funcname)));
+                return failed(format!("{}() failed", funcname));
             }
 
             info!("GLX context is direct: {}", glXIsDirect(x_display, glx_context));
@@ -2060,23 +2055,20 @@ impl OsContext {
         }
 
     }
-    pub fn create_software_gl_context(&self, _pf: &OsGLPixelFormat, _cs: &GLContextSettings) -> Result<OsGLContext, Error> {
-        Err(Unsupported(Some("This is not implemented yet! The plan is to load the Mesa driver, if present".to_owned())))
+    pub fn create_software_gl_context(&self, _pf: &OsGLPixelFormat, _cs: &GLContextSettings) -> SResult<OsGLContext> {
+        unimplemented!{"The plan is to load the Mesa driver, if present"}
     }
-    pub fn create_gl_context_from_lib(&self, _pf: &OsGLPixelFormat, _cs: &GLContextSettings, _path: &Path) -> Result<OsGLContext, Error> {
-        Err(Unsupported(Some("This is not implemented yet!".to_owned())))
+    pub fn create_gl_context_from_lib(&self, _pf: &OsGLPixelFormat, _cs: &GLContextSettings, _path: &Path) -> SResult<OsGLContext> {
+        unimplemented!{}
     }
 
     // WISH: The proper way is to install a signal handler which catch SIGTERM.
     // See https://stackoverflow.com/a/22009848
-    pub fn allow_session_termination(&mut self) -> Result<(), Error> {
-        Err(Error::Unsupported(Some(Self::unsupported_sigterm().to_owned())))
+    pub fn allow_session_termination(&mut self) -> SResult<()> {
+        unimplemented!{"Detecting session termination on Linux requires handling SIGTERM, which is an intrusive operation and therefore not implemented right now."}
     }
-    pub fn disallow_session_termination(&mut self, _reason: Option<String>) -> Result<(), Error> {
-        Err(Error::Unsupported(Some(Self::unsupported_sigterm().to_owned())))
-    }
-    fn unsupported_sigterm() -> &'static str {
-        "Detecting session termination on Linux requires handling SIGTERM, which is an intrusive operation and therefore not implemented right now."
+    pub fn disallow_session_termination(&mut self, _reason: Option<String>) -> SResult<()> {
+        unimplemented!{"Detecting session termination on Linux requires handling SIGTERM, which is an intrusive operation and therefore not implemented right now."}
     }
 
 
@@ -2096,13 +2088,13 @@ impl OsContext {
         unsafe {
             let dpy = self.x_display;
             let root = self.root;
-            let Extent2 { w, h } = frame.image.size;
+            let Extent2 { w, h } = frame.size;
             let visual = x::XDefaultVisual(dpy, self.screen_num);
             let pix = x::XCreatePixmap(dpy, root, w, h, 32);
             let pix_gc = x::XCreateGC(dpy, pix, 0, ptr::null_mut());
             let pix_img = x::XCreateImage(
                 dpy, visual, 32, x::ZPixmap, 0,
-                frame.image.pixels.as_ptr() as *const _ as *mut _,
+                frame.rgba_data.as_ptr() as *const _ as *mut _,
                 w, h, 32, 4*(w as c_int)
             );
             x::XPutImage(dpy, pix, pix_gc, pix_img, 0, 0, 0, 0, w, h);
@@ -2117,18 +2109,18 @@ impl OsContext {
             x_cursor
         }
     }
-    pub fn create_rgba32_cursor(&self, frame: CursorData) -> Result<OsCursor, Error> {
+    pub fn create_rgba32_cursor(&self, frame: CursorData) -> SResult<OsCursor> {
         let xrender = match self.xrender.as_ref() {
             Some(x) => x,
-            None => return Err(Failed("Creating an RGBA cursor requires the XRender extension".to_owned())),
+            None => return failed("Creating an RGBA cursor requires the XRender extension"),
         };
         let x_cursor = self.cursordata_to_x_cursor(xrender, &frame);
         Ok(OsCursor { shared_context: self.0.clone(), x_cursor, frames: vec![] })
     }
-    pub fn create_animated_rgba32_cursor(&self, anim: &[CursorFrame]) -> Result<OsCursor, Error> {
+    pub fn create_animated_rgba32_cursor(&self, anim: &[CursorFrame]) -> SResult<OsCursor> {
         let xrender = match self.xrender.as_ref() {
             Some(x) => x,
-            None => return Err(Failed("Creating an animated RGBA cursor requires the XRender extension".to_owned())),
+            None => return failed("Creating an animated RGBA cursor requires the XRender extension"),
         };
         let mut frames: Vec<_> = anim.iter().map(|frame| {
             let secs = frame.duration.as_secs() as u64;
@@ -2142,7 +2134,7 @@ impl OsContext {
         };
         Ok(OsCursor { shared_context: self.0.clone(), x_cursor, frames })
     }
-    pub fn create_system_cursor(&self, s: SystemCursor) -> Result<OsCursor, Error> {
+    pub fn create_system_cursor(&self, s: SystemCursor) -> SResult<OsCursor> {
         let glyph = match s {
             SystemCursor::Arrow => XC_left_ptr,
             SystemCursor::Hand => XC_hand2,
@@ -2196,19 +2188,19 @@ impl OsContext {
             }
         }
     }
-    pub fn wait_next_event(&mut self, timeout: Timeout) -> Option<Event> {
+    pub fn wait_next_event(&mut self, timeout: Duration) -> Option<Event> {
         unsafe {
             let x_display = self.x_display;
             let mut x_event: x::XEvent = mem::uninitialized();
             match timeout {
-                Timeout::Infinite => loop {
+                d if d == Duration::default() => loop {
                     x::XNextEvent(x_display, &mut x_event);
                     let e = self.x_event_to_event(&mut x_event);
                     if let Ok(e) = e {
                         return Some(e);
                     }
                 },
-                Timeout::Set(duration) => {
+                duration => {
                     // Welp, just poll repeatedly instead
                     let now = Instant::now();
                     while now.elapsed() < duration {
@@ -2705,7 +2697,7 @@ impl OsWindow {
     }
 
 
-    pub fn show(&self) -> Result<(), Error> {
+    pub fn show(&self) -> SResult<()> {
         unsafe {
             let x_display = self.shared_context.x_display;
             let x_window = self.x_window;
@@ -2717,7 +2709,7 @@ impl OsWindow {
             Ok(())
         }
     }
-    pub fn hide(&self) -> Result<(), Error> {
+    pub fn hide(&self) -> SResult<()> {
         unsafe {
             let x_display = self.shared_context.x_display;
             let x_window = self.x_window;
@@ -2726,7 +2718,7 @@ impl OsWindow {
             Ok(())
         }
     }
-    pub fn set_title(&self, title: &str) -> Result<(), Error> {
+    pub fn set_title(&self, title: &str) -> SResult<()> {
         unsafe {
             let x_display = self.shared_context.x_display;
             let atoms = &self.shared_context.atoms;
@@ -2745,18 +2737,18 @@ impl OsWindow {
             Ok(())
         }
     }
-    pub fn set_icon(&self, icon: Icon) -> Result<(), Error> {
+    pub fn set_icon(&self, size: Extent2<u32>, data: &[Rgba<u8>]) -> SResult<()> {
         let x_display = self.shared_context.x_display;
         let atoms = &self.shared_context.atoms;
         let x_window = self.x_window;
 
-        let (w, h) = (icon.size.w, icon.size.h);
+        let (w, h) = size.into_tuple();
         let mut prop = Vec::<u32>::with_capacity((2 + w * h) as _);
         prop.push(w);
         prop.push(h);
         for y in 0..h {
             for x in 0..w {
-                let p: Rgba<u8> = icon[(x, y)];
+                let p: Rgba<u8> = data[(y*w + x) as usize];
                 let argb: u32 = 
                       (p.a as u32) << 24
                     | (p.r as u32) << 16
@@ -2774,7 +2766,7 @@ impl OsWindow {
         }
         Ok(())
     }
-    pub fn clear_icon(&self) -> Result<(), Error> {
+    pub fn clear_icon(&self) -> SResult<()> {
         let x_display = self.shared_context.x_display;
         let atoms = &self.shared_context.atoms;
         let x_window = self.x_window;
@@ -2785,10 +2777,10 @@ impl OsWindow {
         Ok(())
     }
     // NOTE: _NET_WM_WINDOW_TYPE might be useful too, but doesn't grant much control
-    pub fn set_style(&self, style: &WindowStyle) -> Result<(), Error> {
+    pub fn set_style(&self, style: &WindowStyle) -> SResult<()> {
         let wmhints_atom = self.shared_context.atoms._MOTIF_WM_HINTS;
         if wmhints_atom == 0 {
-            return Err(Failed("Setting window style requires the _MOTIF_WM_HINTS atom!".to_owned()));
+            return failed("Setting window style requires the _MOTIF_WM_HINTS atom!");
         }
         let flags = mwm::HINTS_FUNCTIONS | mwm::HINTS_DECORATIONS;
         let mut decorations = 0;
@@ -2821,10 +2813,10 @@ impl OsWindow {
         }
         Ok(())
     }
-    pub fn recenter(&self) -> Result<(), Error> {
+    pub fn recenter(&self) -> SResult<()> {
         unimplemented!{}
     }
-    pub fn set_opacity(&self, _opacity: f32) -> Result<(), Error> {
+    pub fn set_opacity(&self, _opacity: f32) -> SResult<()> {
         unimplemented!{}
     }
     fn get_geometry(&self) -> Rect<i32, u32> {
@@ -2855,7 +2847,7 @@ impl OsWindow {
     pub fn query_canvas_size(&self) -> Extent2<u32> {
         self.query_screenspace_size()
     }
-    pub fn set_net_wm_window_type(&self, t: &[NetWMWindowType]) -> Result<(), Error> {
+    pub fn set_net_wm_window_type(&self, t: &[NetWMWindowType]) -> SResult<()> {
         let atoms = &self.shared_context.atoms;
         let mut value: Vec<_> = t.iter().map(|t| match *t {
             NetWMWindowType::Desktop       => atoms._NET_WM_WINDOW_TYPE_DESKTOP,
@@ -2882,28 +2874,28 @@ impl OsWindow {
         }
         Ok(())
     }
-    pub fn maximize(&self) -> Result<(), Error> {
+    pub fn maximize(&self) -> SResult<()> {
         self.set_net_wm_state(NetWMStateAction::Add,
             self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_VERT,
             self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_HORZ
         );
         Ok(())
     }
-    pub fn unmaximize(&self) -> Result<(), Error> {
+    pub fn unmaximize(&self) -> SResult<()> {
         self.set_net_wm_state(NetWMStateAction::Remove,
             self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_VERT,
             self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_HORZ
         );
         Ok(())
     }
-    pub fn toggle_maximize(&self) -> Result<(), Error> {
+    pub fn toggle_maximize(&self) -> SResult<()> {
         self.set_net_wm_state(NetWMStateAction::Toggle,
             self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_VERT,
             self.shared_context.atoms._NET_WM_STATE_MAXIMIZED_HORZ
         );
         Ok(())
     }
-    pub fn minimize(&self) -> Result<(), Error> {
+    pub fn minimize(&self) -> SResult<()> {
         let status = unsafe {
             x::XIconifyWindow(
                 self.shared_context.x_display, self.x_window,
@@ -2913,22 +2905,22 @@ impl OsWindow {
         if status != 0 {
             return Ok(());
         }
-        Err(Failed(format!("XIconifyWindow() returned {}", status)))
+        failed(format!("XIconifyWindow() returned {}", status))
     }
-    pub fn restore(&self) -> Result<(), Error> {
+    pub fn restore(&self) -> SResult<()> {
         unsafe {
             x::XMapWindow(self.shared_context.x_display, self.x_window);
         }
         Ok(())
     }
-    pub fn raise(&self) -> Result<(), Error> {
+    pub fn raise(&self) -> SResult<()> {
+        let x_display = self.shared_context.x_display;
+        let x_window = self.x_window;
         unsafe {
-            let x_display = self.shared_context.x_display;
-            let x_window = self.x_window;
             x::XRaiseWindow(x_display, x_window);
             x::XSync(x_display, x::False);
-            Ok(())
         }
+        Ok(())
     }
     
     fn set_net_wm_state(&self, action: NetWMStateAction, prop1: x::Atom, prop2: x::Atom) {
@@ -2965,16 +2957,16 @@ impl OsWindow {
             x::XSync(x_display, x::False);
         }
     }
-    fn set_net_wm_state_fullscreen(&self, action: NetWMStateAction) -> Result<(), Error> {
+    fn set_net_wm_state_fullscreen(&self, action: NetWMStateAction) -> SResult<()> {
         self.set_net_wm_state(action,
             self.shared_context.atoms._NET_WM_STATE_FULLSCREEN, 0
         );
         Ok(())
     }
-    fn set_bypass_compositor(&self, doit: BypassCompositor) -> Result<(), Error> {
+    fn set_bypass_compositor(&self, doit: BypassCompositor) -> SResult<()> {
         let net_wm_bypass_compositor = self.shared_context.atoms._NET_WM_BYPASS_COMPOSITOR;
         if net_wm_bypass_compositor == 0 {
-            return Err(Failed(format!("Can't set _NET_WM_BYPASS_COMPOSITOR to {:?}", doit)));
+            return failed(format!("Can't set _NET_WM_BYPASS_COMPOSITOR to {:?}", doit));
         }
         let mut value: c_ulong = doit as _;
         unsafe {
@@ -2986,20 +2978,20 @@ impl OsWindow {
         }
         Ok(())
     }
-    pub fn toggle_fullscreen(&self) -> Result<(), Error> {
+    pub fn toggle_fullscreen(&self) -> SResult<()> {
         // XXX assuming we can't know
         let _ = self.set_bypass_compositor(BypassCompositor::NoPreference);
         self.set_net_wm_state_fullscreen(NetWMStateAction::Toggle)
     }
-    pub fn enter_fullscreen(&self) -> Result<(), Error> {
+    pub fn enter_fullscreen(&self) -> SResult<()> {
         let _ = self.set_bypass_compositor(BypassCompositor::Yes);
         self.set_net_wm_state_fullscreen(NetWMStateAction::Add)
     }
-    pub fn leave_fullscreen(&self) -> Result<(), Error> {
+    pub fn leave_fullscreen(&self) -> SResult<()> {
         let _ = self.set_bypass_compositor(BypassCompositor::NoPreference);
         self.set_net_wm_state_fullscreen(NetWMStateAction::Remove)
     }
-    pub fn demand_attention(&self) -> Result<(), Error> {
+    pub fn demand_attention(&self) -> SResult<()> {
         self.set_net_wm_state(
             NetWMStateAction::Add,
             self.shared_context.atoms._NET_WM_STATE_DEMANDS_ATTENTION, 0
@@ -3007,7 +2999,7 @@ impl OsWindow {
         Ok(())
     }
 
-    pub fn set_minimum_size(&self, size: Extent2<u32>) -> Result<(), Error> {
+    pub fn set_minimum_size(&self, size: Extent2<u32>) -> SResult<()> {
         let x_display = self.shared_context.x_display;
         let x_window = self.x_window;
         unsafe {
@@ -3020,7 +3012,7 @@ impl OsWindow {
         }
         Ok(())
     }
-    pub fn set_maximum_size(&self, size: Extent2<u32>) -> Result<(), Error> {
+    pub fn set_maximum_size(&self, size: Extent2<u32>) -> SResult<()> {
         let x_display = self.shared_context.x_display;
         let x_window = self.x_window;
         unsafe {
@@ -3034,11 +3026,11 @@ impl OsWindow {
         Ok(())
     }
     // WISH: Maybe use XTranslateCoordinates() instead ?
-    pub fn position(&self) -> Result<Vec2<i32>, Error> {
+    pub fn position(&self) -> SResult<Vec2<i32>> {
         let Rect { x, y, .. } = self.get_geometry();
         Ok(Vec2 { x, y })
     }
-    pub fn set_position(&self, pos: Vec2<i32>) -> Result<(), Error> {
+    pub fn set_position(&self, pos: Vec2<i32>) -> SResult<()> {
         unsafe {
             let x_display = self.shared_context.x_display;
             let x_window = self.x_window;
@@ -3047,7 +3039,7 @@ impl OsWindow {
             Ok(())
         }
     }
-    pub fn resize(&self, size: Extent2<u32>) -> Result<(), Error> {
+    pub fn resize(&self, size: Extent2<u32>) -> SResult<()> {
         unsafe {
             let x_display = self.shared_context.x_display;
             let x_window = self.x_window;
@@ -3056,7 +3048,7 @@ impl OsWindow {
             Ok(())
         }
     }
-    pub fn set_position_and_resize(&self, r: Rect<i32, u32>) -> Result<(), Error> {
+    pub fn set_position_and_resize(&self, r: Rect<i32, u32>) -> SResult<()> {
         unsafe {
             let x_display = self.shared_context.x_display;
             let x_window = self.x_window;
@@ -3066,14 +3058,14 @@ impl OsWindow {
         }
     }
 
-    pub fn hide_cursor(&self) -> Result<(), Error> {
+    pub fn hide_cursor(&self) -> SResult<()> {
         self.shows_cursor.set(false);
         unsafe {
             x::XDefineCursor(self.shared_context.x_display, self.x_window, self.shared_context.invisible_x_cursor);
         }
         Ok(())
     }
-    pub fn show_cursor(&self) -> Result<(), Error> {
+    pub fn show_cursor(&self) -> SResult<()> {
         self.shows_cursor.set(true);
         let user_cursor = self.user_cursor.borrow();
         let user_cursor = match user_cursor.as_ref() {
@@ -3085,7 +3077,7 @@ impl OsWindow {
         }
         Ok(())
     }
-    pub fn set_cursor(&self, cursor: Rc<Cursor>) -> Result<(), Error> {
+    pub fn set_cursor(&self, cursor: Rc<Cursor>) -> SResult<()> {
         *self.user_cursor.borrow_mut() = Some(cursor);
         if self.shows_cursor.get() {
             return self.show_cursor();
@@ -3093,7 +3085,7 @@ impl OsWindow {
         Ok(())
     }
 
-    pub fn set_cursor_position(&self, pos: Vec2<u32>) -> Result<(), Error> {
+    pub fn set_cursor_position(&self, pos: Vec2<u32>) -> SResult<()> {
         unsafe {
             x::XWarpPointer(
                 self.shared_context.x_display, 0, self.x_window,
@@ -3102,7 +3094,7 @@ impl OsWindow {
         }
         Ok(())
     }
-    pub fn query_cursor_position(&self) -> Result<Vec2<u32>, Error> {
+    pub fn query_cursor_position(&self) -> SResult<Vec2<u32>> {
         unsafe {
             let mut root: x::Window = 0;
             let mut child: x::Window = 0;
@@ -3146,9 +3138,9 @@ impl OsWindow {
             });
         }
     }
-    pub fn set_gl_swap_interval(&mut self, interval: GLSwapInterval) -> Result<(), Error> {
+    pub fn set_gl_swap_interval(&mut self, interval: GLSwapInterval) -> SResult<()> {
         let glx = match self.shared_context.glx.as_ref() {
-            None => return Err(Failed("GLX is not supported!".to_owned())),
+            None => return failed("GLX is not supported!"),
             Some(glx) => glx,
         };
         let interval: c_int = match interval {
@@ -3157,13 +3149,13 @@ impl OsWindow {
             GLSwapInterval::Immediate => 0,
             GLSwapInterval::LateSwapTearing => {
                 if !glx.ext.GLX_EXT_swap_control_tear {
-                    return Err(Failed("Late swap tearing requires GLX_EXT_swap_control_tear".to_owned()));
+                    return failed("Late swap tearing requires GLX_EXT_swap_control_tear");
                 }
                 -1
             },
             GLSwapInterval::Interval(i) => {
                 if i < 0 && !glx.ext.GLX_EXT_swap_control_tear {
-                    return Err(Failed("Late swap tearing requires GLX_EXT_swap_control_tear".to_owned()));
+                    return failed("Late swap tearing requires GLX_EXT_swap_control_tear");
                 }
                 i
             },
@@ -3188,7 +3180,7 @@ impl OsWindow {
             }
             Ok(())
         } else {
-            Err(Failed("No GLX extension that could set the swap interval is present".to_owned()))
+            failed("No suitable GLX extension for setting the swap interval is present")
         }
     }
 }

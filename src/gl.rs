@@ -1,5 +1,3 @@
-use Semver;
-use Decision;
 use os::*;
 use std::os::raw::c_char;
 
@@ -90,111 +88,12 @@ pub enum GLVariant {
     ES,
 }
 
-/// Known OpenGL version numbers.
-/// 
-/// If you're looking for WebGL, know that WebGL 
-/// 1.0 maps closely to ES 2.0, and WebGL 2.0 maps closely to ES 3.0.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-#[allow(non_camel_case_types, missing_docs)]
-#[repr(u16)]
-pub enum GLVersion {
-    GL(Semver),
-    ES(Semver),
-
-    GL_4_5,
-    GL_4_4,
-    GL_4_3,
-    GL_4_2,
-    GL_4_1,
-    GL_4_0,
-    GL_3_3,
-    GL_3_2,
-    GL_3_1,
-    GL_3_0,
-    GL_2_1,
-    GL_2_0,
-    GL_1_5,
-    GL_1_4,
-    GL_1_3,
-    GL_1_2_1,
-    GL_1_2,
-    GL_1_1,
-
-    ES_3_2,
-    ES_3_1,
-    ES_3_0,
-    ES_2_0,
-    ES_1_1,
-    ES_1_0,
+pub struct GLVersion {
+    pub variant: GLVariant,
+    pub major: u8,
+    pub minor: u8,
 }
-
-impl GLVersion {
-    #[allow(missing_docs)]
-    // If None is returned, the user can still build a manual version
-    // with the GL() and ES() variants.
-    pub fn try_from_semver(v: &(GLVariant, Semver)) -> Option<Self> {
-        let &(variant, Semver {major, minor, patch}) = v;
-        match (variant, major, minor, patch) {
-           (GLVariant::Desktop, 4,5,0) => Some(GLVersion::GL_4_5  ),
-           (GLVariant::Desktop, 4,4,0) => Some(GLVersion::GL_4_4  ),
-           (GLVariant::Desktop, 4,3,0) => Some(GLVersion::GL_4_3  ),
-           (GLVariant::Desktop, 4,2,0) => Some(GLVersion::GL_4_2  ),
-           (GLVariant::Desktop, 4,1,0) => Some(GLVersion::GL_4_1  ),
-           (GLVariant::Desktop, 4,0,0) => Some(GLVersion::GL_4_0  ),
-           (GLVariant::Desktop, 3,3,0) => Some(GLVersion::GL_3_3  ),
-           (GLVariant::Desktop, 3,2,0) => Some(GLVersion::GL_3_2  ),
-           (GLVariant::Desktop, 3,1,0) => Some(GLVersion::GL_3_1  ),
-           (GLVariant::Desktop, 3,0,0) => Some(GLVersion::GL_3_0  ),
-           (GLVariant::Desktop, 2,1,0) => Some(GLVersion::GL_2_1  ),
-           (GLVariant::Desktop, 2,0,0) => Some(GLVersion::GL_2_0  ),
-           (GLVariant::Desktop, 1,5,0) => Some(GLVersion::GL_1_5  ),
-           (GLVariant::Desktop, 1,4,0) => Some(GLVersion::GL_1_4  ),
-           (GLVariant::Desktop, 1,3,0) => Some(GLVersion::GL_1_3  ),
-           (GLVariant::Desktop, 1,2,1) => Some(GLVersion::GL_1_2_1),
-           (GLVariant::Desktop, 1,2,0) => Some(GLVersion::GL_1_2  ),
-           (GLVariant::Desktop, 1,1,0) => Some(GLVersion::GL_1_1  ),
-           (GLVariant::ES     , 3,2,0) => Some(GLVersion::ES_3_2  ),
-           (GLVariant::ES     , 3,1,0) => Some(GLVersion::ES_3_1  ),
-           (GLVariant::ES     , 3,0,0) => Some(GLVersion::ES_3_0  ),
-           (GLVariant::ES     , 2,0,0) => Some(GLVersion::ES_2_0  ),
-           (GLVariant::ES     , 1,1,0) => Some(GLVersion::ES_1_1  ),
-           (GLVariant::ES     , 1,0,0) => Some(GLVersion::ES_1_0  ),
-           _ => None,
-        }
-    }
-    #[allow(missing_docs)]
-    pub fn to_semver(&self) -> (GLVariant, Semver) {
-        match *self {
-            GLVersion::GL(v)    => (GLVariant::Desktop, v),
-            GLVersion::ES(v)    => (GLVariant::ES     , v),
-            GLVersion::GL_4_5   => (GLVariant::Desktop, Semver::new(4,5,0)),
-            GLVersion::GL_4_4   => (GLVariant::Desktop, Semver::new(4,4,0)),
-            GLVersion::GL_4_3   => (GLVariant::Desktop, Semver::new(4,3,0)),
-            GLVersion::GL_4_2   => (GLVariant::Desktop, Semver::new(4,2,0)),
-            GLVersion::GL_4_1   => (GLVariant::Desktop, Semver::new(4,1,0)),
-            GLVersion::GL_4_0   => (GLVariant::Desktop, Semver::new(4,0,0)),
-            GLVersion::GL_3_3   => (GLVariant::Desktop, Semver::new(3,3,0)),
-            GLVersion::GL_3_2   => (GLVariant::Desktop, Semver::new(3,2,0)),
-            GLVersion::GL_3_1   => (GLVariant::Desktop, Semver::new(3,1,0)),
-            GLVersion::GL_3_0   => (GLVariant::Desktop, Semver::new(3,0,0)),
-            GLVersion::GL_2_1   => (GLVariant::Desktop, Semver::new(2,1,0)),
-            GLVersion::GL_2_0   => (GLVariant::Desktop, Semver::new(2,0,0)),
-            GLVersion::GL_1_5   => (GLVariant::Desktop, Semver::new(1,5,0)),
-            GLVersion::GL_1_4   => (GLVariant::Desktop, Semver::new(1,4,0)),
-            GLVersion::GL_1_3   => (GLVariant::Desktop, Semver::new(1,3,0)),
-            GLVersion::GL_1_2_1 => (GLVariant::Desktop, Semver::new(1,2,1)),
-            GLVersion::GL_1_2   => (GLVariant::Desktop, Semver::new(1,2,0)),
-            GLVersion::GL_1_1   => (GLVariant::Desktop, Semver::new(1,1,0)),
-            GLVersion::ES_3_2   => (GLVariant::ES     , Semver::new(3,2,0)),
-            GLVersion::ES_3_1   => (GLVariant::ES     , Semver::new(3,1,0)),
-            GLVersion::ES_3_0   => (GLVariant::ES     , Semver::new(3,0,0)),
-            GLVersion::ES_2_0   => (GLVariant::ES     , Semver::new(2,0,0)),
-            GLVersion::ES_1_1   => (GLVariant::ES     , Semver::new(1,1,0)),
-            GLVersion::ES_1_0   => (GLVariant::ES     , Semver::new(1,0,0)),
-        }
-    }
-}
-
 
 /// Since OpenGL 3.2, the profile for an OpenGL context is either "core" 
 /// or "compatibility".  
@@ -226,14 +125,14 @@ pub enum GLContextResetNotificationStrategy {
 pub struct GLContextSettings {
     /// Hints the OpenGL version to use. Setting it to `Auto` will try to
     /// pick the highest possible or a reasonably modern one.
-    pub version: Decision<GLVersion>,
+    pub version: Option<GLVersion>,
     /// Only used vhen the requested OpenGL version is 3.2 or
     /// greater.
     /// 
     /// If you set it to Auto, the implementation will
     /// attempt to open a Compatibility profile, and if
     /// it fails, open a Core profile.
-    pub profile: Decision<GLProfile>,
+    pub profile: Option<GLProfile>,
     /// Do we want a debug context ?
     pub debug: bool,
     /// Only used when the requested OpenGL version is 3.0 or 
@@ -247,7 +146,7 @@ pub struct GLContextSettings {
 impl Default for GLContextSettings {
     fn default() -> Self {
         Self {
-            version: Decision::Auto,
+            version: None,
             debug: true,
             forward_compatible: true, // 3.0+
             profile: Default::default(),

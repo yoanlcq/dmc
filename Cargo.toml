@@ -10,12 +10,12 @@ name = "dmc"
 version = "0.2.0" # remember to update html_root_url
 
 [dependencies]
-log = "0.3.8"
-libc = "0.2.26"
+log = "0.4.1"
 vek = "0.9"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 x11 = { version = "2.16.0", features = ["xlib", "glx", "xinput", "xrender"] }
+libc = "0.2.26"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libevdev-sys = "0.1.1"

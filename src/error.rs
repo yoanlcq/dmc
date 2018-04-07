@@ -1,24 +1,34 @@
+//! `Error` and `Result` types for this crate.
 use std::fmt::{self, Display, Formatter};
 
 type CowStr = ::std::borrow::Cow<'static, str>;
 
+/// Different kinds of errors reported by most faillible operations.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum ErrorKind {
     /// Operation not supported for target platform / current build settings.
+    ///
+    /// For instance, trying to open more than one window on targets that don't support it.
     Unsupported,
-    /// Some arguments were invalid.
+    /// Some arguments were invalid; You could retry with different ones.
     InvalidArgument,
     /// Operation is supported and arguments were valid, but the operation failed for other
-    /// reasons (e.g user-specific environment)
+    /// reasons (e.g user-specific environment).
+    ///
+    /// For instance, on X11-based targets, the user's X11 server may lack some required extensions.
     Failed,
 }
 
+/// An `ErrorKind` packed with an optional `reason` string.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Error {
+    /// The error kind.
     pub kind: ErrorKind,
+    /// A hopefully useful reason string, or `None` if unknown or not meaningful.
     pub reason: Option<CowStr>,
 }
 
+/// Alias to `Result<T, Error>`.
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 impl ErrorKind {
@@ -60,7 +70,9 @@ impl ::std::error::Error for Error {
     }
 }
 
+#[allow(unused_imports)]
 pub(crate) use self::utils::*;
+
 mod utils {
     #![allow(dead_code)]
     use super::*;

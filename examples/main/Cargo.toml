@@ -1,0 +1,12 @@
+[package]
+name = "main"
+version = "0.1.0"
+authors = ["Yoan Lecoq <yoanlecoq.io@gmail.com>"]
+
+[dependencies]
+dmc = { path = "../.." }
+log = "0.4.1"
+env_logger = "0.5.6"
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
+x11 = { version = "2.16.0", features = ["xlib", "glx", "xinput", "xrender"] }

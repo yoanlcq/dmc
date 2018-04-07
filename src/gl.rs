@@ -1,10 +1,13 @@
-use os::*;
+//! OpenGL-related structures and abstractions.
+
+use os::{OsGLPixelFormat, OsGLProc, OsGLContext};
 use std::os::raw::c_char;
 
 
+/// Hints for Multisample anti-aliasing (MSAA).
 #[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct GLMsaa {
-    /// Number of MSAA buffers. If it's zero, no MSAA takes place.
+    /// Number of MSAA buffers. If it's zero, MSAA is disabled.
     pub buffer_count: u32,
     /// Number of samples per pixel. Should be a power of two.
     pub sample_count: u32,
@@ -88,11 +91,33 @@ pub enum GLVariant {
     ES,
 }
 
+impl GLVariant {
+    #[allow(missing_docs)]
+    pub fn is_desktop(&self) -> bool { self == &GLVariant::Desktop }
+    #[allow(missing_docs)]
+    pub fn is_es(&self) -> bool { self == &GLVariant::ES }
+}
+
+/// Convenience struct for representing an OpenGL version.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct GLVersion {
+    /// Variant; Desktop or ES.
     pub variant: GLVariant,
+    /// Major version number.
     pub major: u8,
+    /// Minor version number.
     pub minor: u8,
+}
+
+impl GLVersion {
+    /// Create a desktop GL version from major and minor version numbers.
+    pub fn new_desktop(major: u8, minor: u8) -> Self { Self { variant: GLVariant::Desktop, major, minor, } }
+    /// Create a GL ES version from major and minor version numbers.
+    pub fn new_es(major: u8, minor: u8) -> Self { Self { variant: GLVariant::ES, major, minor, } }
+    #[allow(missing_docs)]
+    pub fn is_desktop(&self) -> bool { self.variant.is_desktop() }
+    #[allow(missing_docs)]
+    pub fn is_es(&self) -> bool { self.variant.is_es() }
 }
 
 /// Since OpenGL 3.2, the profile for an OpenGL context is either "core" 
@@ -155,22 +180,12 @@ impl Default for GLContextSettings {
     }
 }
 
-impl GLContextSettings {
-    /// TODO this function checks the correctness of these settings.
-    /// For instance, it reports that not using double buffering is 
-    /// deprecated.
-    pub fn sanitize(self) -> GLContextSettings {
-        unimplemented!()
-    }
-}
-
-
 /// Wrapper around a platform-specific OpenGL Context.
+#[derive(Debug)]
 pub struct GLContext(pub(crate) OsGLContext);
 
 impl GLContext {
     /// Retrieves the OpenGL function pointer for the given name.
-    // XXX Will the "C" calling convention be correct in all cases ?
     pub unsafe fn get_proc_address(&self, name: *const c_char) -> Option<OsGLProc> {
         self.0.get_proc_address(name)
     }
@@ -214,13 +229,6 @@ pub enum GLSwapInterval {
     /// - `-2`: VSync/2 with late swap tearing;
     /// - etc...  
     Interval(i32),
-    /// Prevents frames from being presented faster than the given
-    /// frames-per-second limit.
-    ///
-    /// It's rather for convenience since properly setting a swap interval
-    /// may not be supported, in which case the FPS skyrockets and the GPU
-    /// melts.
-    LimitFps(f32),
 }
 
 impl Default for GLSwapInterval {

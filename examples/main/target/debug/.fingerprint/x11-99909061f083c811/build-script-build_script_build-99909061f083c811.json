@@ -1,0 +1,1 @@
+{"rustc":6215285553102491784,"features":"[\"glx\", \"xinput\", \"xlib\", \"xrender\"]","target":13123923088509177768,"profile":2479238963835404001,"path":754048539844480746,"deps":[["pkg-config v0.3.9",15091105818121036493]],"local":[{"Precalculated":"2.17.5"}],"rustflags":[],"epoch":"Epoch2015"}

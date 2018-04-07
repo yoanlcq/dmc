@@ -1,0 +1,1 @@
+{"rustc":6215285553102491784,"features":"[\"glx\", \"xinput\", \"xlib\", \"xrender\"]","target":18009967538533065347,"profile":2479238963835404001,"path":3271157563947787314,"deps":[["libc v0.2.40",9383298224688090712]],"local":[{"Precalculated":"2.17.5"}],"rustflags":[],"epoch":"Epoch2015"}

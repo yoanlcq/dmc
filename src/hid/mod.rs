@@ -8,7 +8,7 @@
 use std::ops::{Range, Not};
 use context::Context;
 use event::Timestamp;
-use os::OsMasterHidId;
+use os::{OsMasterHidId, OsDeviceId};
 
 pub mod mouse;
 pub use self::mouse::*;
@@ -143,7 +143,8 @@ pub enum Bus {
     Virtual,
 }
 
-trait DeviceId {}
+pub trait DeviceId: OsDeviceId {}
+impl<T: OsDeviceId> DeviceId for T {}
 
 /// An ID for a master HID.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -152,10 +153,10 @@ pub struct MasterHidId(pub(crate) OsMasterHidId);
 impl Context {
     /// Get the `HidInfo` for the given device ID.
     fn hid_info<Id: DeviceId>(&self, id: Id) -> Result<HidInfo> {
-        unimplemented!{}
+        self.0.hid_info(id)
     }
     /// Checks if the given device is still connected.
     fn ping_hid<Id: DeviceId>(&self, id: Id) -> Result<()> {
-        unimplemented!{}
+        self.0.ping_hid(id)
     }
 }

@@ -2,14 +2,14 @@
 
 use context::Context;
 use window::Window;
-use os::{OsMouseId, OsMouseButtonsState};
-use super::{DeviceId, ButtonState, Result};
+use os::{OsMouseId, OsMouseButtonsState, OsDeviceId};
+use super::{ButtonState, Result};
 use Vec2;
 
 /// A device ID type for mice.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MouseId(pub(crate) OsMouseId);
-impl DeviceId for MouseId {}
+impl OsDeviceId for MouseId {}
 
 /// Known mouse buttons.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -33,11 +33,11 @@ pub enum MouseButton {
 }
 
 /// An opaque container for the current state a mouse's buttons.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MouseButtonsState(pub(crate) OsMouseButtonsState);
 
 /// A snapshot of the mouse's global state.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MouseState {
     pub(crate) buttons: MouseButtonsState,
     /// The position relative to the "root window".
@@ -45,7 +45,7 @@ pub struct MouseState {
 }
 
 /// A snapshot of the mouse's state, relatively to a window.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WindowMouseState {
     /// The global part of the state.
     pub global: MouseState,
@@ -55,7 +55,7 @@ pub struct WindowMouseState {
 
 impl MouseButtonsState {
     pub fn button(&self, button: MouseButton) -> Option<ButtonState> {
-        unimplemented!{}
+        self.0.button(button)
     }
 }
 
@@ -70,25 +70,21 @@ impl MouseState {
 impl Context {
     /// Lists all currently connected mouse devices.
     pub fn mice(&self) -> Result<Vec<MouseId>> {
-        unimplemented!{}
+        self.0.mice()
     }
     /// Gets the ID for the main mouse, if any.
     pub fn main_mouse(&self) -> Result<MouseId> {
-        unimplemented!{}
+        self.0.main_mouse()
     }
     /// Captures the current state of the mouse which ID is given.
     pub fn mouse_state(&self, mouse: MouseId) -> Result<MouseState> {
-        unimplemented!{}
-    }
-    /// Attempts to set the mouse's position, relative to the "root window".
-    pub fn set_mouse_root_position(&self, mouse: MouseId, root_position: Vec2<f64>) -> Result<()> {
-        unimplemented!{}
+        self.0.mouse_state(mouse)
     }
 }
 
 impl Window {
     /// Captures the current state of the mouse which ID is given, relatively to this window.
     pub fn mouse_state(&self, mouse: MouseId) -> Result<WindowMouseState> {
-        unimplemented!{}
+        self.0.mouse_state(mouse)
     }
 }

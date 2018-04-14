@@ -2,6 +2,7 @@ use std::time::Duration;
 use timeout::Timeout;
 use super::{Vec2, Extent2, Rect};
 use context::Context;
+use error;
 use window::WindowHandle;
 use hid::*;
 
@@ -14,8 +15,8 @@ pub type Timestamp = Duration;
 impl Context {
     /// Are raw device events supported ? (i.e `MouseMotionRaw`,
     /// `KeyboardKeyPressedRaw`, etc).
-    pub fn supports_raw_device_events(&self) -> Result<bool> {
-        unimplemented!{}
+    pub fn supports_raw_device_events(&self) -> error::Result<bool> {
+        self.0.supports_raw_device_events()
     }
     /// Polls for any event in the queue.
     pub fn poll_event(&self) -> Option<Event> {
@@ -121,10 +122,10 @@ pub enum Event {
     KeyboardDisconnected   { keyboard: KeyboardId, timestamp: Timestamp, },
     KeyboardFocusGained    { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, },
     KeyboardFocusLost      { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, },
-    KeyboardKeyPressed     { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, key: VKey, is_repeat: bool, text: Option<String>, },
-    KeyboardKeyReleased    { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, key: VKey, },
-    KeyboardKeyPressedRaw  { keyboard: KeyboardId, timestamp: Timestamp, key: VKey, },
-    KeyboardKeyReleasedRaw { keyboard: KeyboardId, timestamp: Timestamp, key: VKey, },
+    KeyboardKeyPressed     { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, key: Key, is_repeat: bool, text: Option<String>, },
+    KeyboardKeyReleased    { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, key: Key, },
+    KeyboardKeyPressedRaw  { keyboard: KeyboardId, timestamp: Timestamp, key: Key, },
+    KeyboardKeyReleasedRaw { keyboard: KeyboardId, timestamp: Timestamp, key: Key, },
 
     // Touch (Touchpad, Touch-screen, ....)
     TouchConnected      { touch: TouchId, timestamp: Timestamp, },

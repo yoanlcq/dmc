@@ -11,6 +11,7 @@ use std::ffi::CString;
 
 use window::{self, Window, WindowSettings, WindowHandle, WindowTypeHint, WindowStyleHint};
 use error::{Result, failed, failed_unexplained};
+use hid::{self, MouseId, WindowMouseState, TabletId, WindowTabletState};
 use vek::{Vec2, Extent2, Rect, Clamp, Rgba};
 
 use super::x11::xlib as x;
@@ -978,6 +979,12 @@ impl X11Window {
             _ => "garbage",
         };
         failed(format!("XGrabPointer() returned {}", reason))
+    }
+    pub fn mouse_state(&self, mouse: MouseId) -> hid::Result<WindowMouseState> {
+        unimplemented!{}
+    }
+    pub fn tablet_state(&self, tablet: TabletId) -> hid::Result<WindowTabletState> {
+        unimplemented!{}
     }
 }
 

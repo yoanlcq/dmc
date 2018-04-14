@@ -8,14 +8,14 @@
 
 use context::Context;
 use window::Window;
-use os::{OsTabletId, OsTabletPadButtonsState, OsTabletStylusButtonsState};
-use super::{DeviceId, AxisInfo, ButtonState, Result};
+use os::{OsTabletId, OsTabletPadButtonsState, OsTabletStylusButtonsState, OsDeviceId};
+use super::{AxisInfo, ButtonState, Result};
 use Vec2;
 
 /// A device ID type for tablets.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TabletId(pub(crate) OsTabletId);
-impl DeviceId for TabletId {}
+impl OsDeviceId for TabletId {}
 
 /// Tablet-specific information.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,15 +65,15 @@ pub enum TabletStylusButton {
 }
 
 /// Opaque container for the state of all of a tablet pad's buttons.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TabletPadButtonsState(pub(crate) OsTabletPadButtonsState);
 
 /// Opaque container for the state of all of a tablet stylus's buttons.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TabletStylusButtonsState(pub(crate) OsTabletStylusButtonsState);
 
 /// Snapshot of a tablet's state.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TabletState {
     pub(crate) pad_buttons: TabletPadButtonsState,
     pub(crate) stylus_buttons: TabletStylusButtonsState,
@@ -93,7 +93,7 @@ pub struct TabletState {
 }
 
 /// Snapshot of a tablet's state, relative to a window.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WindowTabletState {
     /// Other state not related to any window.
     pub global: TabletState,
@@ -103,12 +103,12 @@ pub struct WindowTabletState {
 
 impl TabletPadButtonsState {
     pub fn button(&self, button: TabletPadButton) -> Option<ButtonState> {
-        unimplemented!{}
+        self.0.button(button)
     }
 }
 impl TabletStylusButtonsState {
     pub fn button(&self, button: TabletStylusButton) -> Option<ButtonState> {
-        unimplemented!{}
+        self.0.button(button)
     }
 }
 
@@ -123,31 +123,24 @@ impl TabletState {
     }
 }
 
-impl TabletInfo {
-    /// Does this tablet have the given pad button?
-    pub fn has_pad_button(&self, button: TabletPadButton) -> Result<bool> {
-        unimplemented!{}
-    }
-}
-
 impl Context {
     /// Lists all currently connected tablet devices.
     pub fn tablets(&self) -> Result<Vec<TabletId>> {
-        unimplemented!{}
+        self.0.tablets()
     }
     /// Fetches the `TabletInfo` associated with the given device ID.
     pub fn tablet_info(&self, tablet: TabletId) -> Result<TabletInfo> {
-        unimplemented!{}
+        self.0.tablet_info(tablet)
     }
     /// Fetches the current state of a tablet which ID is given.
     pub fn tablet_state(&self, tablet: TabletId) -> Result<TabletState> {
-        unimplemented!{}
+        self.0.tablet_state(tablet)
     }
 }
 
 impl Window {
     /// Fetches the current state of a tablet which ID is given, relatively to this window.
     pub fn tablet_state(&self, tablet: TabletId) -> Result<WindowTabletState> {
-        unimplemented!{}
+        self.0.tablet_state(tablet)
     }
 }

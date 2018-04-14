@@ -1,80 +1,94 @@
 //! Keyboards.
 
 use context::Context;
-use os::{OsKeyboardId, OsKeyboardState, OsVKey};
-use super::{DeviceId, KeyState, Result};
+use os::{OsKeyboardId, OsKeyboardState, OsDeviceId, OsScanCode, OsKeyCode};
+use super::{KeyState, Result};
 
 /// A device ID type for keyboards.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KeyboardId(pub(crate) OsKeyboardId);
-impl DeviceId for KeyboardId {}
+impl OsDeviceId for KeyboardId {}
 
-/// Opaque wrapper around a platform-specific key code.
+/// A scan code is an hardware-given integer that uniquely identifies a key location for a specific
+/// keyboard.
+///
+/// The operating system translates the scan code into a `KeyCode` (or "virtual key code")
+/// by using the keyboard's layout.
+///
+/// Essentially, a scan code is meaningless without a layout to translate it to
+/// give it meaning.
+///
+/// Usually, a scan code fits into an unsigned 8-bit integer because a keyboard normally
+/// doesn't have more than 255 keys, but there is obviously more that 255 key _meanings_ in the
+/// world.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct VKey(pub(crate) OsVKey);
+pub struct ScanCode(pub(crate) OsScanCode);
+
+/// A convenience container for both a `ScanCode` and `KeyCode`.
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct Key {
+    /// A key's scan code.
+    pub scan_code: ScanCode,
+    /// A key's virtual code.
+    pub code: KeyCode,
+}
 
 /// Most platforms provide a (supposedly) efficient way to query
 /// the whole keyboard's state in a single call.
 ///
 /// Under Windows, it's `GetKeyboardState()`.
 /// Under X11, it's `XQueryKeymap()`.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyboardState(pub(crate) OsKeyboardState);
-
-
-impl VKey {
-    /// Resolves this virtual key to the matching known key value, if any.
-    pub fn translated(self) -> Key {
-        unimplemented!{}
-    }
-}
-
-impl Key {
-    /// Gets the `VKey` that yielded this `Key`.
-    pub fn untranslated(&self) -> VKey {
-        unimplemented!{}
-    }
-}
 
 impl Context {
     /// Lists currently connected keyboard devices.
     pub fn keyboards(&self) -> Result<Vec<KeyboardId>> {
-        unimplemented!{}
+        self.0.keyboards()
     }
     /// Gets the ID for the main keyboard, if any.
     pub fn main_keyboard(&self) -> Result<KeyboardId> {
-        unimplemented!{}
+        self.0.main_keyboard()
     }
     /// Captures the current state of the keyboard which ID is given.
     pub fn keyboard_state(&self, keyboard: KeyboardId) -> Result<KeyboardState> {
-        unimplemented!{}
+        self.0.keyboard_state(keyboard)
     }
     /// Captures the current state of a keyboard's key which ID is given.
-    pub fn keyboard_key_state(&self, keyboard: KeyboardId, key: VKey) -> Result<KeyState> {
-        unimplemented!{}
+    pub fn keyboard_key_state(&self, keyboard: KeyboardId, key: ScanCode) -> Result<KeyState> {
+        self.0.keyboard_key_state(keyboard, key)
     }
-    /// Gets the platform-specific, friendly name for the given VKey.
-    pub fn key_name(&self, key: VKey) -> Result<String> {
-        unimplemented!{}
+    /// Gets the friendly name for the given key.
+    pub fn key_name(&self, key: KeyCode) -> Result<String> {
+        self.0.key_name(key)
+    }
+    /// Translates a scan code to a key code for the keyboard which ID is given.
+    pub fn translate_scan_code(&self, keyboard: KeyboardId, scan_code: ScanCode) -> Result<KeyCode> {
+        self.0.translate_scan_code(keyboard, scan_code)
+    }
+    /// Retrieves the scan code that would translate to the given key code for the keyboard which ID is given.
+    pub fn untranslate_key_code(&self, keyboard: KeyboardId, key_code: KeyCode) -> Result<ScanCode> {
+        self.0.untranslate_key_code(keyboard, key_code)
     }
 }
 
 impl KeyboardState {
     /// Gets the state of the given key.
-    pub fn key(&self, key: VKey) -> Option<KeyState> {
-        unimplemented!{}
+    pub fn key(&self, key: ScanCode) -> Option<KeyState> {
+        self.0.key(key)
     }
 }
 
 macro_rules! keys {
     ($($Key:ident $key:ident,)+) => {
-        /// These are NOT appropriate for text input. For this, read the
-        /// `text` member of the `VKeyPressed` event instead.
+        /// Virtual key codes (translated from scan codes by the OS using the actual keyboard's layout).
+        ///
+        /// These are NOT appropriate for text input. Use the `TextInput` event instead.
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
         #[allow(missing_docs)]
-        pub enum Key {
+        pub enum KeyCode {
             $($Key),+,
-            Other(VKey),
+            Other(OsKeyCode),
         }
     };
 }

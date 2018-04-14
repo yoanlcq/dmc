@@ -32,13 +32,13 @@
 // https://www.kernel.org/doc/html/v4.12/input/gamepad.html
 
 use context::Context;
-use os::{OsControllerId, OsControllerState};
-use super::{DeviceId, ButtonState, AxisInfo, Result};
+use os::{OsControllerId, OsControllerState, OsControllerInfo, OsDeviceId};
+use super::{ButtonState, AxisInfo, Result};
 
 /// A device ID type for controllers.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ControllerId(pub(crate) OsControllerId);
-impl DeviceId for ControllerId {}
+impl OsDeviceId for ControllerId {}
 
 /// Opaque container for a snapshot of a controller's full state.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +47,7 @@ pub struct ControllerState(pub(crate) OsControllerState);
 /// Information for a controller.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ControllerInfo {
+    pub(crate) internal: OsControllerInfo,
     /// The kind of controller.
     pub kind: ControllerKind,
 }
@@ -76,50 +77,50 @@ pub enum GamepadModel {
 
 impl ControllerInfo {
     /// Does this controller have the given button?
-    pub fn has_button(&self, button: ControllerButton) -> Result<bool> {
-        unimplemented!{}
+    pub fn has_button(&self, button: ControllerButton) -> bool {
+        self.internal.has_button(button)
     }
     /// Does this controller have the given axis?
-    pub fn has_axis(&self, axis: ControllerAxis) -> Result<bool> {
-        unimplemented!{}
+    pub fn has_axis(&self, axis: ControllerAxis) -> bool {
+        self.internal.has_axis(axis)
     }
     /// Gets the `AxisInfo` for the given controller axis if the controller has it.
-    pub fn axis(&self, axis: ControllerAxis) -> Result<Option<AxisInfo>> {
-        unimplemented!{}
+    pub fn axis(&self, axis: ControllerAxis) -> Option<AxisInfo> {
+        self.internal.axis(axis)
     }
 }
 
 impl Context {
     /// Lists all connected controller devices.
     pub fn controllers(&self) -> Result<Vec<ControllerId>> {
-        unimplemented!{}
+        self.0.controllers()
     }
     /// Fetches the `ControllerInfo` for the controller which ID is given.
     pub fn controller_info(&self, controller: ControllerId) -> Result<ControllerInfo> {
-        unimplemented!{}
+        self.0.controller_info(controller)
     }
     /// Gets a snapshot of a controller's current state, which ID is given.
     pub fn controller_state(&self, controller: ControllerId) -> Result<ControllerState> {
-        unimplemented!{}
+        self.0.controller_state(controller)
     }
     /// Gets the current state of a button for the controller which ID is given.
     pub fn controller_button_state(&self, controller: ControllerId, button: ControllerButton) -> Result<ButtonState> {
-        unimplemented!{}
+        self.0.controller_button_state(controller, button)
     }
     /// Gets the current state of an axis for the controller which ID is given.
     pub fn controller_axis_state(&self, controller: ControllerId, axis: ControllerAxis) -> Result<f64> {
-        unimplemented!{}
+        self.0.controller_axis_state(controller, axis)
     }
 }
 
 impl ControllerState {
     /// Gets the state of the given button.
-    pub fn button(&self, controller: ControllerButton) -> Option<ButtonState> {
-        unimplemented!{}
+    pub fn button(&self, button: ControllerButton) -> Option<ButtonState> {
+        self.0.button(button)
     }
     /// Gets the state of the given axis.
-    pub fn axis(&self, controller: ControllerAxis) -> Option<f64> {
-        unimplemented!{}
+    pub fn axis(&self, axis: ControllerAxis) -> Option<f64> {
+        self.0.axis(axis)
     }
 }
 

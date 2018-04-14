@@ -1,17 +1,18 @@
+use super::x11::xlib as x;
+use super::x11::keysym;
+
 macro_rules! keys_to_x_keysyms {
     ($($Key:ident $x_keysym:ident,)+) => {
-        #[allow(dead_code)]
-        fn key_to_x_keysym(key: Key) -> Option<x::KeySym> {
+        pub fn key_to_x_keysym(key: Key) -> Option<x::KeySym> {
             match key {
-                $(Key::$Key => Some(x11::keysym::$x_keysym as _),)+
+                $(Key::$Key => Some(keysym::$x_keysym as _),)+
                 Key::Other(x) => Some(x as _),
                 _ => None,
             }
         }
-        #[allow(dead_code)]
-        fn x_keysym_to_key(x_keysym: x::KeySym) -> Key {
+        pub fn x_keysym_to_key(x_keysym: x::KeySym) -> Key {
             match x_keysym as _ {
-                $(x11::keysym::$x_keysym => Key::$Key,)+
+                $(keysym::$x_keysym => Key::$Key,)+
                 x @ _ => Key::Other(x as _),
             }
         }

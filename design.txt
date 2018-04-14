@@ -4,7 +4,6 @@ Le plus bas niveau possible quand même ! ex.
 FpsLimiter => NON
 Axis2D, Axis3D... NON
 
-
 Les borrows et les lifetimes sont chiants.
 Utiliser des Rc, parce qu'on peut.
 En plus les lifetimes des objets dépendent de la plateforme.
@@ -51,20 +50,23 @@ Raison: Ce n'est pas future proof, et ça n'apporte pas grand chose face à e.g 
 - Bien séparer en modules pour préparer l'avenir.
 - On ne ship pas tant qu'il y a des unimplemented!{}
 
+# NEXT MILESTONE
+- Battery
+- Event processing
+- OpenGL context
+- Documenter ce qu'il se passe quand on fait deux fois une même opération (e.g enter_fullscreen x2);
+- Dessiner une image
+- Tester maximize_vert, maximize_horz
+- Pas toutes les opérations ne peuvent échouer (renvoyer un Result à chaque fois c'est chiant).
+  Genre on SAIT que sur console et sur Emscripten c'est pas le même délire
+
+
 # Features
-- error: ErrorKind, Error, Result
 - context:
-  v new() -> Result<Self>
-  v with_x11_display_name(&CStr) -> Result<Self>
-  v with_xlib_display_ptr(ptr) -> Result<Self>
-  v xlib_display() -> *mut x::Display
-  -
-  - create_window(&WindowSettings)
-  -
   - choose_gl_pixel_format(&GLPixelFormatSettings) -> Result<GLPixelFormat>
   - create_gl_context(&GLPixelFormat, &GLContextSettings) -> Result<GLContext>
   - create_software_gl_context(&GLPixelFormat, &GLContextSettings) -> Result<GLContext>
-  - create_software_gl_context(&GLPixelFormat, &GLContextSettings, Path) -> Result<GLContext>
+  - create_gl_context_from_lib(&GLPixelFormat, &GLContextSettings, Path) -> Result<GLContext>
   -
   - poll_events() -> events::PollIter
   - wait_events(timeout: Duration) -> events::WaitIter
@@ -72,47 +74,8 @@ Raison: Ce n'est pas future proof, et ça n'apporte pas grand chose face à e.g 
   - udev() -> *mut udev::udev
   - udev_monitor() -> *mut udev::udev_monitor
   -
-  - best_cursor_size(Extent2<u32>) -> Extent2<u32>
-  - create_rgba_cursor(&RgbCursorData) -> Result<Cursor>
-  - create_rgba_cursor_anim(&RgbCursorAnim) -> Result<Cursor>
-  - create_rgb_cursor(&RgbCursorData) -> Result<Cursor>
-  - create_rgb_cursor_anim(&RgbCursorAnim) -> Result<Cursor>
-  - create_system_cursor(SystemCursor) -> Result<Cursor>
 - window:
-  - show()
-  - hide()
-  - set_title()
-  - set_icon()
-  - clear_icon()
-  - set_style()
   - recenter()
-  - set_opacity()
-  - maximize() // Take as much space as possible
-  - unmaximize()
-  - toggle_maximize()
-  - minimize() // Minimize to task bar
-  - unminimize()
-  - toggle_minimize()
-  - raise()
-  - enter_fullscreen()
-  - leave_fullscreen()
-  - toggle_fullscreen()
-  - set_min_size()
-  - set_max_size()
-  - canvas_size()
-  - size()
-  - set_size()
-  - position()
-  - set_position()
-  - position_and_size()
-  - set_position_and_size()
-  - show_cursor()
-  - hide_cursor()
-  - toggle_cursor_visibility()
-  - set_cursor()
-  - set_cursor_position()
-  - cursor_position()
-  - demand_attention()
   -
   - make_gl_context_current()
   - present_gl()

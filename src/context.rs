@@ -18,4 +18,8 @@ impl Context {
     pub fn new() -> Result<Self> {
         OsContext::new().map(Context)
     }
+    /// Undoes any mouse trap caused by any window.
+    pub fn untrap_mouse(&self) -> Result<()> {
+        self.0.untrap_mouse()
+    }
 }

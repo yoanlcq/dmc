@@ -12,21 +12,31 @@
 extern crate log;
 extern crate vek;
 
+/// Convenience shortcut for creating a `Context`.
+pub fn init() -> error::Result<Context> {
+    Context::new()
+}
+
+pub use vek::{
+    Vec2, Extent2, Rect, Rgb, Rgba,
+};
 
 pub mod error;
 pub use error::{ErrorKind, Error};
+pub mod timeout;
+pub use timeout::Timeout;
 pub mod context;
 pub use context::Context;
-pub mod window;
-pub use window::{Window, WindowSettings, WindowMode};
-pub mod gl;
-/*
+pub mod desktop;
+pub use desktop::Desktop;
 pub mod cursor;
+pub use cursor::{Cursor, SystemCursor, RgbaCursorData, RgbaCursorAnimFrame};
+pub mod window;
+pub use window::{Window, WindowSettings, WindowTypeHint, NetWMWindowType};
 pub mod hid;
-pub use hid::*;
 pub mod event;
-pub mod battery;
-*/
+pub mod gl;
+// pub mod battery;
 
 mod version_cmp;
 
@@ -35,11 +45,19 @@ macro_rules! os_mod {
         mod os {
             pub mod $os;
             pub use self::$os::{
-                OsContext, OsWindow,
+                OsContext, OsWindow, OsWindowHandle,
+                OsCursor,
                 OsGLPixelFormat, OsGLContext, OsGLProc,
+                OsMasterHidId,
+                OsControllerId, OsControllerState,
+                OsKeyboardId, OsKeyboardState, OsVKey,
+                OsMouseId, OsMouseButtonsState,
+                OsTabletId, OsTabletPadButtonsState, OsTabletStylusButtonsState,
+                OsTouchId,
             };
         }
 
+        // NOTE: This one is public on purpose!
         /// Raw OpenGL function type, with the appropriate calling convention for this platform.
         pub type OsGLProc = os::OsGLProc;
     };

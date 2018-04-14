@@ -15,6 +15,7 @@ use hid::{self, MouseId, WindowMouseState, TabletId, WindowTabletState};
 use vek::{Vec2, Extent2, Rect, Clamp, Rgba};
 
 use super::x11::xlib as x;
+use super::x11::xinput2 as xi2;
 use super::{X11Context, X11SharedContext};
 use super::cursor::X11Cursor;
 use super::missing_bits;
@@ -323,6 +324,8 @@ impl X11Context {
             warn!("Could not set the X Window {}'s `_NET_WM_WINDOW_TYPE` to `_NET_WM_WINDOW_TYPE_NORMAL`: {}", x_window, e);
         }
 
+        self.xi_select_all_non_raw_events_all_devices(x_window);
+
         self.x_sync();
 
         Ok(window)
@@ -342,7 +345,9 @@ impl X11Context {
         let xic = None;
         let user_cursor = RefCell::new(None);
         let is_cursor_visible = Cell::new(true);
+        self.xi_select_all_non_raw_events_all_devices(x_window);
         warn!("Window created from X Window `{}` will NOT have an associated XIC. Also, its Colormap will be freed along with it, and the cursor is assumed to be visible.", x_window);
+        self.x_sync();
         Ok(X11Window { context, x_window, colormap, xic, is_cursor_visible, user_cursor, })
     }
 }
@@ -542,6 +547,34 @@ impl X11Window {
     }
 }
 
+impl X11SharedContext {
+    fn xi_select_all_non_raw_events_all_devices(&self, x_window: x::Window) {
+        if self.xi().is_err() {
+            return;
+        }
+        let devices = &[xi2::XIAllDevices];
+        let events = &[
+            xi2::XI_ButtonPress,
+            xi2::XI_ButtonRelease,
+            xi2::XI_KeyPress,
+            xi2::XI_KeyRelease,
+            xi2::XI_Motion,
+            xi2::XI_DeviceChanged,
+            xi2::XI_Enter,
+            xi2::XI_Leave,
+            xi2::XI_FocusIn,
+            xi2::XI_FocusOut,
+            xi2::XI_TouchBegin,
+            xi2::XI_TouchUpdate,
+            xi2::XI_TouchEnd,
+            xi2::XI_HierarchyChanged,
+            xi2::XI_PropertyEvent,
+        ];
+        unsafe {
+            super::xi::xi_select_events(self.x_display, x_window, devices, &[events]);
+        }
+    }
+}
 
 
 impl X11Window {

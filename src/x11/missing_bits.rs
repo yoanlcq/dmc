@@ -16,6 +16,12 @@ pub mod glx {
 #[allow(non_upper_case_globals)]
 pub mod xi {
     pub const NoSuchExtension: i32 = 1;
+
+    use std::os::raw::c_int;
+    #[allow(non_snake_case)]
+    pub fn XIMaskLen(event: c_int) -> c_int {
+        (event >> 3) + 1
+    }
 }
 
 // TODO: Send a PR to x11-rs.

@@ -1,3 +1,5 @@
+//! Events reported by the platform.
+
 use std::time::Duration;
 use timeout::Timeout;
 use super::{Vec2, Extent2, Rect};

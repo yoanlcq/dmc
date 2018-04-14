@@ -1,3 +1,5 @@
+// TODO WISH: XInitThreads() for multithreading support
+
 extern crate x11;
 extern crate libc;
 
@@ -14,6 +16,7 @@ pub use self::gl::{
 };
 pub mod glx;
 pub mod xrender;
+pub mod xi;
 pub mod atoms;
 pub mod prop;
 pub mod cursor;

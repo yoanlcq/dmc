@@ -14,6 +14,7 @@ use super::x11::xlib as x;
 use super::atoms;
 use super::prop::{self, PropType, PropElement, PropData};
 use super::xrender;
+use super::xi;
 
 
 /// On X11-based targets, a `Context` **owns** an Xlib `Display` pointer.
@@ -47,6 +48,7 @@ pub struct X11SharedContext {
     pub xim: Option<x::XIM>,
     pub atoms: atoms::PreloadedAtoms,
     pub xrender: Result<xrender::XRender>,
+    pub xi: Result<xi::XI>,
     pub invisible_x_cursor: x::Cursor,
     pub default_x_cursor: x::Cursor,
 }
@@ -61,7 +63,7 @@ impl Deref for X11Context {
 impl Drop for X11SharedContext {
     fn drop(&mut self) {
         let &mut Self {
-            x_display, xim, atoms: _, xrender: _,
+            x_display, xim, atoms: _, xrender: _, xi: _,
             invisible_x_cursor, default_x_cursor,
         } = self;
         unsafe {
@@ -135,6 +137,7 @@ impl X11Context {
         let invisible_x_cursor = super::cursor::create_invisible_x_cursor(x_display);
         let default_x_cursor = super::cursor::create_default_x_cursor(x_display);
         let xrender = super::xrender::XRender::query(x_display);
+        let xi = super::xi::XI::query(x_display);
 
         let xim = {
             let (db, res_name, res_class) = (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
@@ -148,7 +151,7 @@ impl X11Context {
             }
         };
         let c = X11SharedContext {
-            x_display, xim, atoms, xrender, invisible_x_cursor, default_x_cursor,
+            x_display, xim, atoms, xrender, xi, invisible_x_cursor, default_x_cursor,
         };
         Ok(X11Context(Rc::new(c)))
     }

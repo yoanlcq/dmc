@@ -18,6 +18,32 @@ impl X11SharedContext {
     pub fn xi(&self) -> Result<&XI> {
         self.xi.as_ref().map_err(Clone::clone)
     }
+    pub fn xi_select_all_non_raw_events_all_devices(&self, x_window: x::Window) {
+        if self.xi().is_err() {
+            return;
+        }
+        let devices = &[xi2::XIAllDevices];
+        let events = &[
+            xi2::XI_ButtonPress,
+            xi2::XI_ButtonRelease,
+            xi2::XI_KeyPress,
+            xi2::XI_KeyRelease,
+            xi2::XI_Motion,
+            xi2::XI_DeviceChanged,
+            xi2::XI_Enter,
+            xi2::XI_Leave,
+            xi2::XI_FocusIn,
+            xi2::XI_FocusOut,
+            xi2::XI_TouchBegin,
+            xi2::XI_TouchUpdate,
+            xi2::XI_TouchEnd,
+            xi2::XI_HierarchyChanged,
+            xi2::XI_PropertyEvent,
+        ];
+        unsafe {
+            xi_select_events(self.x_display, x_window, devices, &[events]);
+        }
+    }
 }
 
 impl XI {

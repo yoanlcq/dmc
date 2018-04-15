@@ -547,7 +547,7 @@ impl X11SharedContext {
         };
     }
     fn retrieve_window(&self, window: x::Window) -> Result<Rc<X11SharedWindow>> {
-        let result = match self.weak_windows.get(&window) {
+        let result = match self.weak_windows.borrow().get(&window) {
             None => failed(format!("X Window {} is not in our list", window)),
             Some(weak) => match weak.upgrade() {
                 None => failed(format!("X Window {} should have been removed from the list", window)),

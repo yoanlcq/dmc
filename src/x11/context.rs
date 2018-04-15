@@ -55,7 +55,7 @@ pub struct X11SharedContext {
     pub xi: Result<xi::XI>,
     pub invisible_x_cursor: x::Cursor,
     pub default_x_cursor: x::Cursor,
-    pub weak_windows: HashMap<x::Window, Weak<X11SharedWindow>>,
+    pub weak_windows: RefCell<HashMap<x::Window, Weak<X11SharedWindow>>>,
     pub pending_translated_events: RefCell<VecDeque<Event>>,
     // These two fields are used to detect key repeat events.
     pub previous_x_key_release_keycode: Cell<x::KeyCode>,
@@ -148,7 +148,7 @@ impl X11Context {
         let previous_x_key_release_keycode = Cell::new(x::KeyCode::default());
         let previous_x_key_release_time = Cell::new(x::Time::default());
         let pending_translated_events = RefCell::new(VecDeque::new());
-        let weak_windows = HashMap::new();
+        let weak_windows = RefCell::new(HashMap::new());
         let atoms = atoms::PreloadedAtoms::load(x_display)?;
         let invisible_x_cursor = super::cursor::create_invisible_x_cursor(x_display);
         let default_x_cursor = super::cursor::create_default_x_cursor(x_display);

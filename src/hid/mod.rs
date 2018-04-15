@@ -48,7 +48,9 @@ pub(crate) fn disconnected<T>(timestamp: Timestamp) -> Result<T> {
 
 /// A button or key state, i.e "up" or "down".
 ///
-/// This type exists only because a `bool` is not explicit enough.
+/// This type exists only because a `bool` is not explicit enough;
+/// `some_key.is_down()` and `some_key.is_up()` is more explicit
+/// and less error-prone.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum ButtonState {
     /// The button or key is being held down.

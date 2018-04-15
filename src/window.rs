@@ -203,7 +203,7 @@ impl Window {
     pub fn set_title(&self, title: &str) -> Result<()> {
         self.0.set_title(title)
     }
-    /// Sets the window's title to an UTF-8 string.
+    /// Gets the window's title as an UTF-8 string.
     pub fn title(&self) -> Result<String> {
         self.0.title()
     }
@@ -492,7 +492,7 @@ impl Window {
     /// - `window.hide_cursor()`;
     /// - Only interpret relative mouse motion events. _(implementation note: XI2 RawMotion
     /// events)_
-    /// - Optionally, set_mouse_position() to the window's center every frame, but it's not much use.
+    /// - Optionally, `window.set_mouse_position(center)` every frame, but it's not much use.
     pub fn trap_mouse(&self) -> Result<()> {
         self.0.trap_mouse()
     }

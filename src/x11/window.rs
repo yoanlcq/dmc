@@ -84,6 +84,11 @@ impl Drop for X11SharedWindow {
 
         let x_display = context.x_display;
 
+        match context.weak_windows.borrow_mut().remove(&x_window) {
+            Some(_weak) => trace!("Removed X Window {} from the context's list", x_window),
+            None => warn!("X Window {} is being destroyed but somehow wasn't in the context's list", x_window),
+        }
+
         unsafe {
             if let Some(xic) = xic {
                 x::XDestroyIC(xic);
@@ -274,6 +279,10 @@ impl X11Context {
         let window = X11Window(Rc::new(X11SharedWindow { 
             context, x_window, colormap, xic, is_cursor_visible, user_cursor
         }));
+        match self.weak_windows.borrow_mut().insert(x_window, Rc::downgrade(&window.0)) {
+            Some(_) => warn!("Newly created X Window {} was somewhat already present in the context's list", x_window),
+            None => trace!("Inserted X Window {} into the context's list", x_window),
+        }
 
         // Even though XCreateWindow takes x, y, w and h, window managers often ignore it
         // and place the window wherever they want.
@@ -337,8 +346,14 @@ impl X11Context {
     }
 
     pub fn window_from_handle(&self, x_window: x::Window, params: Option<&X11WindowFromHandleParams>) -> Result<X11Window> {
-        let context = Rc::clone(&self.0);
-        let x_display = context.x_display;
+        if let Some(weak) = self.weak_windows.borrow().get(&x_window) {
+            if let Some(strong) = weak.upgrade() {
+                return Ok(X11Window(strong));
+            } else {
+                warn!("X Window {} was destroyed but not removed from the context's list", x_window);
+            }
+        }
+        let x_display = self.x_display;
         let wa = unsafe {
             let mut wa = mem::zeroed();
             let status = xlib_error::sync_catch(x_display, || x::XGetWindowAttributes(x_display, x_window, &mut wa))?;
@@ -354,9 +369,13 @@ impl X11Context {
         self.xi_select_all_non_raw_events_all_devices(x_window);
         warn!("Window created from X Window `{}` will NOT have an associated XIC. Also, its Colormap will be freed along with it, and the cursor is assumed to be visible.", x_window);
         self.x_sync();
-        Ok(X11Window(Rc::new(X11SharedWindow {
+        let context = Rc::clone(&self.0);
+        let window = X11Window(Rc::new(X11SharedWindow {
             context, x_window, colormap, xic, is_cursor_visible, user_cursor,
-        })))
+        }));
+        self.weak_windows.borrow_mut().insert(x_window, Rc::downgrade(&window.0));
+        trace!("Inserted foreign X Window {} into the context's list", x_window);
+        Ok(window)
     }
 }
 
@@ -554,36 +573,6 @@ impl X11SharedWindow {
         self.x_geometry_and_root().map(|r| r.1)
     }
 }
-
-impl X11SharedContext {
-    fn xi_select_all_non_raw_events_all_devices(&self, x_window: x::Window) {
-        if self.xi().is_err() {
-            return;
-        }
-        let devices = &[xi2::XIAllDevices];
-        let events = &[
-            xi2::XI_ButtonPress,
-            xi2::XI_ButtonRelease,
-            xi2::XI_KeyPress,
-            xi2::XI_KeyRelease,
-            xi2::XI_Motion,
-            xi2::XI_DeviceChanged,
-            xi2::XI_Enter,
-            xi2::XI_Leave,
-            xi2::XI_FocusIn,
-            xi2::XI_FocusOut,
-            xi2::XI_TouchBegin,
-            xi2::XI_TouchUpdate,
-            xi2::XI_TouchEnd,
-            xi2::XI_HierarchyChanged,
-            xi2::XI_PropertyEvent,
-        ];
-        unsafe {
-            super::xi::xi_select_events(self.x_display, x_window, devices, &[events]);
-        }
-    }
-}
-
 
 impl X11SharedWindow {
 

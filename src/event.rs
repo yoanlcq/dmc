@@ -64,7 +64,8 @@ impl<'c> Iterator for Iter<'c> {
 ///
 /// On some targets, there is no actual information about (or concept of)
 /// mutiple mice and keyboards; In these cases, an ID is still yielded, but
-/// this crate treats it as a spurious one and associates it to an imaginary device.
+/// this crate treats it as a spurious one and associates it to an imaginary device
+/// that resolves to whatever can be meaningfully obtained from the platform.
 ///
 /// Note that events are not redundant : What that means is that, for instance,
 /// you won't get two `MouseMotion` events in a row associated to the same cursor but with

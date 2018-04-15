@@ -2,10 +2,9 @@
 
 use context::Context;
 use vek::{Vec2, Extent2, Rect, Rgba};
-use os::{OsWindow, OsWindowHandle};
+use os::{OsWindow, OsWindowHandle, OsWindowFromHandleParams};
 use gl::GLPixelFormat;
 use error::{self, Result};
-
 
 impl Context {
     /// Attempts to create a new `Window` that satisfies given settings.
@@ -13,8 +12,27 @@ impl Context {
         self.0.create_window(settings).map(Window)
     }
     /// Attempts to create a new `Window` from the given handle.
-    pub fn create_window_from_handle(&self, handle: WindowHandle) -> Result<Window> {
-        self.0.create_window_from_handle(handle.0).map(Window)
+    ///
+    /// This is unsafe because there's no guarantee that the handle is valid
+    /// (i.e neither invalid nor outdated), and there's no guarantee that `params`
+    /// is accurate.
+    ///
+    /// `params` should be `None` if `handle` refers to a window created via this crate.  
+    /// Otherwise, it should be `Some` platform-specific information for configuring
+    /// the foreign window.
+    ///
+    /// It is fine to drop the returned `Window` even if you previously constructed
+    /// any number of others with the same handle; There is an internal reference
+    /// count managed by the `Context`, and system resources are only freed when the
+    /// last referring window is dropped.  
+    /// This convenience is provided because manipulating windows via their handles
+    /// is done quite often internally, and it's also handy if you don't feel like
+    /// keeping track of a handle-to-window mapping yourself.  
+    /// However you have to be careful if the underlying system window is "owned" 
+    /// by someone else (including yourself or 3rd parties), in which case you should
+    /// call `mem::forget()` on the last window in order to keep the system resources alive.
+    pub unsafe fn window_from_handle(&self, handle: WindowHandle, params: Option<&OsWindowFromHandleParams>) -> Result<Window> {
+        self.0.window_from_handle(handle.0, params).map(Window)
     }
 }
 
@@ -25,8 +43,29 @@ pub struct Window(pub(crate) OsWindow);
 
 /// Wrapper around a platform-specific window handle, which also acts as 
 /// a lightweight ID.
+///
+/// This wrapper type only serves as a uniform facade and carries no implicit
+/// meaning; it is only a promise that a handle is nothing more that
+/// an integer or pointer, enforced by derived traits such as `Copy` and `Ord`.
+///
+/// In particular:
+///
+/// - The underlying handle may be invalid (e.g `INVALID_HANDLE` on Windows);
+/// - The underlying handle may be outdated (refer to a window that was previously destroyed and
+///   shouldn't be used anymore);
+/// - There's no guarantee that the referred window was properly
+///   configured for use by this crate's API.
+///   This is especially important when you want to create a DMC `Window` using
+///   your own platform-specific facilities.
+// NOTE: Getters for this struct are in the respective platform-specific modules.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WindowHandle(pub(crate) OsWindowHandle);
+
+impl From<OsWindowHandle> for WindowHandle {
+    fn from(h: OsWindowHandle) -> Self {
+        WindowHandle(h)
+    }
+}
 
 /// A window type as defined by `_NET_WM_WINDOW_TYPE` in the [Extended Window Manager Hints (EWMH) specification](https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html).
 ///

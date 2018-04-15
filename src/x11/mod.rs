@@ -6,7 +6,9 @@ extern crate libc;
 pub mod context;
 pub use self::context::{X11Context, X11SharedContext};
 pub mod window;
-pub use self::window::{X11Window, X11WindowHandle};
+pub use self::window::{X11Window, X11SharedWindow, X11WindowHandle, X11WindowFromHandleParams};
+pub mod cursor;
+pub use self::cursor::{X11Cursor, X11SharedCursor};
 pub mod event;
 pub mod gl;
 pub use self::gl::{
@@ -19,11 +21,9 @@ pub mod xrender;
 pub mod xi;
 pub mod atoms;
 pub mod prop;
-pub mod cursor;
-pub use self::cursor::{X11Cursor, X11SharedCursor};
 pub mod xlib_error;
 pub mod missing_bits;
 pub mod net_wm;
 pub mod motif_wm;
-//pub mod keys;
+pub mod keys;
 

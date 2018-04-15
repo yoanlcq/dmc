@@ -4,7 +4,7 @@ use std::ptr;
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};
 use std::os::raw::{c_void, c_char, c_int, c_uint, c_long, c_ulong};
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::mem;
 use std::env;
 use std::ffi::CString;
@@ -23,6 +23,26 @@ use super::net_wm::{NetWMStateAction, NetWMWindowType, BypassCompositor};
 use super::motif_wm;
 use super::prop::{self, PropType, PropMode, PropElement, PropData};
 use super::xlib_error;
+
+
+pub type X11WindowHandle = x::Window;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct X11WindowFromHandleParams;
+
+#[derive(Debug)]
+pub struct X11SharedWindow {
+    pub context: Rc<X11SharedContext>,
+    pub x_window: x::Window,
+    pub colormap: x::Colormap,
+    pub xic: Option<x::XIC>,
+    pub user_cursor: RefCell<Option<X11Cursor>>,
+    pub is_cursor_visible: Cell<bool>,
+}
+
+#[derive(Debug)]
+pub struct X11Window(pub Rc<X11SharedWindow>);
+
 
 impl Window {
     /// (X11-only) Gets the X `Display` pointer associated with the `Context` for this `Window`.
@@ -44,35 +64,16 @@ impl WindowHandle {
     pub fn x_window(&self) -> x::Window {
         self.0
     }
-    /// (X11-only) Creates a handle from the given X Window.
-    ///
-    /// This is unsafe because `x_window` is assumed to be valid and random breakage
-    /// may happen if some conditions are not met.  
-    ///
-    /// For instance, the X Window MUST have an associated X `Colormap` set via
-    /// e.g `XSetWindowAttributes()` or `XSetWindowColormap()`. That `Colormap` is
-    /// treated as owned by the `Window` and freed when it is dropped.
-    ///
-    /// Also, the X Window will NOT go through the usual configuraton phase as for
-    /// this crate's `Window`s.
-    pub unsafe fn from_x_window_unchecked(x_window: x::Window) -> Self {
-        WindowHandle(x_window)
+}
+
+impl Deref for X11Window {
+    type Target = X11SharedWindow;
+    fn deref(&self) -> &X11SharedWindow {
+        &self.0
     }
 }
 
-pub type X11WindowHandle = x::Window;
-
-#[derive(Debug)]
-pub struct X11Window {
-    pub context: Rc<X11SharedContext>,
-    pub x_window: x::Window,
-    pub colormap: x::Colormap,
-    pub xic: Option<x::XIC>,
-    pub user_cursor: RefCell<Option<X11Cursor>>,
-    pub is_cursor_visible: Cell<bool>,
-}
-
-impl Drop for X11Window {
+impl Drop for X11SharedWindow {
     fn drop(&mut self) {
         let &mut Self {
             ref mut context, x_window, colormap, xic, user_cursor: _,
@@ -268,7 +269,9 @@ impl X11Context {
         let context = Rc::clone(&self.0);
         let is_cursor_visible = Cell::new(true);
         let user_cursor = RefCell::new(None);
-        let window = X11Window { context, x_window, colormap, xic, is_cursor_visible, user_cursor };
+        let window = X11Window(Rc::new(X11SharedWindow { 
+            context, x_window, colormap, xic, is_cursor_visible, user_cursor
+        }));
 
         // Even though XCreateWindow takes x, y, w and h, window managers often ignore it
         // and place the window wherever they want.
@@ -330,7 +333,8 @@ impl X11Context {
 
         Ok(window)
     }
-    pub fn create_window_from_handle(&self, x_window: x::Window) -> Result<X11Window> {
+
+    pub fn window_from_handle(&self, x_window: x::Window, params: Option<&X11WindowFromHandleParams>) -> Result<X11Window> {
         let context = Rc::clone(&self.0);
         let x_display = context.x_display;
         let wa = unsafe {
@@ -348,11 +352,13 @@ impl X11Context {
         self.xi_select_all_non_raw_events_all_devices(x_window);
         warn!("Window created from X Window `{}` will NOT have an associated XIC. Also, its Colormap will be freed along with it, and the cursor is assumed to be visible.", x_window);
         self.x_sync();
-        Ok(X11Window { context, x_window, colormap, xic, is_cursor_visible, user_cursor, })
+        Ok(X11Window(Rc::new(X11SharedWindow {
+            context, x_window, colormap, xic, is_cursor_visible, user_cursor,
+        })))
     }
 }
 
-impl X11Window {
+impl X11SharedWindow {
     fn set_prop<T: PropElement>(&self, prop: x::Atom, prop_type: PropType, mode: PropMode, data: &[T]) -> Result<()> {
         prop::set(self.context.x_display, self.x_window, prop, prop_type, mode, data)
     }
@@ -577,7 +583,7 @@ impl X11SharedContext {
 }
 
 
-impl X11Window {
+impl X11SharedWindow {
 
     pub fn handle(&self) -> WindowHandle {
         WindowHandle(self.x_window)

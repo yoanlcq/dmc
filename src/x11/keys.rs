@@ -1,25 +1,28 @@
 use super::x11::xlib as x;
 use super::x11::keysym;
+use hid::keyboard::Keysym;
 
-macro_rules! keys_to_x_keysyms {
-    ($($Key:ident $x_keysym:ident,)+) => {
-        pub fn key_to_x_keysym(key: Key) -> Option<x::KeySym> {
-            match key {
-                $(Key::$Key => Some(keysym::$x_keysym as _),)+
-                Key::Other(x) => Some(x as _),
-                _ => None,
+macro_rules! x_keysyms {
+    ($($Key:ident $XK:ident,)+ { ignored: $($Ignored:ident,)* }) => {
+        impl Keysym {
+            pub(crate) fn x_keysym(&self) -> Option<x::KeySym> {
+                match *self {
+                    $(Keysym::$Key => Some(keysym::$XK as _),)+
+                    $(Keysym::$Ignored => None,)*
+                    Keysym::Other(x) => Some(x as _),
+                }
             }
-        }
-        pub fn x_keysym_to_key(x_keysym: x::KeySym) -> Key {
-            match x_keysym as _ {
-                $(keysym::$x_keysym => Key::$Key,)+
-                x @ _ => Key::Other(x as _),
+            pub(crate) fn from_x_keysym(x_keysym: x::KeySym) -> Self {
+                match x_keysym as _ {
+                    $(keysym::$XK => Keysym::$Key,)+
+                    x => Keysym::Other(x as _),
+                }
             }
         }
     };
 }
 
-keys_to_x_keysyms!{
+x_keysyms!{
     Num1             XK_1            ,
     Num2             XK_2            ,
     Num3             XK_3            ,
@@ -152,9 +155,51 @@ keys_to_x_keysyms!{
     KatakanaHiragana XK_Hiragana_Katakana,
     Muhenkan         XK_Muhenkan        ,
 
-    /*
-    Hangul           XK_Hangul         ,
-    Hanja            XK_Hangul_Hanja           ,
-    */
     Yen              XK_yen             ,
+
+    {
+        ignored:
+        Hangul,
+        Hanja,
+        Junja,
+        Final,
+        Kanji,
+        NextTrack, PrevTrack, PlayPause,
+        Stop,
+        BrowserBack,
+        BrowserForward,
+        BrowserRefresh,
+        BrowserStop,
+        BrowserSearch,
+        BrowserFavorites,
+        BrowserHome,
+        LaunchMail,
+        LaunchMediaSelect,
+        LaunchApp1,
+        LaunchApp2,
+        Sleep,
+        Menu,
+        Snapshot,
+        Select,
+        Print,
+        Execute,
+        Help,
+        Apps,
+        OemPlus,
+        OemComma,
+        OemMinus,
+        OemPeriod,
+        F13,
+        F14,
+        F15,
+        F16,
+        F17,
+        F18,
+        F19,
+        F20,
+        F21,
+        F22,
+        F23,
+        F24,
+    }
 }

@@ -2,7 +2,7 @@ extern crate libevdev_sys;
 extern crate libudev_sys;
 
 use x11::{
-    X11Context, X11Window, X11WindowHandle, X11Cursor,
+    X11Context, X11Window, X11WindowHandle, X11WindowFromHandleParams, X11Cursor,
     X11GLProc, X11GLPixelFormat, X11GLContext,
 };
 use error::Result;
@@ -14,7 +14,7 @@ use hid::{
     self, 
     DeviceId, HidInfo, AxisInfo, ButtonState,
     ControllerButton, ControllerAxis, ControllerId, ControllerState, ControllerInfo,
-    KeyboardId, KeyState, KeyboardState, ScanCode, KeyCode,
+    KeyboardId, KeyState, KeyboardState, Keysym, Keycode,
     MouseId, MouseState, MouseButton,
     TabletId, TabletInfo, TabletState, TabletPadButton, TabletStylusButton,
     TouchId, TouchInfo,
@@ -30,6 +30,7 @@ pub struct OsContext {
 
 pub type OsWindow = X11Window;
 pub type OsWindowHandle = X11WindowHandle;
+pub type OsWindowFromHandleParams = X11WindowFromHandleParams;
 pub type OsCursor = X11Cursor;
 pub type OsGLPixelFormat = X11GLPixelFormat;
 pub type OsGLContext = X11GLContext;
@@ -45,8 +46,8 @@ pub type OsKeyboardId = i32;
 pub type OsMouseId = i32;
 pub type OsTabletId = i32;
 pub type OsTouchId = i32;
-pub type OsScanCode = i32;
-pub type OsKeyCode = i32;
+pub type OsKeysym = i32;
+pub type OsKeycode = i32;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OsControllerState;
@@ -82,7 +83,10 @@ impl OsControllerState {
     }
 }
 impl OsKeyboardState {
-    pub fn key(&self, key: ScanCode) -> Option<KeyState> {
+    pub fn keycode(&self, key: Keycode) -> Option<KeyState> {
+        unimplemented!{}
+    }
+    pub fn keysym(&self, key: Keysym) -> Option<KeyState> {
         unimplemented!{}
     }
 }
@@ -117,8 +121,8 @@ impl OsContext {
     pub fn create_window(&self, window_settings: &WindowSettings) -> Result<OsWindow> {
         self.x11.create_window(window_settings)
     }
-    pub fn create_window_from_handle(&self, handle: OsWindowHandle) -> Result<OsWindow> {
-        self.x11.create_window_from_handle(handle)
+    pub fn window_from_handle(&self, handle: OsWindowHandle, params: Option<&OsWindowFromHandleParams>) -> Result<OsWindow> {
+        self.x11.window_from_handle(handle, params)
     }
     pub fn desktops(&self) -> Result<Vec<Desktop>> {
         self.x11.desktops()
@@ -177,16 +181,19 @@ impl OsContext {
     pub fn keyboard_state(&self, keyboard: KeyboardId) -> hid::Result<KeyboardState> {
         unimplemented!{}
     }
-    pub fn keyboard_key_state(&self, keyboard: KeyboardId, key: ScanCode) -> hid::Result<KeyState> {
+    pub fn keyboard_keycode_state(&self, keyboard: KeyboardId, keycode: Keycode) -> hid::Result<KeyState> {
         unimplemented!{}
     }
-    pub fn key_name(&self, key: KeyCode) -> hid::Result<String> {
+    pub fn keyboard_keysym_state(&self, keyboard: KeyboardId, keysym: Keysym) -> hid::Result<KeyState> {
         unimplemented!{}
     }
-    pub fn translate_scan_code(&self, keyboard: KeyboardId, scan_code: ScanCode) -> hid::Result<KeyCode> {
+    pub fn keysym_name(&self, keysum: Keysym) -> hid::Result<String> {
         unimplemented!{}
     }
-    pub fn untranslate_key_code(&self, keyboard: KeyboardId, key_code: KeyCode) -> hid::Result<ScanCode> {
+    pub fn keysym_from_keycode(&self, keyboard: KeyboardId, keycode: Keycode) -> hid::Result<Keysym> {
+        unimplemented!{}
+    }
+    pub fn keycode_from_keysym(&self, keyboard: KeyboardId, keysym: Keysym) -> hid::Result<Keycode> {
         unimplemented!{}
     }
     pub fn mice(&self) -> hid::Result<Vec<MouseId>> {

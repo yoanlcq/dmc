@@ -6,19 +6,19 @@ use error::{Result, failed};
 use cursor::{SystemCursor, RgbaCursorData, RgbaCursorAnimFrame};
 use {Vec2, Extent2};
 use super::context::{X11Context, X11SharedContext};
-use super::window::X11Window;
+use super::window::X11SharedWindow;
 use super::x11::xrender;
 use super::x11::xlib as x;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
+pub struct X11Cursor(pub Rc<X11SharedCursor>);
+
+#[derive(Debug)]
 pub struct X11SharedCursor {
     pub context: Rc<X11SharedContext>,
     pub x_cursor: x::Cursor,
     pub x_anim_cursors: Vec<xrender::XAnimCursor>,
 }
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct X11Cursor(pub Rc<X11SharedCursor>);
 
 impl Drop for X11SharedCursor {
     fn drop(&mut self) {
@@ -31,7 +31,7 @@ impl Drop for X11SharedCursor {
     }
 }
 
-impl X11Window {
+impl X11SharedWindow {
     fn refresh_cursor_internal(&self) -> Result<()> {
         unsafe {
             if self.is_cursor_visible.get() {
@@ -70,12 +70,12 @@ impl X11Window {
         self.refresh_cursor_internal()
     }
     pub fn set_cursor(&self, cursor: &X11Cursor) -> Result<()> {
-        self.user_cursor.replace(Some(cursor.clone()));
+        self.user_cursor.replace(Some(X11Cursor(Rc::clone(&cursor.0))));
         self.refresh_cursor_internal()
     }
     pub fn cursor(&self) -> Result<X11Cursor> {
         match &*self.user_cursor.borrow() {
-            Some(ref c) => Ok(c.clone()),
+            Some(ref c) => Ok(X11Cursor(Rc::clone(&c.0))),
             None => {
                 warn!("There is no reliable way to retrieve a windows's cursor on X11");
                 let x_cursor = unsafe {
@@ -174,7 +174,7 @@ impl X11SharedContext {
             x::XDestroyImage(pix_img);
             x::XFreeGC(x_display, pix_gc);
             x::XFreePixmap(x_display, pix);
-            unimplemented!{"This code is probably wrong because data is RGBA but pict format is ARGB"};
+            unimplemented!{"This code is probably wrong because data is RGBA but pict format is ARGB. Test me!"};
             Ok(x_cursor)
         }
     }

@@ -161,18 +161,23 @@ pub enum ControllerButton {
     /// (Gamepads) The button at the gamepad's center, as the "Mode" button on a DualShock controller or the glowing "X" at the center of a Xbox gamepad.
     Mode,
 
+    /// (Steering wheels) Gear down.
+    GearDown,
+    /// (Steering wheels) Gear up.
+    GearUp,
+
     /// (Joysticks) The trigger button.
     Trigger,
     /// (Joysticks) The pinkie button.
     Pinkie,
     /// (Joysticks) I have no idea what this is but Linux exposes it.
     Dead,
-    /// (Joysticks) A thumb button.
-    Thumb(i32),
-    /// (Joysticks) A top button.
-    Top(i32),
-    /// (Joysticks) A base button.
-    Base(i32),
+    /// (Joysticks) A thumb button. Indices start at 0, and there's usually a maximum of 2.
+    Thumb(u32),
+    /// (Joysticks) A top button. Indices start at 0, and there's usually a maximum of 2.
+    Top(u32),
+    /// (Joysticks) A base button. Indices start at 0, and there's usually a maximum of 6.
+    Base(u32),
 
     /// An other, unknown, backend-specific button.
     Other(i32),

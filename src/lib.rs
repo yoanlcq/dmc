@@ -45,12 +45,12 @@ macro_rules! os_mod {
         mod os {
             pub mod $os;
             pub use self::$os::{
-                OsContext, OsWindow, OsWindowHandle,
+                OsContext, OsWindow, OsWindowHandle, OsWindowFromHandleParams,
                 OsCursor,
                 OsGLPixelFormat, OsGLContext, OsGLProc,
                 OsMasterHidId,
                 OsControllerId, OsControllerState,
-                OsKeyboardId, OsKeyboardState, OsKeyCode, OsScanCode,
+                OsKeyboardId, OsKeyboardState, OsKeycode, OsKeysym,
                 OsMouseId, OsMouseButtonsState,
                 OsTabletId, OsTabletPadButtonsState, OsTabletStylusButtonsState,
                 OsTouchId,

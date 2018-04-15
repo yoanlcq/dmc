@@ -23,11 +23,12 @@ macro_rules! atoms {
                 pub fn $atom(&self) -> Result<x::Atom> {
                     match self.$atom {
                         0 => failed(format!("{} atom is not present", stringify!($atom))),
-                        _ => Ok(self.$atom),
+                        atom => Ok(atom),
                     }
                 }
             )+
             pub fn load(x_display: *mut x::Display) -> Result<Self> {
+                $(assert_eq!(&0, $name.last().unwrap());)+
                 let mut atoms = Self::default();
                 xlib_error::sync_catch(x_display, || {
                     let only_if_exists = x::True;

@@ -1,8 +1,9 @@
 use std::ptr;
 use std::ffi::CStr;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::ops::{Deref, Range};
 use std::os::raw::{c_int, c_long, c_ulong, c_uchar};
+use std::collections::HashMap;
 
 use context::Context;
 use desktop::Desktop;
@@ -15,6 +16,7 @@ use super::atoms;
 use super::prop::{self, PropType, PropElement, PropData};
 use super::xrender;
 use super::xi;
+use super::X11SharedWindow;
 
 
 /// On X11-based targets, a `Context` **owns** an Xlib `Display` pointer.
@@ -39,10 +41,10 @@ impl Context {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct X11Context(pub Rc<X11SharedContext>);
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct X11SharedContext {
     pub x_display: *mut x::Display,
     pub xim: Option<x::XIM>,
@@ -51,6 +53,7 @@ pub struct X11SharedContext {
     pub xi: Result<xi::XI>,
     pub invisible_x_cursor: x::Cursor,
     pub default_x_cursor: x::Cursor,
+    pub weak_windows: HashMap<x::Window, Weak<X11SharedWindow>>,
 }
 
 impl Deref for X11Context {
@@ -64,7 +67,7 @@ impl Drop for X11SharedContext {
     fn drop(&mut self) {
         let &mut Self {
             x_display, xim, atoms: _, xrender: _, xi: _,
-            invisible_x_cursor, default_x_cursor,
+            invisible_x_cursor, default_x_cursor, weak_windows: _,
         } = self;
         unsafe {
             x::XFreeCursor(x_display, invisible_x_cursor);
@@ -133,6 +136,7 @@ impl X11Context {
         trace!("X server vendor: `{}`, release {}", server_vendor, vendor_release);
         trace!("X server screen count: {}", screen_count);
 
+        let weak_windows = HashMap::new();
         let atoms = atoms::PreloadedAtoms::load(x_display)?;
         let invisible_x_cursor = super::cursor::create_invisible_x_cursor(x_display);
         let default_x_cursor = super::cursor::create_default_x_cursor(x_display);
@@ -152,6 +156,7 @@ impl X11Context {
         };
         let c = X11SharedContext {
             x_display, xim, atoms, xrender, xi, invisible_x_cursor, default_x_cursor,
+            weak_windows,
         };
         Ok(X11Context(Rc::new(c)))
     }

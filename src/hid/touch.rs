@@ -7,7 +7,7 @@ use os::{OsTouchId, OsDeviceId};
 use super::{AxisInfo, Result};
 
 /// A device ID type for touch devices.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct TouchId(pub(crate) OsTouchId);
 impl OsDeviceId for TouchId {}
 

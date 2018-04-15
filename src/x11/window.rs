@@ -35,6 +35,8 @@ pub struct X11SharedWindow {
     pub context: Rc<X11SharedContext>,
     pub x_window: x::Window,
     pub colormap: x::Colormap,
+    // NOTE: If I implement child windows one day, they should not have their own XIC.
+    // Or should they?
     pub xic: Option<x::XIC>,
     pub user_cursor: RefCell<Option<X11Cursor>>,
     pub is_cursor_visible: Cell<bool>,
@@ -408,7 +410,7 @@ impl X11SharedWindow {
         x::XSetCommand(self.context.x_display, self.x_window, argv as _, argc);
     }
 
-    fn set_net_wm_user_time(&self, time: x::Time) -> Result<()> {
+    pub(crate) fn set_net_wm_user_time(&self, time: x::Time) -> Result<()> {
         self.set_prop(self.context.atoms._NET_WM_USER_TIME()?, PropType::Cardinal, PropMode::Replace, &[time])
     }
 

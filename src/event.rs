@@ -60,6 +60,18 @@ impl<'c> Iterator for Iter<'c> {
 // - Trackball features for the mouse.
 // - Missing 'timestamp' field for most events
 
+/// An event, as reported by the platform.
+///
+/// On some targets, there is no actual information about (or concept of)
+/// mutiple mice and keyboards; In these cases, an ID is still yielded, but
+/// this crate treats it as a spurious one and associates it to an imaginary device.
+///
+/// Note that events are not redundant : What that means is that, for instance,
+/// you won't get two `MouseMotion` events in a row associated to the same cursor but with
+/// different device IDs.
+///
+/// However, it makes sense to receive both mouse events and tablet events when moving
+/// the stylus on a tablet; The device is indeed actually both a mouse and a tablet.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -77,8 +89,6 @@ pub enum Event {
     SessionEndRequested,
     /// Perform clean-up operations here. (Window: WM_ENDSESSION)
     SessionEnding,
-
-    TextInput { string: String, timestamp: Timestamp, },
 
     // 
     // Window events
@@ -122,8 +132,8 @@ pub enum Event {
     // Keyboard
     KeyboardConnected      { keyboard: KeyboardId, timestamp: Timestamp, },
     KeyboardDisconnected   { keyboard: KeyboardId, timestamp: Timestamp, },
-    KeyboardFocusGained    { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, },
-    KeyboardFocusLost      { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, },
+    KeyboardFocusGained    { keyboard: KeyboardId, window: WindowHandle, },
+    KeyboardFocusLost      { keyboard: KeyboardId, window: WindowHandle, },
     KeyboardKeyPressed     { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, key: Key, is_repeat: bool, text: Option<String>, },
     KeyboardKeyReleased    { keyboard: KeyboardId, window: WindowHandle, timestamp: Timestamp, key: Key, },
     KeyboardKeyPressedRaw  { keyboard: KeyboardId, timestamp: Timestamp, key: Key, },

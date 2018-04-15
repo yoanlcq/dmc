@@ -3,6 +3,28 @@
 extern crate x11;
 extern crate libc;
 
+use std::os::raw::c_int;
+use self::x11::xlib as x;
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum XIDeviceId {
+    XIMaster(c_int),
+    XISlave(c_int),
+}
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum X11DeviceId {
+    Main,
+    XI(XIDeviceId),
+}
+pub type X11MasterHidId = X11DeviceId;
+pub type X11MouseId = X11DeviceId;
+pub type X11KeyboardId = X11DeviceId;
+pub type X11TabletId = XIDeviceId;
+pub type X11TouchId = XIDeviceId;
+pub type X11Keysym = x::KeySym;
+pub type X11Keycode = x::KeyCode;
+
+
 pub mod context;
 pub use self::context::{X11Context, X11SharedContext};
 pub mod window;

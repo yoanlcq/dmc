@@ -1,4 +1,12 @@
-//! Human Interface Devices, including input devices.
+//! Module for common human interface devices (HID).
+//!
+//! This module is named "HID" because it is a short and nice term for
+//! human input/output devices, which excludes e.g hard drives, usb disks, GPUs, etc.  
+//!
+//! "Device" is a very generic term that could even qualify consoles, mobile phones and
+//! computers, but "HID" is more specific and includes mice, keyboards, gamepads and so on.
+//!
+//! For a rationale, see [Wikipedia's definition](https://en.wikipedia.org/wiki/Human_interface_device).
 //!
 //! A master HID is the "physical" counterpart to what is called an HID in this module.  
 //! To illustrate, a graphics tablet may be reported as two devices: a `Touch` and a `Tablet`,
@@ -143,20 +151,20 @@ pub enum Bus {
     Virtual,
 }
 
-pub trait DeviceId: OsDeviceId {}
-impl<T: OsDeviceId> DeviceId for T {}
+pub trait AnyDeviceId: OsDeviceId {}
+impl<T: OsDeviceId> AnyDeviceId for T {}
 
 /// An ID for a master HID.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct MasterHidId(pub(crate) OsMasterHidId);
 
 impl Context {
     /// Get the `HidInfo` for the given device ID.
-    fn hid_info<Id: DeviceId>(&self, id: Id) -> Result<HidInfo> {
+    fn hid_info<Id: AnyDeviceId>(&self, id: Id) -> Result<HidInfo> {
         self.0.hid_info(id)
     }
     /// Checks if the given device is still connected.
-    fn ping_hid<Id: DeviceId>(&self, id: Id) -> Result<()> {
+    fn ping_hid<Id: AnyDeviceId>(&self, id: Id) -> Result<()> {
         self.0.ping_hid(id)
     }
 }

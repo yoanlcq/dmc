@@ -5,7 +5,7 @@ use os::{OsKeyboardId, OsKeyboardState, OsDeviceId, OsKeysym, OsKeycode};
 use super::{KeyState, Result};
 
 /// A device ID type for keyboards.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct KeyboardId(pub(crate) OsKeyboardId);
 impl OsDeviceId for KeyboardId {}
 
@@ -79,8 +79,9 @@ pub struct Keycode(pub(crate) OsKeycode);
 pub struct Key {
     /// The scan code.
     pub code: Keycode,
-    /// The virtual code.
-    pub sym: Keysym,
+    /// The virtual code; May be `None` to indicate that the lookup failed for some reason,
+    /// but this should rarely occur.
+    pub sym: Option<Keysym>,
 }
 
 /// A virtual key code, i.e the OS-provided specific meaning of a key for a keyboard.

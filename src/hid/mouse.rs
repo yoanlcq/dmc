@@ -7,7 +7,7 @@ use super::{ButtonState, Result};
 use Vec2;
 
 /// A device ID type for mice.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct MouseId(pub(crate) OsMouseId);
 impl OsDeviceId for MouseId {}
 

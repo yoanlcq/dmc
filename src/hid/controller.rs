@@ -36,7 +36,7 @@ use os::{OsControllerId, OsControllerState, OsControllerInfo, OsDeviceId};
 use super::{ButtonState, AxisInfo, Result};
 
 /// A device ID type for controllers.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ControllerId(pub(crate) OsControllerId);
 impl OsDeviceId for ControllerId {}
 

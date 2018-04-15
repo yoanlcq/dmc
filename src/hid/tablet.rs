@@ -13,7 +13,7 @@ use super::{AxisInfo, ButtonState, Result};
 use Vec2;
 
 /// A device ID type for tablets.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct TabletId(pub(crate) OsTabletId);
 impl OsDeviceId for TabletId {}
 

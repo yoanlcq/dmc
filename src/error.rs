@@ -1,7 +1,7 @@
 //! `Error` and `Result` types for this crate.
 use std::fmt::{self, Display, Formatter};
 
-type CowStr = ::std::borrow::Cow<'static, str>;
+pub(crate) type CowStr = ::std::borrow::Cow<'static, str>;
 
 /// Different kinds of errors reported by most faillible operations.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]

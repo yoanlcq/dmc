@@ -1,13 +1,15 @@
 use std::ptr;
 use std::ffi::CStr;
 use std::rc::{Rc, Weak};
+use std::cell::{RefCell, Cell};
 use std::ops::{Deref, Range};
 use std::os::raw::{c_int, c_long, c_ulong, c_uchar};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use context::Context;
 use desktop::Desktop;
 use error::{Result, failed};
+use event::Event;
 use os::OsContext;
 use Rect;
 
@@ -54,6 +56,10 @@ pub struct X11SharedContext {
     pub invisible_x_cursor: x::Cursor,
     pub default_x_cursor: x::Cursor,
     pub weak_windows: HashMap<x::Window, Weak<X11SharedWindow>>,
+    pub pending_translated_events: RefCell<VecDeque<Event>>,
+    // These two fields are used to detect key repeat events.
+    pub previous_x_key_release_keycode: Cell<x::KeyCode>,
+    pub previous_x_key_release_time: Cell<x::Time>,
 }
 
 impl Deref for X11Context {
@@ -68,6 +74,9 @@ impl Drop for X11SharedContext {
         let &mut Self {
             x_display, xim, atoms: _, xrender: _, xi: _,
             invisible_x_cursor, default_x_cursor, weak_windows: _,
+            pending_translated_events: _,
+            previous_x_key_release_keycode: _,
+            previous_x_key_release_time: _,
         } = self;
         unsafe {
             x::XFreeCursor(x_display, invisible_x_cursor);
@@ -136,6 +145,9 @@ impl X11Context {
         trace!("X server vendor: `{}`, release {}", server_vendor, vendor_release);
         trace!("X server screen count: {}", screen_count);
 
+        let previous_x_key_release_keycode = Cell::new(x::KeyCode::default());
+        let previous_x_key_release_time = Cell::new(x::Time::default());
+        let pending_translated_events = RefCell::new(VecDeque::new());
         let weak_windows = HashMap::new();
         let atoms = atoms::PreloadedAtoms::load(x_display)?;
         let invisible_x_cursor = super::cursor::create_invisible_x_cursor(x_display);
@@ -156,7 +168,9 @@ impl X11Context {
         };
         let c = X11SharedContext {
             x_display, xim, atoms, xrender, xi, invisible_x_cursor, default_x_cursor,
-            weak_windows,
+            weak_windows, pending_translated_events,
+            previous_x_key_release_keycode,
+            previous_x_key_release_time,
         };
         Ok(X11Context(Rc::new(c)))
     }

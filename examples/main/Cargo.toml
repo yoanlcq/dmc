@@ -3,6 +3,9 @@ name = "main"
 version = "0.1.0"
 authors = ["Yoan Lecoq <yoanlecoq.io@gmail.com>"]
 
+[features]
+headless = [] # For testing on CI
+
 [dependencies]
 dmc = { path = "../.." }
 log = "0.4.1"

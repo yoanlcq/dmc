@@ -42,9 +42,9 @@ test_script:
   - if [%APPVEYOR_REPO_TAG%]==[false] (
       cargo build --target %TARGET% &&
       cargo build --target %TARGET% --release &&
-      cd examples/window_gl &&
-      cargo build --target %TARGET% &&
-      cargo build --target %TARGET% --release
+      cd examples/main &&
+      cargo build --target %TARGET% --features headless &&
+      cargo build --target %TARGET% --features headless --release
     )
       # NOTE(yoanlcq): In this crate, tests are interactive and need a display.
       # cargo test --lib --no-fail-fast --target %TARGET% &&

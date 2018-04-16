@@ -1,3 +1,5 @@
+#![cfg_attr(feature="headless", allow(unreachable_code))]
+
 #[macro_use]
 extern crate log;
 extern crate env_logger;
@@ -27,7 +29,11 @@ fn window_test_op<F: FnMut(&Window)>(window: &Window, name: &str, mut f: F, dur:
 }
 
 fn main() {
+    #[cfg(feature="headless")]
+    return; // We want this to compile but we won't be able to do anything on headless environments
+
     early::early();
+
     let context = Context::new().expect("Could not create context!");
     let window = context.create_window(&WindowSettings {
         position: (0, 0).into(),

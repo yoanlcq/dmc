@@ -133,8 +133,8 @@ script:
   - cargo build --target $TARGET
   - cargo build --target $TARGET --release
   - pushd examples/window_gl
-  - cargo build --target $TARGET
-  - cargo build --target $TARGET --release
+  - cargo build --target $TARGET --features headless 
+  - cargo build --target $TARGET --features headless --release
   - popd
 
 after_script: set +e

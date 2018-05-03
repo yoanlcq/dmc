@@ -43,6 +43,8 @@ pub struct RgbaCursorAnimFrame {
     pub duration: Duration,
     pub data: RgbaCursorData,
 }
+
+/// FIXME: Use the `imgref` crate instead!
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct RgbaCursorData {
     pub hotspot: Vec2<u32>,

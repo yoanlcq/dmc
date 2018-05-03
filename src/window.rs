@@ -207,10 +207,12 @@ impl Window {
     pub fn title(&self) -> Result<String> {
         self.0.title()
     }
+    /// FIXME: Use the `imgref` crate instead!
     /// Sets the window's icon via RGBA data.
     pub fn set_icon(&self, size: Extent2<u32>, data: &[Rgba<u8>]) -> Result<()> {
         self.0.set_icon(size, data)
     }
+    /// FIXME: Use the `imgref` crate instead!
     /// Gets the window's icon as RGBA data.
     pub fn icon(&self) -> Result<(Extent2<u32>, Vec<Rgba<u8>>)> {
         self.0.icon()

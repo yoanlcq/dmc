@@ -6,7 +6,7 @@ main() {
     cross build --target $TARGET
     cross build --target $TARGET --release
 
-    pushd examples/window
+    pushd examples/main
     cross build --target $TARGET
     cross build --target $TARGET --release
     popd

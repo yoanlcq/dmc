@@ -7,30 +7,6 @@
 // Steering Wheel
 // rationale : udev treats all these as ID_INPUT_JOYSTICK.
 
-// NOTE: from udev sources
-// https://github.com/systemd/systemd
-// 'ID_INPUT'
-// 'ID_INPUT_ACCELEROMETER'
-// 'ID_INPUT_JOYSTICK'
-// 'ID_INPUT_KEY'
-// 'ID_INPUT_KEYBOARD'
-// 'ID_INPUT_MOUSE'
-// 'ID_INPUT_POINTINGSTICK'
-// 'ID_INPUT_SWITCH'
-// 'ID_INPUT_TABLET'
-// 'ID_INPUT_TABLET_PAD'
-// 'ID_INPUT_TOUCHPAD'
-// 'ID_INPUT_TOUCHSCREEN'
-// 'ID_INPUT_TRACKBALL'
-//
-// Detecting the kind :
-// BTN_JOYSTICK
-// BTN_GAMEPAD
-// ABS_WHEEL (look at how evtest detects it)
-//
-// Very interesting:
-// https://www.kernel.org/doc/html/v4.12/input/gamepad.html
-
 use context::Context;
 use os::{OsControllerID, OsControllerState, OsControllerInfo, OsDeviceID};
 use super::{ButtonState, AxisInfo, Result};

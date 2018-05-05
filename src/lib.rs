@@ -12,6 +12,11 @@
 extern crate log;
 extern crate vek;
 
+#[cfg(unix)]
+#[macro_use]
+extern crate nix;
+
+
 /// Convenience shortcut for creating a `Context`.
 pub fn init() -> error::Result<Context> {
     Context::new()

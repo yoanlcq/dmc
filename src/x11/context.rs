@@ -255,13 +255,7 @@ impl X11SharedContext {
         let mut desktops = Vec::with_capacity(nb_desktops);
         for i in 0..nb_desktops {
             desktops.push(Desktop {
-                name: match names.get(i) {
-                    None => None,
-                    Some(name) => match name {
-                        Err(_) => None,
-                        Ok(name) => Some(name.clone()), // PERF: Could we avoid this clone()???
-                    }
-                },
+                name: names.get(i).map(|name| name.as_ref().ok().map(Clone::clone)).unwrap_or(None),
                 work_area: Rect {
                     x: work_areas[4*i + 0] as _,
                     y: work_areas[4*i + 1] as _,

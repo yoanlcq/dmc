@@ -315,7 +315,7 @@ impl X11Context {
 
         {
             let exe = env::current_exe();
-            let class_name = match &exe {
+            let class_name = match exe {
                 Ok(ref exe) => exe.file_stem().unwrap().to_string_lossy(),
                 Err(_) => env::args().nth(0).unwrap().into(),
             };
@@ -515,7 +515,7 @@ impl X11SharedWindow {
         let mut allowed_actions = self.net_wm_allowed_actions()?;
         let i = allowed_actions.iter().cloned()
             .enumerate()
-            .filter(|(_, a)| a == &action)
+            .filter(|&(_, a)| a == action)
             .next();
         let was_allowed = i.is_some();
         if was_allowed == allow {

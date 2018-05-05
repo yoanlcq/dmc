@@ -35,7 +35,7 @@ impl X11SharedWindow {
     fn refresh_cursor_internal(&self) -> Result<()> {
         unsafe {
             if self.is_cursor_visible.get() {
-                if let Some(ref user_cursor) = &*self.user_cursor.borrow() {
+                if let Some(ref user_cursor) = *self.user_cursor.borrow() {
                     x::XDefineCursor(self.context.x_display, self.x_window, user_cursor.0.x_cursor);
                 } else {
                     x::XUndefineCursor(self.context.x_display, self.x_window);
@@ -74,7 +74,7 @@ impl X11SharedWindow {
         self.refresh_cursor_internal()
     }
     pub fn cursor(&self) -> Result<X11Cursor> {
-        match &*self.user_cursor.borrow() {
+        match *self.user_cursor.borrow() {
             Some(ref c) => Ok(X11Cursor(Rc::clone(&c.0))),
             None => {
                 warn!("There is no reliable way to retrieve a windows's cursor on X11");
@@ -110,7 +110,7 @@ impl X11Context {
             };
             let cursor = self.x_cursor_from_rgba(&frame.data)?;
             Ok(xrender::XAnimCursor { cursor, delay: duration_millis })
-        }).inspect(|f: &Result<_>| if let Err(ref e) = f {
+        }).inspect(|f: &Result<_>| if let Err(ref e) = *f {
             errors.push(Err(e.clone()));
         })
         .filter_map(Result::ok)

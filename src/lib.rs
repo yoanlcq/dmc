@@ -4,7 +4,7 @@
 //! rid of the dependency on SDL2's shared library for Rust applications.
 
 #![doc(html_root_url = "https://docs.rs/dmc/0.2.0")]
-#![feature(optin_builtin_traits)] // !Send, !Sync for Context
+#![cfg_attr(nightly, feature(optin_builtin_traits))] // !Send, !Sync for Context
 #![warn(missing_docs)]
 
 #[allow(unused_imports)]

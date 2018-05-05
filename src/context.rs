@@ -8,8 +8,12 @@ use error::Result;
 #[derive(Debug)]
 pub struct Context(pub(crate) OsContext);
 
-impl !Send for Context {}
-impl !Sync for Context {}
+#[cfg(nightly)]
+mod nightly {
+    use super::Context;
+    impl !Send for Context {}
+    impl !Sync for Context {}
+}
 
 impl Context {
     /// Attempts to get one handle to the platform-specific display backend.

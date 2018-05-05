@@ -4,10 +4,10 @@ use std::os::raw::c_int;
 use super::context::X11SharedContext;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
-use super::{X11SharedWindow, X11DeviceId};
+use super::{X11SharedWindow, X11DeviceID};
 use error::{self, Result, failed};
 use event::{Event, Timestamp};
-use hid::{MouseId, KeyboardId, MouseButton, Key, Keysym, Keycode};
+use hid::{MouseID, KeyboardID, MouseButton, Key, Keysym, Keycode};
 use window::WindowHandle;
 use {Vec2, Extent2, Rect};
 
@@ -570,10 +570,10 @@ impl X11SharedContext {
             trace!("Sucessfully set _NET_WM_USER_TIME to {} for X Window {}", time, window);
         }
     }
-    fn main_x_mouse(&self) -> MouseId {
-        MouseId(X11DeviceId::Main)
+    fn main_x_mouse(&self) -> MouseID {
+        MouseID(X11DeviceID::Main)
     }
-    fn main_x_keyboard(&self) -> KeyboardId {
-        KeyboardId(X11DeviceId::Main)
+    fn main_x_keyboard(&self) -> KeyboardID {
+        KeyboardID(X11DeviceID::Main)
     }
 }

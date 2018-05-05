@@ -32,13 +32,13 @@
 // https://www.kernel.org/doc/html/v4.12/input/gamepad.html
 
 use context::Context;
-use os::{OsControllerId, OsControllerState, OsControllerInfo, OsDeviceId};
+use os::{OsControllerID, OsControllerState, OsControllerInfo, OsDeviceID};
 use super::{ButtonState, AxisInfo, Result};
 
 /// A device ID type for controllers.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct ControllerId(pub(crate) OsControllerId);
-impl OsDeviceId for ControllerId {}
+pub struct ControllerID(pub(crate) OsControllerID);
+impl OsDeviceID for ControllerID {}
 
 /// Opaque container for a snapshot of a controller's full state.
 #[derive(Debug, Clone, PartialEq)]
@@ -92,23 +92,23 @@ impl ControllerInfo {
 
 impl Context {
     /// Lists all connected controller devices.
-    pub fn controllers(&self) -> Result<Vec<ControllerId>> {
+    pub fn controllers(&self) -> Result<Vec<ControllerID>> {
         self.0.controllers()
     }
     /// Fetches the `ControllerInfo` for the controller which ID is given.
-    pub fn controller_info(&self, controller: ControllerId) -> Result<ControllerInfo> {
+    pub fn controller_info(&self, controller: ControllerID) -> Result<ControllerInfo> {
         self.0.controller_info(controller)
     }
     /// Gets a snapshot of a controller's current state, which ID is given.
-    pub fn controller_state(&self, controller: ControllerId) -> Result<ControllerState> {
+    pub fn controller_state(&self, controller: ControllerID) -> Result<ControllerState> {
         self.0.controller_state(controller)
     }
     /// Gets the current state of a button for the controller which ID is given.
-    pub fn controller_button_state(&self, controller: ControllerId, button: ControllerButton) -> Result<ButtonState> {
+    pub fn controller_button_state(&self, controller: ControllerID, button: ControllerButton) -> Result<ButtonState> {
         self.0.controller_button_state(controller, button)
     }
     /// Gets the current state of an axis for the controller which ID is given.
-    pub fn controller_axis_state(&self, controller: ControllerId, axis: ControllerAxis) -> Result<f64> {
+    pub fn controller_axis_state(&self, controller: ControllerID, axis: ControllerAxis) -> Result<f64> {
         self.0.controller_axis_state(controller, axis)
     }
 }

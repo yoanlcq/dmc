@@ -3,9 +3,9 @@ extern crate libudev_sys;
 
 use std::ffi::CStr;
 use event::Event;
-use hid::{self, ControllerId, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState};
+use hid::{self, ControllerID, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState};
 
-pub type UdevDeviceId = i32;
+pub type UdevDeviceID = i32;
 
 #[derive(Debug)]
 pub struct UdevContext {
@@ -60,19 +60,19 @@ impl UdevContext {
         }
         unimplemented!{}
     }
-    pub fn controllers(&self) -> hid::Result<Vec<ControllerId>> {
+    pub fn controllers(&self) -> hid::Result<Vec<ControllerID>> {
         unimplemented!{}
     }
-    pub fn controller_info(&self, controller: ControllerId) -> hid::Result<ControllerInfo> {
+    pub fn controller_info(&self, controller: ControllerID) -> hid::Result<ControllerInfo> {
         unimplemented!{}
     }
-    pub fn controller_state(&self, controller: ControllerId) -> hid::Result<ControllerState> {
+    pub fn controller_state(&self, controller: ControllerID) -> hid::Result<ControllerState> {
         unimplemented!{}
     }
-    pub fn controller_button_state(&self, controller: ControllerId, button: ControllerButton) -> hid::Result<ButtonState> {
+    pub fn controller_button_state(&self, controller: ControllerID, button: ControllerButton) -> hid::Result<ButtonState> {
         unimplemented!{}
     }
-    pub fn controller_axis_state(&self, controller: ControllerId, axis: ControllerAxis) -> hid::Result<f64> {
+    pub fn controller_axis_state(&self, controller: ControllerID, axis: ControllerAxis) -> hid::Result<f64> {
         unimplemented!{}
     }
 }

@@ -16,7 +16,7 @@
 use std::ops::{Range, Not};
 use context::Context;
 use event::Timestamp;
-use os::{OsMasterHidId, OsDeviceId};
+use os::{OsMasterHidID, OsDeviceID};
 
 pub mod mouse;
 pub use self::mouse::*;
@@ -120,7 +120,7 @@ pub struct AxisInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HidInfo {
     /// The master HID, if any.
-    pub master: Option<MasterHidId>,
+    pub master: Option<MasterHidID>,
     /// General-purpose, user-friendly name for this device.
     pub name: String,
     // pub serial: Option<String>,
@@ -153,20 +153,20 @@ pub enum Bus {
     Virtual,
 }
 
-pub trait AnyDeviceId: OsDeviceId {}
-impl<T: OsDeviceId> AnyDeviceId for T {}
+pub trait AnyDeviceID: OsDeviceID {}
+impl<T: OsDeviceID> AnyDeviceID for T {}
 
 /// An ID for a master HID.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct MasterHidId(pub(crate) OsMasterHidId);
+pub struct MasterHidID(pub(crate) OsMasterHidID);
 
 impl Context {
     /// Get the `HidInfo` for the given device ID.
-    fn hid_info<Id: AnyDeviceId>(&self, id: Id) -> Result<HidInfo> {
+    fn hid_info<ID: AnyDeviceID>(&self, id: ID) -> Result<HidInfo> {
         self.0.hid_info(id)
     }
     /// Checks if the given device is still connected.
-    fn ping_hid<Id: AnyDeviceId>(&self, id: Id) -> Result<()> {
+    fn ping_hid<ID: AnyDeviceID>(&self, id: ID) -> Result<()> {
         self.0.ping_hid(id)
     }
 }

@@ -8,14 +8,14 @@
 
 use context::Context;
 use window::Window;
-use os::{OsTabletId, OsTabletPadButtonsState, OsTabletStylusButtonsState, OsDeviceId};
+use os::{OsTabletID, OsTabletPadButtonsState, OsTabletStylusButtonsState, OsDeviceID};
 use super::{AxisInfo, ButtonState, Result};
 use Vec2;
 
 /// A device ID type for tablets.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct TabletId(pub(crate) OsTabletId);
-impl OsDeviceId for TabletId {}
+pub struct TabletID(pub(crate) OsTabletID);
+impl OsDeviceID for TabletID {}
 
 /// Tablet-specific information.
 #[derive(Debug, Clone, PartialEq)]
@@ -125,22 +125,22 @@ impl TabletState {
 
 impl Context {
     /// Lists all currently connected tablet devices.
-    pub fn tablets(&self) -> Result<Vec<TabletId>> {
+    pub fn tablets(&self) -> Result<Vec<TabletID>> {
         self.0.tablets()
     }
     /// Fetches the `TabletInfo` associated with the given device ID.
-    pub fn tablet_info(&self, tablet: TabletId) -> Result<TabletInfo> {
+    pub fn tablet_info(&self, tablet: TabletID) -> Result<TabletInfo> {
         self.0.tablet_info(tablet)
     }
     /// Fetches the current state of a tablet which ID is given.
-    pub fn tablet_state(&self, tablet: TabletId) -> Result<TabletState> {
+    pub fn tablet_state(&self, tablet: TabletID) -> Result<TabletState> {
         self.0.tablet_state(tablet)
     }
 }
 
 impl Window {
     /// Fetches the current state of a tablet which ID is given, relatively to this window.
-    pub fn tablet_state(&self, tablet: TabletId) -> Result<WindowTabletState> {
+    pub fn tablet_state(&self, tablet: TabletID) -> Result<WindowTabletState> {
         self.0.tablet_state(tablet)
     }
 }

@@ -173,5 +173,92 @@ pub enum Event {
     ControllerButtonPressed  { controller: ControllerID, timestamp: Timestamp, button: ControllerButton, },
     ControllerButtonReleased { controller: ControllerID, timestamp: Timestamp, button: ControllerButton, },
     ControllerAxisMotion     { controller: ControllerID, timestamp: Timestamp, axis: ControllerAxis, value: f64, },
+    // NOTE: value (f64) above is not a normalized value. It is the raw value cast to an f64. The
+    // user has to look up the axis info to know the (min,max) and deal with it.
+    // The reason is, there are too many situations to handle:
+    // - min < 0 && 0 > max
+    // - min > 0 && 0 < max
+    // - min < 0 && 0 < max
+    // - min > 0 && 0 > max (we never know! there might be buggy drivers).
 }
 
+
+impl Event {
+    /// Gets the timestamp for this event, if any. This is useful for sorting events (this crate
+    /// actually does this automatically when it thinks it makes sense to do so, but do not rely on this!).
+    pub fn timestamp(&self) -> Option<Timestamp> {
+        match *self {
+            Event::Quit => None,
+            Event::AppBeingTerminatedByOS => None,
+            Event::AppLowMemory => None,
+            Event::AppWillEnterBackground => None,
+            Event::AppEnteredBackground => None,
+            Event::AppWillEnterForeground => None,
+            Event::AppEnteredForeground => None,
+            Event::SessionEndRequested => None,
+            Event::SessionEnding => None,
+            Event::WindowShown          { window: _, } => None,
+            Event::WindowHidden         { window: _, } => None,
+            Event::WindowNeedsRedraw    { window: _, zone: _, more_to_follow: _, } => None,
+            Event::WindowMoved          { window: _, position: _, by_user: _, } => None,
+            Event::WindowResized        { window: _, size: _, by_user: _, } => None,
+            Event::WindowMinimized      { window: _, } => None,
+            Event::WindowMaximized      { window: _, } => None,
+            Event::WindowUnminized      { window: _, } => None,
+            Event::WindowCloseRequested { window: _, } => None,
+            Event::AudioOutputDeviceConnected => None,
+            Event::AudioOutputDeviceDisconnected => None,
+            Event::AudioCaptureDeviceConnected => None,
+            Event::AudioCaptureDeviceDisconnected => None,
+            Event::MouseConnected         { mouse: _, timestamp, } => Some(timestamp),
+            Event::MouseDisconnected      { mouse: _, timestamp, } => Some(timestamp),
+            Event::MouseEnter             { mouse: _, timestamp, window: _, position: _, root_position: _, is_grabbed: _,  is_focused: _, } => Some(timestamp),
+            Event::MouseLeave             { mouse: _, timestamp, window: _, position: _, root_position: _, was_grabbed: _, was_focused: _, } => Some(timestamp),
+            Event::MouseButtonPressed     { mouse: _, timestamp, window: _, position: _, root_position: _, button: _, clicks: _, } => Some(timestamp),
+            Event::MouseButtonReleased    { mouse: _, timestamp, window: _, position: _, root_position: _, button: _, } => Some(timestamp),
+            Event::MouseScroll            { mouse: _, timestamp, window: _, position: _, root_position: _, scroll: _, } => Some(timestamp),
+            Event::MouseMotion            { mouse: _, timestamp, window: _, position: _, root_position: _, } => Some(timestamp),
+            Event::MouseButtonPressedRaw  { mouse: _, timestamp, button: _, } => Some(timestamp),
+            Event::MouseButtonReleasedRaw { mouse: _, timestamp, button: _, } => Some(timestamp),
+            Event::MouseScrollRaw         { mouse: _, timestamp, scroll: _, } => Some(timestamp),
+            Event::MouseMotionRaw         { mouse: _, timestamp, displacement: _, } => Some(timestamp),
+            Event::KeyboardConnected      { keyboard: _, timestamp, } => Some(timestamp),
+            Event::KeyboardDisconnected   { keyboard: _, timestamp, } => Some(timestamp),
+            Event::KeyboardFocusGained    { keyboard: _, window: _, } => None,
+            Event::KeyboardFocusLost      { keyboard: _, window: _, } => None,
+            Event::KeyboardKeyPressed     { keyboard: _, window: _, timestamp, key: _, is_repeat: _, text: _, } => Some(timestamp),
+            Event::KeyboardKeyReleased    { keyboard: _, window: _, timestamp, key: _, } => Some(timestamp),
+            Event::KeyboardKeyPressedRaw  { keyboard: _, timestamp, key: _, } => Some(timestamp),
+            Event::KeyboardKeyReleasedRaw { keyboard: _, timestamp, key: _, } => Some(timestamp),
+            Event::TouchConnected      { touch: _, timestamp, } => Some(timestamp),
+            Event::TouchDisconnected   { touch: _, timestamp, } => Some(timestamp),
+            Event::TouchFingerPressed  { touch: _, timestamp, finger: _, pressure: _, normalized_position: _, } => Some(timestamp),
+            Event::TouchFingerReleased { touch: _, timestamp, finger: _, pressure: _, normalized_position: _, } => Some(timestamp),
+            Event::TouchFingerMotion   { touch: _, timestamp, finger: _, pressure: _, normalized_motion:   _, } => Some(timestamp),
+            Event::TouchMultiGesture   { touch: _, timestamp, nb_fingers: _, rotation_radians: _, pinch: _, normalized_center: _, } => Some(timestamp),
+            Event::TabletConnected               { tablet: _, timestamp, }  => Some(timestamp),
+            Event::TabletDisconnected            { tablet: _, timestamp, } => Some(timestamp),
+            Event::TabletPadButtonPressed        { tablet: _, timestamp, window: _, button: _, } => Some(timestamp),
+            Event::TabletPadButtonReleased       { tablet: _, timestamp, window: _, button: _, } => Some(timestamp),
+            Event::TabletStylusToolType          { tablet: _, timestamp, window: _, position: _, root_position: _, tool_type: _, } => Some(timestamp),
+            Event::TabletStylusButtonPressed     { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, button: _, } => Some(timestamp),
+            Event::TabletStylusButtonReleased    { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, button: _, } => Some(timestamp),
+            Event::TabletStylusMotion            { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
+            Event::TabletStylusPressed           { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
+            Event::TabletStylusRaised            { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
+            Event::TabletStylusButtonPressedRaw  { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
+            Event::TabletStylusButtonReleasedRaw { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
+            Event::TabletStylusMotionRaw         { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
+            Event::TabletStylusPressedRaw        { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
+            Event::TabletStylusRaisedRaw         { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
+            Event::TabletPadButtonPressedRaw     { tablet: _, timestamp, button: _, } => Some(timestamp),
+            Event::TabletPadButtonReleasedRaw    { tablet: _, timestamp, button: _, } => Some(timestamp),
+            Event::TabletStylusToolTypeRaw       { tablet: _, timestamp, tool_type: _, } => Some(timestamp),
+            Event::ControllerConnected      { controller: _, timestamp, } => Some(timestamp),
+            Event::ControllerDisconnected   { controller: _, timestamp, } => Some(timestamp),
+            Event::ControllerButtonPressed  { controller: _, timestamp, button: _, } => Some(timestamp),
+            Event::ControllerButtonReleased { controller: _, timestamp, button: _, } => Some(timestamp),
+            Event::ControllerAxisMotion     { controller: _, timestamp, axis: _, value: _, } => Some(timestamp),
+        }
+    }
+}

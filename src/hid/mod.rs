@@ -32,8 +32,10 @@ pub use self::controller::*;
 /// Error returned by operations from this module and submodules.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Error {
-    /// The device was disconnected at the specific timestamp.
-    DeviceDisconnected(Timestamp),
+    /// The device was disconnected at the specific timestamp, if known.
+    DeviceDisconnected(Option<Timestamp>),
+    /// The device (or backend for the device) does not support this operation.
+    NotSupportedByDevice { reason: Option<super::error::CowStr> },
     /// Another error occured (in the meantime, it is unknown whether or not the device is still connected).
     Other(super::error::Error),
 }
@@ -43,8 +45,23 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[allow(dead_code)]
 pub(crate) fn disconnected<T>(timestamp: Timestamp) -> Result<T> {
-    Err(Error::DeviceDisconnected(timestamp))
+    Err(Error::DeviceDisconnected(Some(timestamp)))
 }
+#[allow(dead_code)]
+pub(crate) fn disconnected_no_timestamp<T>() -> Result<T> {
+    Err(Error::DeviceDisconnected(None))
+}
+
+#[allow(dead_code)]
+pub(crate) fn not_supported_by_device<T, S: Into<super::error::CowStr>>(s: S) -> Result<T> {
+    Err(Error::NotSupportedByDevice { reason: Some(s.into()) })
+}
+#[allow(dead_code)]
+pub(crate) fn not_supported_by_device_unexplained<T>() -> Result<T> {
+    Err(Error::NotSupportedByDevice { reason: None })
+}
+
+
 
 /// A button or key state, i.e "up" or "down".
 ///

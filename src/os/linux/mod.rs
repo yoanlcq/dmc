@@ -2,6 +2,7 @@ mod udev;
 
 use std::time::Instant;
 use self::udev::{UdevContext, UdevDeviceID};
+pub use self::udev::{OsControllerID, OsControllerInfo, OsControllerState};
 use x11::{
     X11Context, X11Window, X11WindowHandle, X11WindowFromHandleParams, X11Cursor,
     X11GLProc, X11GLPixelFormat, X11GLContext,
@@ -16,7 +17,7 @@ use timeout::Timeout;
 use hid::{
     self, 
     AnyDeviceID, HidInfo, AxisInfo, ButtonState,
-    ControllerButton, ControllerAxis, ControllerID, ControllerState, ControllerInfo,
+    ControllerButton, ControllerAxis, ControllerID, ControllerState, ControllerInfo, RumbleEffect,
     KeyboardID, KeyState, KeyboardState, Keysym, Keycode,
     MouseID, MouseState, MouseButton,
     TabletID, TabletInfo, TabletState, TabletPadButton, TabletStylusButton,
@@ -39,10 +40,6 @@ pub type OsGLPixelFormat = X11GLPixelFormat;
 pub type OsGLContext = X11GLContext;
 pub type OsGLProc = X11GLProc;
 
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct OsControllerInfo;
-
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct OsMasterHidID {
     // It's either one or both; Normally the missing one is deduced from the other.
@@ -50,7 +47,6 @@ pub struct OsMasterHidID {
     pub x11: Option<X11MasterHidID>,
     pub udev: Option<UdevDeviceID>,
 }
-pub type OsControllerID = i32; // ??? How to identify via udev ?
 pub type OsKeyboardID = X11KeyboardID;
 pub type OsMouseID = X11MouseID;
 pub type OsTabletID = X11TabletID;
@@ -58,8 +54,6 @@ pub type OsTouchID = X11TouchID;
 pub type OsKeysym = X11Keysym;
 pub type OsKeycode = X11Keycode;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct OsControllerState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OsKeyboardState;
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,25 +65,6 @@ pub struct OsTabletStylusButtonsState;
 
 pub trait OsDeviceID {}
 
-impl OsControllerInfo {
-    pub fn has_button(&self, button: ControllerButton) -> bool {
-        unimplemented!{}
-    }
-    pub fn has_axis(&self, axis: ControllerAxis) -> bool {
-        unimplemented!{}
-    }
-    pub fn axis(&self, axis: ControllerAxis) -> Option<AxisInfo> {
-        unimplemented!{}
-    }
-}
-impl OsControllerState {
-    pub fn button(&self, button: ControllerButton) -> Option<ButtonState> {
-        unimplemented!{}
-    }
-    pub fn axis(&self, axis: ControllerAxis) -> Option<f64> {
-        unimplemented!{}
-    }
-}
 impl OsKeyboardState {
     pub fn keycode(&self, key: Keycode) -> Option<KeyState> {
         unimplemented!{}
@@ -207,6 +182,9 @@ impl OsContext {
     }
     pub fn controller_axis_state(&self, controller: ControllerID, axis: ControllerAxis) -> hid::Result<f64> {
         self.udev.controller_axis_state(controller, axis)
+    }
+    pub fn controller_play_rumble_effect(&self, controller: ControllerID, effect: &RumbleEffect) -> hid::Result<()> {
+        self.udev.controller_play_rumble_effect(controller, effect)
     }
     pub fn keyboards(&self) -> hid::Result<Vec<KeyboardID>> {
         unimplemented!{}

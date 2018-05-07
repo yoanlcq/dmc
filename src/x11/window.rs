@@ -11,7 +11,7 @@ use std::ffi::CString;
 
 use window::{self, Window, WindowSettings, WindowHandle, WindowTypeHint, WindowStyleHint};
 use error::{Result, failed, failed_unexplained};
-use hid::{self, MouseID, WindowMouseState, TabletID, WindowTabletState};
+use hid::{self, HidID, WindowMouseState, WindowTabletState};
 use vek::{Vec2, Extent2, Rect, Clamp, Rgba};
 
 use super::x11::xlib as x;
@@ -1010,10 +1010,10 @@ impl X11SharedWindow {
         };
         failed(format!("XGrabPointer() returned {}", reason))
     }
-    pub fn mouse_state(&self, mouse: MouseID) -> hid::Result<WindowMouseState> {
+    pub fn mouse_state(&self, mouse: HidID) -> hid::Result<WindowMouseState> {
         unimplemented!{}
     }
-    pub fn tablet_state(&self, tablet: TabletID) -> hid::Result<WindowTabletState> {
+    pub fn tablet_state(&self, tablet: HidID) -> hid::Result<WindowTabletState> {
         unimplemented!{}
     }
 }

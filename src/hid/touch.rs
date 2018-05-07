@@ -3,15 +3,10 @@
 //! This module is very incomplete.
 
 use context::Context;
-use os::{OsTouchID, OsDeviceID};
-use super::{AxisInfo, Result};
-
-/// A device ID type for touch devices.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct TouchID(pub(crate) OsTouchID);
-impl OsDeviceID for TouchID {}
+use super::{HidID, AxisInfo, Result};
 
 /// Touch-device-specific information.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TouchInfo {
     /// The `AxisInfo` for the pressure axis.
     pub pressure_axis: AxisInfo,
@@ -19,12 +14,8 @@ pub struct TouchInfo {
 
 impl Context {
     /// Lists all connected touch devices.
-    pub fn touch_devices(&self) -> Result<Vec<TouchID>> {
+    pub fn touch_devices(&self) -> Result<Vec<HidID>> {
         self.0.touch_devices()
-    }
-    /// Fetches the `TouchInfo` associated to the given device ID.
-    pub fn touch_info(&self, touch: TouchID) -> Result<TouchInfo> {
-        self.0.touch_info(touch)
     }
 }
 

@@ -8,14 +8,9 @@
 
 use context::Context;
 use window::Window;
-use os::{OsTabletID, OsTabletPadButtonsState, OsTabletStylusButtonsState, OsDeviceID};
-use super::{AxisInfo, ButtonState, Result};
+use os::{OsTabletPadButtonsState, OsTabletStylusButtonsState};
+use super::{HidID, AxisInfo, ButtonState, Result};
 use Vec2;
-
-/// A device ID type for tablets.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct TabletID(pub(crate) OsTabletID);
-impl OsDeviceID for TabletID {}
 
 /// Tablet-specific information.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,7 +48,7 @@ pub enum TabletStylusKind {
 /// A tablet pad button is a single platform-specific integer for now.
 pub type TabletPadButton = i32;
 
-/// Possiible buttons for a tablet stylus.
+/// Possible buttons for a tablet stylus.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum TabletStylusButton {
     /// The primary button is the one that is closest to the tip.
@@ -125,22 +120,18 @@ impl TabletState {
 
 impl Context {
     /// Lists all currently connected tablet devices.
-    pub fn tablets(&self) -> Result<Vec<TabletID>> {
+    pub fn tablets(&self) -> Result<Vec<HidID>> {
         self.0.tablets()
     }
-    /// Fetches the `TabletInfo` associated with the given device ID.
-    pub fn tablet_info(&self, tablet: TabletID) -> Result<TabletInfo> {
-        self.0.tablet_info(tablet)
-    }
     /// Fetches the current state of a tablet which ID is given.
-    pub fn tablet_state(&self, tablet: TabletID) -> Result<TabletState> {
+    pub fn tablet_state(&self, tablet: HidID) -> Result<TabletState> {
         self.0.tablet_state(tablet)
     }
 }
 
 impl Window {
     /// Fetches the current state of a tablet which ID is given, relatively to this window.
-    pub fn tablet_state(&self, tablet: TabletID) -> Result<WindowTabletState> {
+    pub fn tablet_state(&self, tablet: HidID) -> Result<WindowTabletState> {
         self.0.tablet_state(tablet)
     }
 }

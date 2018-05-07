@@ -67,12 +67,11 @@ impl<'c> Iterator for Iter<'c> {
 /// this crate treats it as a spurious one and associates it to an imaginary device
 /// that resolves to whatever can be meaningfully obtained from the platform.
 ///
-/// Note that events are not redundant : What that means is that, for instance,
-/// you won't get two `MouseMotion` events in a row associated to the same cursor but with
-/// different device IDs.
-///
-/// However, it makes sense to receive both mouse events and tablet events when moving
+/// Note that it makes sense to receive both mouse events and tablet events when moving
 /// the stylus on a tablet; The device is indeed actually both a mouse and a tablet.
+///
+/// This crate does little to no post-processing, in order to reduce the maintenance burden.
+/// You are encouraged to write your own facilities for this if necessary.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -109,70 +108,57 @@ pub enum Event {
     // HIDs
     //
 
-    // Audio. NOTE: Missing fields.
-    AudioOutputDeviceConnected,
-    AudioOutputDeviceDisconnected,
-    AudioCaptureDeviceConnected,
-    AudioCaptureDeviceDisconnected,
+    HidConnected { hid: HidID, timestamp: Timestamp, },
+    HidDisconnected { hid: HidID, timestamp: Timestamp, },
 
     // User note: in MouseScroll, the y value is positive when "scrolling up"
     // (that is, pushing the wheel forwards) and negative otherwise.
-    MouseConnected         { mouse: MouseID, timestamp: Timestamp, },
-    MouseDisconnected      { mouse: MouseID, timestamp: Timestamp, },
-    MouseEnter             { mouse: MouseID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, is_grabbed: bool,  is_focused: bool, },
-    MouseLeave             { mouse: MouseID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, was_grabbed: bool, was_focused: bool, },
-    MouseButtonPressed     { mouse: MouseID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, clicks: Option<u32>, },
-    MouseButtonReleased    { mouse: MouseID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, },
-    MouseScroll            { mouse: MouseID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, scroll: Vec2<i32>, },
-    MouseMotion            { mouse: MouseID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, },
-    MouseButtonPressedRaw  { mouse: MouseID, timestamp: Timestamp, button: MouseButton, },
-    MouseButtonReleasedRaw { mouse: MouseID, timestamp: Timestamp, button: MouseButton, },
-    MouseScrollRaw         { mouse: MouseID, timestamp: Timestamp, scroll: Vec2<i32>, },
-    MouseMotionRaw         { mouse: MouseID, timestamp: Timestamp, displacement: Vec2<f64>, },
+    MouseEnter             { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, is_grabbed: bool,  is_focused: bool, },
+    MouseLeave             { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, was_grabbed: bool, was_focused: bool, },
+    MouseButtonPressed     { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, clicks: Option<u32>, },
+    MouseButtonReleased    { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, },
+    MouseScroll            { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, scroll: Vec2<i32>, },
+    MouseMotion            { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, },
+    MouseButtonPressedRaw  { mouse: HidID, timestamp: Timestamp, button: MouseButton, },
+    MouseButtonReleasedRaw { mouse: HidID, timestamp: Timestamp, button: MouseButton, },
+    MouseScrollRaw         { mouse: HidID, timestamp: Timestamp, scroll: Vec2<i32>, },
+    MouseMotionRaw         { mouse: HidID, timestamp: Timestamp, displacement: Vec2<f64>, },
 
     // Keyboard
-    KeyboardConnected      { keyboard: KeyboardID, timestamp: Timestamp, },
-    KeyboardDisconnected   { keyboard: KeyboardID, timestamp: Timestamp, },
-    KeyboardFocusGained    { keyboard: KeyboardID, window: WindowHandle, },
-    KeyboardFocusLost      { keyboard: KeyboardID, window: WindowHandle, },
-    KeyboardKeyPressed     { keyboard: KeyboardID, window: WindowHandle, timestamp: Timestamp, key: Key, is_repeat: bool, text: Option<String>, },
-    KeyboardKeyReleased    { keyboard: KeyboardID, window: WindowHandle, timestamp: Timestamp, key: Key, },
-    KeyboardKeyPressedRaw  { keyboard: KeyboardID, timestamp: Timestamp, key: Key, },
-    KeyboardKeyReleasedRaw { keyboard: KeyboardID, timestamp: Timestamp, key: Key, },
+    KeyboardFocusGained    { keyboard: HidID, window: WindowHandle, },
+    KeyboardFocusLost      { keyboard: HidID, window: WindowHandle, },
+    KeyboardKeyPressed     { keyboard: HidID, window: WindowHandle, timestamp: Timestamp, key: Key, is_repeat: bool, text: Option<String>, },
+    KeyboardKeyReleased    { keyboard: HidID, window: WindowHandle, timestamp: Timestamp, key: Key, },
+    KeyboardKeyPressedRaw  { keyboard: HidID, timestamp: Timestamp, key: Key, },
+    KeyboardKeyReleasedRaw { keyboard: HidID, timestamp: Timestamp, key: Key, },
 
     // Touch (Touchpad, Touch-screen, ....)
-    TouchConnected      { touch: TouchID, timestamp: Timestamp, },
-    TouchDisconnected   { touch: TouchID, timestamp: Timestamp, },
-    TouchFingerPressed  { touch: TouchID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
-    TouchFingerReleased { touch: TouchID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
-    TouchFingerMotion   { touch: TouchID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_motion:   Vec2<f64>, },
-    TouchMultiGesture   { touch: TouchID, timestamp: Timestamp, nb_fingers: usize, rotation_radians: f64, pinch: f64, normalized_center: Vec2<f64>, },
+    TouchFingerPressed  { touch: HidID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
+    TouchFingerReleased { touch: HidID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
+    TouchFingerMotion   { touch: HidID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_motion:   Vec2<f64>, },
+    TouchMultiGesture   { touch: HidID, timestamp: Timestamp, nb_fingers: usize, rotation_radians: f64, pinch: f64, normalized_center: Vec2<f64>, },
     // NOTE: Missing raw events
 
-    TabletConnected               { tablet: TabletID, timestamp: Timestamp, },
-    TabletDisconnected            { tablet: TabletID, timestamp: Timestamp, },
-    TabletPadButtonPressed        { tablet: TabletID, timestamp: Timestamp, window: WindowHandle, button: TabletPadButton, },
-    TabletPadButtonReleased       { tablet: TabletID, timestamp: Timestamp, window: WindowHandle, button: TabletPadButton, },
-    TabletStylusToolType          { tablet: TabletID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, tool_type: TabletStylusToolType, },
-    TabletStylusButtonPressed     { tablet: TabletID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
-    TabletStylusButtonReleased    { tablet: TabletID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
-    TabletStylusMotion            { tablet: TabletID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusPressed           { tablet: TabletID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusRaised            { tablet: TabletID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletPadButtonPressedRaw     { tablet: TabletID, timestamp: Timestamp, button: TabletPadButton, },
-    TabletPadButtonReleasedRaw    { tablet: TabletID, timestamp: Timestamp, button: TabletPadButton, },
-    TabletStylusToolTypeRaw       { tablet: TabletID, timestamp: Timestamp, tool_type: TabletStylusToolType, },
-    TabletStylusButtonPressedRaw  { tablet: TabletID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusButtonReleasedRaw { tablet: TabletID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusMotionRaw         { tablet: TabletID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusPressedRaw        { tablet: TabletID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusRaisedRaw         { tablet: TabletID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletPadButtonPressed        { tablet: HidID, timestamp: Timestamp, window: WindowHandle, button: TabletPadButton, },
+    TabletPadButtonReleased       { tablet: HidID, timestamp: Timestamp, window: WindowHandle, button: TabletPadButton, },
+    TabletStylusToolType          { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, tool_type: TabletStylusToolType, },
+    TabletStylusButtonPressed     { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
+    TabletStylusButtonReleased    { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
+    TabletStylusMotion            { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusPressed           { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusRaised            { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletPadButtonPressedRaw     { tablet: HidID, timestamp: Timestamp, button: TabletPadButton, },
+    TabletPadButtonReleasedRaw    { tablet: HidID, timestamp: Timestamp, button: TabletPadButton, },
+    TabletStylusToolTypeRaw       { tablet: HidID, timestamp: Timestamp, tool_type: TabletStylusToolType, },
+    TabletStylusButtonPressedRaw  { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusButtonReleasedRaw { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusMotionRaw         { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusPressedRaw        { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusRaisedRaw         { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
 
-    ControllerConnected      { controller: ControllerID, timestamp: Timestamp, },
-    ControllerDisconnected   { controller: ControllerID, timestamp: Timestamp, },
-    ControllerButtonPressed  { controller: ControllerID, timestamp: Timestamp, button: ControllerButton, },
-    ControllerButtonReleased { controller: ControllerID, timestamp: Timestamp, button: ControllerButton, },
-    ControllerAxisMotion     { controller: ControllerID, timestamp: Timestamp, axis: ControllerAxis, value: f64, },
+    ControllerButtonPressed  { controller: HidID, timestamp: Timestamp, button: ControllerButton, },
+    ControllerButtonReleased { controller: HidID, timestamp: Timestamp, button: ControllerButton, },
+    ControllerAxisMotion     { controller: HidID, timestamp: Timestamp, axis: ControllerAxis, value: f64, },
     // NOTE: value (f64) above is not a normalized value. It is the raw value cast to an f64. The
     // user has to look up the axis info to know the (min,max) and deal with it.
     // The reason is, there are too many situations to handle:
@@ -206,12 +192,8 @@ impl Event {
             Event::WindowMaximized      { window: _, } => None,
             Event::WindowUnminized      { window: _, } => None,
             Event::WindowCloseRequested { window: _, } => None,
-            Event::AudioOutputDeviceConnected => None,
-            Event::AudioOutputDeviceDisconnected => None,
-            Event::AudioCaptureDeviceConnected => None,
-            Event::AudioCaptureDeviceDisconnected => None,
-            Event::MouseConnected         { mouse: _, timestamp, } => Some(timestamp),
-            Event::MouseDisconnected      { mouse: _, timestamp, } => Some(timestamp),
+            Event::HidConnected    { hid: _, timestamp, } => Some(timestamp),
+            Event::HidDisconnected { hid: _, timestamp, } => Some(timestamp),
             Event::MouseEnter             { mouse: _, timestamp, window: _, position: _, root_position: _, is_grabbed: _,  is_focused: _, } => Some(timestamp),
             Event::MouseLeave             { mouse: _, timestamp, window: _, position: _, root_position: _, was_grabbed: _, was_focused: _, } => Some(timestamp),
             Event::MouseButtonPressed     { mouse: _, timestamp, window: _, position: _, root_position: _, button: _, clicks: _, } => Some(timestamp),
@@ -222,22 +204,16 @@ impl Event {
             Event::MouseButtonReleasedRaw { mouse: _, timestamp, button: _, } => Some(timestamp),
             Event::MouseScrollRaw         { mouse: _, timestamp, scroll: _, } => Some(timestamp),
             Event::MouseMotionRaw         { mouse: _, timestamp, displacement: _, } => Some(timestamp),
-            Event::KeyboardConnected      { keyboard: _, timestamp, } => Some(timestamp),
-            Event::KeyboardDisconnected   { keyboard: _, timestamp, } => Some(timestamp),
             Event::KeyboardFocusGained    { keyboard: _, window: _, } => None,
             Event::KeyboardFocusLost      { keyboard: _, window: _, } => None,
             Event::KeyboardKeyPressed     { keyboard: _, window: _, timestamp, key: _, is_repeat: _, text: _, } => Some(timestamp),
             Event::KeyboardKeyReleased    { keyboard: _, window: _, timestamp, key: _, } => Some(timestamp),
             Event::KeyboardKeyPressedRaw  { keyboard: _, timestamp, key: _, } => Some(timestamp),
             Event::KeyboardKeyReleasedRaw { keyboard: _, timestamp, key: _, } => Some(timestamp),
-            Event::TouchConnected      { touch: _, timestamp, } => Some(timestamp),
-            Event::TouchDisconnected   { touch: _, timestamp, } => Some(timestamp),
             Event::TouchFingerPressed  { touch: _, timestamp, finger: _, pressure: _, normalized_position: _, } => Some(timestamp),
             Event::TouchFingerReleased { touch: _, timestamp, finger: _, pressure: _, normalized_position: _, } => Some(timestamp),
             Event::TouchFingerMotion   { touch: _, timestamp, finger: _, pressure: _, normalized_motion:   _, } => Some(timestamp),
             Event::TouchMultiGesture   { touch: _, timestamp, nb_fingers: _, rotation_radians: _, pinch: _, normalized_center: _, } => Some(timestamp),
-            Event::TabletConnected               { tablet: _, timestamp, }  => Some(timestamp),
-            Event::TabletDisconnected            { tablet: _, timestamp, } => Some(timestamp),
             Event::TabletPadButtonPressed        { tablet: _, timestamp, window: _, button: _, } => Some(timestamp),
             Event::TabletPadButtonReleased       { tablet: _, timestamp, window: _, button: _, } => Some(timestamp),
             Event::TabletStylusToolType          { tablet: _, timestamp, window: _, position: _, root_position: _, tool_type: _, } => Some(timestamp),
@@ -254,8 +230,6 @@ impl Event {
             Event::TabletPadButtonPressedRaw     { tablet: _, timestamp, button: _, } => Some(timestamp),
             Event::TabletPadButtonReleasedRaw    { tablet: _, timestamp, button: _, } => Some(timestamp),
             Event::TabletStylusToolTypeRaw       { tablet: _, timestamp, tool_type: _, } => Some(timestamp),
-            Event::ControllerConnected      { controller: _, timestamp, } => Some(timestamp),
-            Event::ControllerDisconnected   { controller: _, timestamp, } => Some(timestamp),
             Event::ControllerButtonPressed  { controller: _, timestamp, button: _, } => Some(timestamp),
             Event::ControllerButtonReleased { controller: _, timestamp, button: _, } => Some(timestamp),
             Event::ControllerAxisMotion     { controller: _, timestamp, axis: _, value: _, } => Some(timestamp),

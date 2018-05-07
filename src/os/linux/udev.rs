@@ -12,7 +12,7 @@ use std::mem;
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
 use event::{Event, Timestamp};
-use hid::{self, ControllerID, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState, Bus, RumbleEffect, AxisInfo};
+use hid::{self, HidID, HidInfo, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState, Bus, RumbleEffect, AxisInfo};
 
 use self::c::{c_int, c_uint, c_char, c_ulonglong};
 
@@ -73,8 +73,24 @@ mod time {
 }
 use self::time::*;
 
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct TokenForUdev(u32);
 
-pub type UdevDeviceID = i32;
+impl Default for TokenForUdev {
+    fn default() -> Self {
+         // For debugging. Also, -1, 0, and values below 100 are nice to reserve.
+         TokenForUdev(100)
+    }
+}
+
+impl TokenForUdev {
+    fn next(&self) -> Self {
+        TokenForUdev(self.0 + 1)
+    }
+    fn replace_by_next(&mut self) {
+        *self = self.next();
+    }
+}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum UdevDeviceAction {
@@ -98,8 +114,8 @@ pub struct UdevContext {
     udev: *mut libudev_sys::udev,
     monitor: *mut libudev_sys::udev_monitor,
     enumerate: *mut libudev_sys::udev_enumerate,
-    devices: RefCell<HashMap<UdevDeviceID, Device>>,
-    highest_id: Cell<UdevDeviceID>,
+    devices: RefCell<HashMap<TokenForUdev, Device>>,
+    highest_id: Cell<TokenForUdev>,
     pending_translated_events: RefCell<VecDeque<Event>>,
 }
 
@@ -122,7 +138,7 @@ struct Device {
     ff_id: Cell<i16>,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct DeviceInfoUdevEvdev {
     udev: DeviceInfoUdev,
     evdev: Option<DeviceInfoEvdev>,
@@ -155,7 +171,7 @@ struct DeviceInfoUdev {
     id_input_touchscreen  : bool,
     id_input_trackball    : bool,
 }
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct DeviceInfoEvdev {
     id_bustype: c_int,
     id_product: u16,
@@ -165,11 +181,28 @@ struct DeviceInfoEvdev {
     is_a_gamepad: bool,
     is_a_joystick: bool,
     repeat: Option<EvdevRepeat>,
+    buttons: HashSet<ControllerButton>,
+    axes: HashMap<ControllerAxis, AxisInfo>,
 }
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct EvdevRepeat {
     delay: c_int,
     period: c_int,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OsControllerInfo {
+    is_a_gamepad: bool,
+    is_a_joystick: bool,
+    is_a_steering_wheel: bool,
+    buttons: HashSet<ControllerButton>,
+    axes: HashMap<ControllerAxis, AxisInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OsControllerState {
+    buttons: HashMap<ControllerButton, ButtonState>,
+    axes: HashMap<ControllerAxis, f64>,
 }
 
 
@@ -236,17 +269,17 @@ impl Default for UdevContext {
                 error!("udev_enumerate_add_match_subsystem() returned {}", status);
             }
 
-            let mut pending_translated_events = VecDeque::new();
+            let mut pending_translated_events = VecDeque::with_capacity(32);
 
-            let mut highest_id = 100; // For debugging. Also, -1, 0, and values below 100 are nice to reserve.
-            let mut devices = HashMap::new();
+            let mut highest_id = TokenForUdev::default();
+            let mut devices = HashMap::with_capacity(32);
             for entry in udev_enumerate::scan_devices_iter(enumerate) {
                 let _entry_value = libudev_sys::udev_list_entry_get_value(entry);
                 let devname = libudev_sys::udev_list_entry_get_name(entry);
                 assert!(!devname.is_null());
                 let udev_device = libudev_sys::udev_device_new_from_syspath(udev, devname);
 
-                highest_id += 1;
+                highest_id.replace_by_next();
                 let dev = Device::from_udev_device(udev_device, true);
                 dev.pump_evdev(highest_id, &mut pending_translated_events);
                 devices.insert(highest_id, dev);
@@ -328,7 +361,7 @@ impl UdevContext {
             UdevDeviceAction::Add => {
                 let mut pending_translated_events = self.pending_translated_events.borrow_mut();
                 let mut devices = self.devices.borrow_mut();
-                let id = self.highest_id.get() + 1;
+                let id = self.highest_id.get().next();
                 self.highest_id.set(id);
                 let dev = unsafe {
                     Device::from_udev_device(udev_device, true)
@@ -341,8 +374,8 @@ impl UdevContext {
                 debug_assert!(nothing.is_empty());
                 all.sort_by_key(|ev| ev.timestamp().unwrap_or(Timestamp::default()));
                 if is_a_controller {
-                    let controller = ControllerID(id);
-                    Some(Event::ControllerConnected { controller, timestamp })
+                    let hid = HidID(id.into());
+                    Some(Event::HidConnected { hid, timestamp })
                 } else {
                     None // Connected/Disconnected events emitted by X11
                 }
@@ -360,9 +393,9 @@ impl UdevContext {
                 }?;
                 let dev = self.devices.borrow_mut().remove(&id).unwrap();
                 if dev.is_a_controller() {
-                    let controller = ControllerID(id);
+                    let hid = HidID(id.into());
                     let timestamp = dev.info.udev.usec_initialized.map(|usecs| duration_from_usecs(usecs)).unwrap_or(Timestamp::default()); // Fine as long as we use stable sorts
-                    Some(Event::ControllerDisconnected { controller, timestamp })
+                    Some(Event::HidDisconnected { hid, timestamp })
                 } else {
                     None // Connected/Disconnected events emitted by X11
                 }
@@ -396,32 +429,35 @@ impl UdevContext {
         self.pump_events();
         self.pending_translated_events.borrow_mut().pop_front()
     }
-    pub fn controllers(&self) -> hid::Result<Vec<ControllerID>> {
+    pub fn controllers(&self) -> hid::Result<Vec<HidID>> {
         let controllers = self.devices.borrow().iter().filter_map(|(id, dev)| if dev.is_a_controller() {
-            Some(ControllerID(*id))
+            Some(HidID((*id).into()))
         } else {
             None
         }).collect();
         Ok(controllers)
     }
-    pub fn controller_info(&self, controller: ControllerID) -> hid::Result<ControllerInfo> {
-        self.controller_device(controller, |dev| dev.controller_info().map(ControllerInfo))
+    pub fn hid_info(&self, hid: HidID) -> hid::Result<HidInfo> {
+        unimplemented!{}
     }
-    pub fn controller_state(&self, controller: ControllerID) -> hid::Result<ControllerState> {
+    pub fn ping_hid(&self, hid: HidID) -> hid::Result<()> {
+        unimplemented!{}
+    }
+    pub fn controller_state(&self, controller: HidID) -> hid::Result<ControllerState> {
         self.controller_device(controller, |dev| dev.controller_state().map(ControllerState))
     }
-    pub fn controller_button_state(&self, controller: ControllerID, button: ControllerButton) -> hid::Result<ButtonState> {
+    pub fn controller_button_state(&self, controller: HidID, button: ControllerButton) -> hid::Result<ButtonState> {
         self.controller_device(controller, |dev| dev.controller_button_state(button))
     }
-    pub fn controller_axis_state(&self, controller: ControllerID, axis: ControllerAxis) -> hid::Result<f64> {
+    pub fn controller_axis_state(&self, controller: HidID, axis: ControllerAxis) -> hid::Result<f64> {
         self.controller_device(controller, |dev| dev.controller_axis_state(axis))
     }
-    pub fn controller_play_rumble_effect(&self, controller: ControllerID, effect: &RumbleEffect) -> hid::Result<()> {
+    pub fn controller_play_rumble_effect(&self, controller: HidID, effect: &RumbleEffect) -> hid::Result<()> {
         self.controller_device(controller, |dev| dev.play_rumble_effect(effect))
     }
-    fn controller_device<T, F: FnMut(&Device) -> hid::Result<T>>(&self, controller: ControllerID, mut f: F) -> hid::Result<T> {
+    fn controller_device<T, F: FnMut(&Device) -> hid::Result<T>>(&self, controller: HidID, mut f: F) -> hid::Result<T> {
         let devices = self.devices.borrow();
-        match devices.get(&controller.0) {
+        match devices.get(&controller.0.token_for_udev.unwrap()) {
             None => hid::disconnected_no_timestamp(),
             Some(dev) => {
                 debug_assert!(dev.is_a_controller());
@@ -431,20 +467,6 @@ impl UdevContext {
     }
 }
 
-
-pub type OsControllerID = UdevDeviceID;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct OsControllerInfo {
-    is_a_gamepad: bool,
-    is_a_joystick: bool,
-    is_a_steering_wheel: bool,
-    buttons: HashSet<ControllerButton>,
-    axes: HashMap<ControllerAxis, AxisInfo>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct OsControllerState;
 
 impl OsControllerInfo {
     pub fn is_a_gamepad(&self) -> bool {
@@ -468,10 +490,10 @@ impl OsControllerInfo {
 }
 impl OsControllerState {
     pub fn button(&self, button: ControllerButton) -> Option<ButtonState> {
-        unimplemented!{}
+        self.buttons.get(&button).map(Clone::clone)
     }
     pub fn axis(&self, axis: ControllerAxis) -> Option<f64> {
-        unimplemented!{}
+        self.axes.get(&axis).map(Clone::clone)
     }
 }
 
@@ -729,6 +751,9 @@ impl Device {
                     Some(EvdevRepeat { delay, period })
                 }
             },
+            // Don't forget to fill this before returning the device object!
+            buttons: HashSet::new(),
+            axes: HashMap::new(),
         });
 
         let info = DeviceInfoUdevEvdev {
@@ -736,17 +761,16 @@ impl Device {
             evdev: info_evdev,
         };
 
-        // --- Detecting controller features
-        if let Some(evdev) = evdev {
-            let abs_info = evdev::libevdev_get_abs_info(evdev, input_event_codes::ABS_HAT0X as _);
-            let thumbl_value = evdev::libevdev_get_event_value(evdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_THUMBL as _);
-        }
-
-        Self {
+        let mut dev = Self {
             backend, owns_udev_device: take_ownership, udev_device, fd, fd_has_write_access, evdev,
             info,
             ff_id: Cell::new(-1),
+        };
+        if dev.evdev.is_some() {
+            dev.evdev_refresh_all_controller_axes_support();
+            dev.evdev_refresh_all_controller_buttons_support();
         }
+        dev
     }
 
     fn parent(&self) -> Option<Device> {
@@ -825,23 +849,61 @@ macro_rules! event_mapping {
                     _ => unreachable!{},
                 }
             }
-            pub fn all_buttons_info(&self) -> HashSet<ControllerButton> {
+            pub fn evdev_all_controller_buttons_state(&self) -> HashMap<ControllerButton, ButtonState> {
+                let all_translated = &[$(TranslatedEvKey::from($expr),)+];
+                let mut all_buttons = HashMap::with_capacity(all_translated.len());
+                for translated in all_translated.iter() {
+                    match *translated {
+                        TranslatedEvKey::Dpad(_, _) => (), // Nothing to do
+                        TranslatedEvKey::Button(button) => {
+                            if let Some(state) = self.evdev_controller_button_state(button) {
+                                all_buttons.insert(button, state);
+                            }
+                        },
+                    };
+                }
+                all_buttons
+            }
+            pub fn evdev_controller_button_state(&self, button: ControllerButton) -> Option<ButtonState> {
+                let mut value = 0;
+                let status = unsafe {
+                    let evdev = self.evdev.unwrap();
+                    let type_ = input_event_codes::EV_KEY;
+                    let code = self.untranslate_ev_key(TranslatedEvKey::Button(button));
+                    evdev::libevdev_fetch_event_value(evdev, type_ as _, code as _, &mut value)
+                };
+                match status {
+                    0 => None,
+                    _ => Some(match value {
+                        0 => ButtonState::Up,
+                        _ => ButtonState::Down,
+                    }),
+                }
+            }
+            pub fn evdev_refresh_all_controller_buttons_support(&mut self) {
+                let buttons = self.evdev_all_controller_buttons_support();
+                self.info.evdev.as_mut().unwrap().buttons = buttons;
+            }
+            pub fn evdev_all_controller_buttons_support(&self) -> HashSet<ControllerButton> {
                 let evdev = self.evdev.unwrap();
+
                 let all_codes = &[$(input_event_codes::$EV_CODE,)+];
                 let all_translated = &[$(TranslatedEvKey::from($expr),)+];
                 assert_eq!(all_codes.len(), all_translated.len());
-                let mut all_buttons = HashSet::new();
-                for i in 0..all_codes.len() {
-                    match all_translated[i] {
-                        TranslatedEvKey::Button(b) => {
+
+                let mut all_buttons = HashSet::with_capacity(all_translated.len());
+
+                for (code, translated) in all_codes.iter().zip(all_translated.iter()) {
+                    match *translated {
+                        TranslatedEvKey::Dpad(_, _) => (), // Nothing to do
+                        TranslatedEvKey::Button(button) => {
                             let has_it = 0 != unsafe {
-                                evdev::libevdev_has_event_code(evdev, input_event_codes::EV_KEY as _, all_codes[i] as _)
+                                evdev::libevdev_has_event_code(evdev, input_event_codes::EV_KEY as _, *code as _)
                             };
                             if has_it {
-                                all_buttons.insert(b);
+                                all_buttons.insert(button);
                             }
                         },
-                        TranslatedEvKey::Dpad(_, _) => (), // Nothing to do
                     };
                 }
                 all_buttons
@@ -865,27 +927,94 @@ macro_rules! event_mapping {
                     _ => unreachable!{},
                 }
             }
-            pub fn all_axes_info(&self) -> HashMap<ControllerAxis, AxisInfo> {
+            pub fn evdev_all_controller_axes_state(&self) -> HashMap<ControllerAxis, f64> {
+                let $device = self;
+                let all_translated = &[$($expr,)+];
+                let mut all_axes = HashMap::with_capacity(all_translated.len());
+                for translated in all_translated.iter() {
+                    if let Some(state) = self.evdev_controller_axis_state(*translated) {
+                        all_axes.insert(*translated, state);
+                    }
+                }
+                all_axes
+            }
+            pub fn evdev_controller_axis_state(&self, axis: ControllerAxis) -> Option<f64> {
+                let evdev = self.evdev.unwrap();
+                {
+                    let mut value = 0;
+                    let status = unsafe {
+                        let type_ = input_event_codes::EV_ABS;
+                        let code = self.untranslate_ev_abs(axis);
+                        evdev::libevdev_fetch_event_value(evdev, type_ as _, code as _, &mut value)
+                    };
+                    if status != 0 {
+                        return Some(value as f64);
+                    };
+                }
+                // Special case for D-pad
+                match axis {
+                    ControllerAxis::DpadX => {
+                        let mut dpad_lt_value = 0;
+                        let mut dpad_rt_value = 0;
+                        let has_dpad_lt = 0 != unsafe { evdev::libevdev_fetch_event_value(evdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_LEFT as _, &mut dpad_lt_value) };
+                        let has_dpad_rt = 0 != unsafe { evdev::libevdev_fetch_event_value(evdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_RIGHT as _, &mut dpad_rt_value) };
+                        if !has_dpad_lt && !has_dpad_rt {
+                            None
+                        } else if has_dpad_lt && !has_dpad_rt {
+                            Some(-dpad_lt_value as f64)
+                        } else if !has_dpad_lt && has_dpad_rt {
+                            Some(dpad_rt_value as f64)
+                        } else {
+                            Some((dpad_rt_value - dpad_lt_value) as f64)
+                        }
+                    },
+                    ControllerAxis::DpadY => {
+                        let mut dpad_up_value = 0;
+                        let mut dpad_dn_value = 0;
+                        let has_dpad_up = 0 != unsafe { evdev::libevdev_fetch_event_value(evdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_UP as _, &mut dpad_up_value) };
+                        let has_dpad_dn = 0 != unsafe { evdev::libevdev_fetch_event_value(evdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_DOWN as _, &mut dpad_dn_value) };
+                        if !has_dpad_up && !has_dpad_dn {
+                            None
+                        } else if has_dpad_up && !has_dpad_dn {
+                            Some(-dpad_up_value as f64)
+                        } else if !has_dpad_up && has_dpad_dn {
+                            Some(dpad_dn_value as f64)
+                        } else {
+                            Some((dpad_dn_value - dpad_up_value) as f64)
+                        }
+                    },
+                    _ => None,
+                }
+            }
+            pub fn evdev_refresh_all_controller_axes_support(&mut self) {
+                let axes = self.evdev_all_controller_axes_support();
+                self.info.evdev.as_mut().unwrap().axes = axes;
+            }
+            pub fn evdev_all_controller_axes_support(&self) -> HashMap<ControllerAxis, AxisInfo> {
                 let $device = self;
                 let evdev = self.evdev.unwrap();
+
                 let all_codes = &[$(input_event_codes::$EV_CODE,)+];
                 let all_translated = &[$($expr,)+];
                 assert_eq!(all_codes.len(), all_translated.len());
-                let mut all_axes = HashMap::new();
-                for i in 0..all_codes.len() {
+
+                let mut all_axes = HashMap::with_capacity(all_translated.len());
+
+                for (code, translated) in all_codes.iter().zip(all_translated.iter()) {
                     let has_it = 0 != unsafe {
-                        evdev::libevdev_has_event_code(evdev, input_event_codes::EV_ABS as _, all_codes[i] as _)
+                        evdev::libevdev_has_event_code(evdev, input_event_codes::EV_ABS as _, *code as _)
                     };
                     if has_it {
                         let absinfo = unsafe {
-                            evdev::libevdev_get_abs_info(evdev, all_codes[i] as _)
+                            evdev::libevdev_get_abs_info(evdev, *code as _)
                         };
                         if !absinfo.is_null() {
-                            all_axes.insert(all_translated[i], axis_info_from_linux_absinfo(unsafe { &*absinfo }));
+                            all_axes.insert(*translated, axis_info_from_linux_absinfo(unsafe { &*absinfo }));
                         }
                     }
                 }
-                // Special case for D-pad
+
+                // Special case for D-pad, which may be reported as a button, but we provide it as an axis
                 let has_dpad_up = 0 != unsafe { evdev::libevdev_has_event_code(evdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_UP as _) };
                 let has_dpad_dn = 0 != unsafe { evdev::libevdev_has_event_code(evdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_DOWN as _) };
                 let has_dpad_y = has_dpad_up || has_dpad_dn;
@@ -1048,12 +1177,12 @@ event_mapping!{
 }
 
 impl Device {
-    pub fn translate_linux_input_event(&self, with_id: UdevDeviceID, ev: &linux_input::input_event) -> Option<Event> {
+    pub fn translate_linux_input_event(&self, with_id: TokenForUdev, ev: &linux_input::input_event) -> Option<Event> {
         let &linux_input::input_event {
             time, type_, code, value
         } = ev;
         let timestamp = timestamp_from_timeval(time);
-        let controller = ControllerID(with_id);
+        let controller = HidID(with_id.into());
         match type_ {
             input_event_codes::EV_KEY => {
                 match self.translate_ev_key(code) {
@@ -1092,7 +1221,7 @@ impl Device {
         }
     }
 
-    fn pump_evdev(&self, with_id: UdevDeviceID, pending_translated_events: &mut VecDeque<Event>) {
+    fn pump_evdev(&self, with_id: TokenForUdev, pending_translated_events: &mut VecDeque<Event>) {
         if let Some(evdev) = self.evdev {
             let mut ev: linux_input::input_event = unsafe { mem::zeroed() };
             let mut read_flag = libevdev_read_flag::LIBEVDEV_READ_FLAG_NORMAL;
@@ -1129,16 +1258,34 @@ impl Device {
     }
 
     fn controller_info(&self) -> hid::Result<OsControllerInfo> {
-        unimplemented!{}
+        let info_evdev = self.info.evdev.as_ref().unwrap();
+        let info = OsControllerInfo {
+            is_a_gamepad: self.is_a_gamepad(),
+            is_a_joystick: self.is_a_joystick(),
+            is_a_steering_wheel: self.is_a_steering_wheel(),
+            buttons: info_evdev.buttons.clone(),
+            axes: info_evdev.axes.clone(),
+        };
+        Ok(info)
     }
     fn controller_state(&self) -> hid::Result<OsControllerState> {
-        unimplemented!{}
+        let state = OsControllerState {
+            buttons: self.evdev_all_controller_buttons_state(),
+            axes: self.evdev_all_controller_axes_state(),
+        };
+        Ok(state)
     }
     fn controller_button_state(&self, button: ControllerButton) -> hid::Result<ButtonState> {
-        unimplemented!{}
+        match self.evdev_controller_button_state(button) {
+            Some(state) => Ok(state),
+            None => hid::not_supported_by_device_unexplained(),
+        }
     }
     fn controller_axis_state(&self, axis: ControllerAxis) -> hid::Result<f64> {
-        unimplemented!{}
+        match self.evdev_controller_axis_state(axis) {
+            Some(state) => Ok(state),
+            None => hid::not_supported_by_device_unexplained(),
+        }
     }
     fn play_rumble_effect(&self, effect: &RumbleEffect) -> hid::Result<()> {
         if self.fd.is_none() || !self.fd_has_write_access {

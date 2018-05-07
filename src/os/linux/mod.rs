@@ -1,13 +1,13 @@
 mod udev;
 
 use std::time::Instant;
-use self::udev::{UdevContext, UdevDeviceID};
-pub use self::udev::{OsControllerID, OsControllerInfo, OsControllerState};
+use self::udev::{UdevContext, TokenForUdev};
+pub use self::udev::{OsControllerInfo, OsControllerState};
 use x11::{
     X11Context, X11Window, X11WindowHandle, X11WindowFromHandleParams, X11Cursor,
     X11GLProc, X11GLPixelFormat, X11GLContext,
     X11Keysym, X11Keycode,
-    X11KeyboardID, X11MouseID, X11TabletID, X11TouchID, X11MasterHidID,
+    X11DeviceID,
 };
 use error::Result;
 use desktop::Desktop;
@@ -16,12 +16,12 @@ use event::Event;
 use timeout::Timeout;
 use hid::{
     self, 
-    AnyDeviceID, HidInfo, AxisInfo, ButtonState,
-    ControllerButton, ControllerAxis, ControllerID, ControllerState, ControllerInfo, RumbleEffect,
-    KeyboardID, KeyState, KeyboardState, Keysym, Keycode,
-    MouseID, MouseState, MouseButton,
-    TabletID, TabletInfo, TabletState, TabletPadButton, TabletStylusButton,
-    TouchID, TouchInfo,
+    HidID, HidInfo, ButtonState,
+    ControllerButton, ControllerAxis, ControllerState, ControllerInfo, RumbleEffect,
+    KeyState, KeyboardState, Keysym, Keycode,
+    MouseState, MouseButton,
+    TabletInfo, TabletState, TabletPadButton, TabletStylusButton,
+    TouchInfo,
 };
 use cursor::{SystemCursor, RgbaCursorData, RgbaCursorAnimFrame};
 use Extent2;
@@ -39,20 +39,32 @@ pub type OsCursor = X11Cursor;
 pub type OsGLPixelFormat = X11GLPixelFormat;
 pub type OsGLContext = X11GLContext;
 pub type OsGLProc = X11GLProc;
+pub type OsKeycode = X11Keycode;
+pub type OsKeysym = X11Keysym;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct OsMasterHidID {
-    // It's either one or both; Normally the missing one is deduced from the other.
-    // It's invalid for them to be both `None`.
-    pub x11: Option<X11MasterHidID>,
-    pub udev: Option<UdevDeviceID>,
+pub struct OsHidID {
+    pub x11: Option<X11DeviceID>,
+    pub token_for_udev: Option<TokenForUdev>,
 }
-pub type OsKeyboardID = X11KeyboardID;
-pub type OsMouseID = X11MouseID;
-pub type OsTabletID = X11TabletID;
-pub type OsTouchID = X11TouchID;
-pub type OsKeysym = X11Keysym;
-pub type OsKeycode = X11Keycode;
+
+impl From<X11DeviceID> for OsHidID {
+    fn from(x11: X11DeviceID) -> Self {
+        Self {
+            x11: Some(x11),
+            token_for_udev: None,
+        }
+    }
+}
+impl From<TokenForUdev> for OsHidID {
+    fn from(token: TokenForUdev) -> Self {
+        Self {
+            x11: None,
+            token_for_udev: Some(token),
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OsKeyboardState;
@@ -63,7 +75,6 @@ pub struct OsTabletPadButtonsState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OsTabletStylusButtonsState;
 
-pub trait OsDeviceID {}
 
 impl OsKeyboardState {
     pub fn keycode(&self, key: Keycode) -> Option<KeyState> {
@@ -162,76 +173,67 @@ impl OsContext {
     pub fn supports_raw_device_events(&self) -> Result<bool> {
         self.x11.supports_raw_device_events()
     }
-    pub fn hid_info<ID: AnyDeviceID>(&self, id: ID) -> hid::Result<HidInfo> {
-        unimplemented!{}
+    pub fn hid_info(&self, id: HidID) -> hid::Result<HidInfo> {
+        self.udev.hid_info(id)
     }
-    pub fn ping_hid<ID: AnyDeviceID>(&self, id: ID) -> hid::Result<()> {
-        unimplemented!{}
+    pub fn ping_hid(&self, id: HidID) -> hid::Result<()> {
+        self.udev.ping_hid(id)
     }
-    pub fn controllers(&self) -> hid::Result<Vec<ControllerID>> {
+    pub fn controllers(&self) -> hid::Result<Vec<HidID>> {
         self.udev.controllers()
     }
-    pub fn controller_info(&self, controller: ControllerID) -> hid::Result<ControllerInfo> {
-        self.udev.controller_info(controller)
-    }
-    pub fn controller_state(&self, controller: ControllerID) -> hid::Result<ControllerState> {
+    pub fn controller_state(&self, controller: HidID) -> hid::Result<ControllerState> {
         self.udev.controller_state(controller)
     }
-    pub fn controller_button_state(&self, controller: ControllerID, button: ControllerButton) -> hid::Result<ButtonState> {
+    pub fn controller_button_state(&self, controller: HidID, button: ControllerButton) -> hid::Result<ButtonState> {
         self.udev.controller_button_state(controller, button)
     }
-    pub fn controller_axis_state(&self, controller: ControllerID, axis: ControllerAxis) -> hid::Result<f64> {
+    pub fn controller_axis_state(&self, controller: HidID, axis: ControllerAxis) -> hid::Result<f64> {
         self.udev.controller_axis_state(controller, axis)
     }
-    pub fn controller_play_rumble_effect(&self, controller: ControllerID, effect: &RumbleEffect) -> hid::Result<()> {
+    pub fn controller_play_rumble_effect(&self, controller: HidID, effect: &RumbleEffect) -> hid::Result<()> {
         self.udev.controller_play_rumble_effect(controller, effect)
     }
-    pub fn keyboards(&self) -> hid::Result<Vec<KeyboardID>> {
+    pub fn keyboards(&self) -> hid::Result<Vec<HidID>> {
         unimplemented!{}
     }
-    pub fn main_keyboard(&self) -> hid::Result<KeyboardID> {
+    pub fn main_keyboard(&self) -> hid::Result<HidID> {
         unimplemented!{}
     }
-    pub fn keyboard_state(&self, keyboard: KeyboardID) -> hid::Result<KeyboardState> {
+    pub fn keyboard_state(&self, keyboard: HidID) -> hid::Result<KeyboardState> {
         unimplemented!{}
     }
-    pub fn keyboard_keycode_state(&self, keyboard: KeyboardID, keycode: Keycode) -> hid::Result<KeyState> {
+    pub fn keyboard_keycode_state(&self, keyboard: HidID, keycode: Keycode) -> hid::Result<KeyState> {
         unimplemented!{}
     }
-    pub fn keyboard_keysym_state(&self, keyboard: KeyboardID, keysym: Keysym) -> hid::Result<KeyState> {
+    pub fn keyboard_keysym_state(&self, keyboard: HidID, keysym: Keysym) -> hid::Result<KeyState> {
         unimplemented!{}
     }
-    pub fn keysym_name(&self, keysum: Keysym) -> hid::Result<String> {
+    pub fn keysym_name(&self, keysym: Keysym) -> hid::Result<String> {
         unimplemented!{}
     }
-    pub fn keysym_from_keycode(&self, keyboard: KeyboardID, keycode: Keycode) -> hid::Result<Keysym> {
+    pub fn keysym_from_keycode(&self, keyboard: HidID, keycode: Keycode) -> hid::Result<Keysym> {
         unimplemented!{}
     }
-    pub fn keycode_from_keysym(&self, keyboard: KeyboardID, keysym: Keysym) -> hid::Result<Keycode> {
+    pub fn keycode_from_keysym(&self, keyboard: HidID, keysym: Keysym) -> hid::Result<Keycode> {
         unimplemented!{}
     }
-    pub fn mice(&self) -> hid::Result<Vec<MouseID>> {
+    pub fn mice(&self) -> hid::Result<Vec<HidID>> {
         unimplemented!{}
     }
-    pub fn main_mouse(&self) -> hid::Result<MouseID> {
+    pub fn main_mouse(&self) -> hid::Result<HidID> {
         unimplemented!{}
     }
-    pub fn mouse_state(&self, mouse: MouseID) -> hid::Result<MouseState> {
+    pub fn mouse_state(&self, mouse: HidID) -> hid::Result<MouseState> {
         unimplemented!{}
     }
-    pub fn tablets(&self) -> hid::Result<Vec<TabletID>> {
+    pub fn tablets(&self) -> hid::Result<Vec<HidID>> {
         unimplemented!{}
     }
-    pub fn tablet_info(&self, tablet: TabletID) -> hid::Result<TabletInfo> {
+    pub fn tablet_state(&self, tablet: HidID) -> hid::Result<TabletState> {
         unimplemented!{}
     }
-    pub fn tablet_state(&self, tablet: TabletID) -> hid::Result<TabletState> {
-        unimplemented!{}
-    }
-    pub fn touch_devices(&self) -> hid::Result<Vec<TouchID>> {
-        unimplemented!{}
-    }
-    pub fn touch_info(&self, touch: TouchID) -> hid::Result<TouchInfo> {
+    pub fn touch_devices(&self) -> hid::Result<Vec<HidID>> {
         unimplemented!{}
     }
 }

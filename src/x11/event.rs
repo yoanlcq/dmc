@@ -7,7 +7,7 @@ use super::x11::xinput2 as xi2;
 use super::{X11SharedWindow, X11DeviceID};
 use error::{self, Result, failed};
 use event::{Event, Timestamp};
-use hid::{MouseID, KeyboardID, MouseButton, Key, Keysym, Keycode};
+use hid::{HidID, MouseButton, Key, Keysym, Keycode};
 use window::WindowHandle;
 use {Vec2, Extent2, Rect};
 
@@ -190,7 +190,7 @@ impl X11SharedContext {
             time, x, y, x_root, y_root, state: _, is_hint: _, same_screen: _,
         } = e;
         let e = Event::MouseMotion {
-            mouse: self.main_x_mouse(),
+            mouse: self.core_x_mouse(),
             timestamp: Timestamp::from_millis(time as _),
             window: WindowHandle(window),
             position: Vec2::new(x as _, y as _),
@@ -203,7 +203,7 @@ impl X11SharedContext {
             type_, serial: _, send_event: _, display: _, window, root: _, subwindow: _,
             time, x, y, x_root, y_root, mode, detail: _, same_screen: _, focus, state: _,
         } = e;
-        let mouse = self.main_x_mouse();
+        let mouse = self.core_x_mouse();
         let window = WindowHandle(window);
         let timestamp = Timestamp::from_millis(time as _);
         let position = Vec2::new(x as f64, y as _);
@@ -231,7 +231,7 @@ impl X11SharedContext {
         let &mut x::XFocusChangeEvent {
             type_, serial: _, send_event: _, display: _, window, mode: _, detail: _,
         } = e;
-        let keyboard = self.main_x_keyboard();
+        let keyboard = self.core_x_keyboard();
         let window = WindowHandle(window);
         let e = match type_ {
             x::FocusIn => Event::KeyboardFocusGained {
@@ -342,13 +342,13 @@ impl X11SharedContext {
 
         self.set_net_wm_user_time_for_x_window(window, time);
 
-        let keyboard = self.main_x_keyboard();
+        let keyboard = self.core_x_keyboard();
         let window = WindowHandle(window);
         let timestamp = Timestamp::from_millis(time);
 
         self.pending_translated_events.borrow_mut().push_back({
             Event::MouseMotion {
-                mouse: self.main_x_mouse(),
+                mouse: self.core_x_mouse(),
                 timestamp,
                 window,
                 position: Vec2::new(x as _, y as _),
@@ -410,7 +410,7 @@ impl X11SharedContext {
 
         self.set_net_wm_user_time_for_x_window(window, time);
 
-        let mouse = self.main_x_mouse();
+        let mouse = self.core_x_mouse();
         let window = WindowHandle(window);
         let timestamp = Timestamp::from_millis(time);
         let position = Vec2::new(x as _, y as _);
@@ -570,10 +570,10 @@ impl X11SharedContext {
             trace!("Sucessfully set _NET_WM_USER_TIME to {} for X Window {}", time, window);
         }
     }
-    fn main_x_mouse(&self) -> MouseID {
-        MouseID(X11DeviceID::Main)
+    fn core_x_mouse(&self) -> HidID {
+        HidID(X11DeviceID::CorePointer.into())
     }
-    fn main_x_keyboard(&self) -> KeyboardID {
-        KeyboardID(X11DeviceID::Main)
+    fn core_x_keyboard(&self) -> HidID {
+        HidID(X11DeviceID::CoreKeyboard.into())
     }
 }

@@ -11,6 +11,7 @@
 #[macro_use]
 extern crate log;
 extern crate vek;
+extern crate uuid;
 
 #[cfg(unix)]
 #[macro_use]
@@ -53,14 +54,11 @@ macro_rules! os_mod {
                 OsContext, OsWindow, OsWindowHandle, OsWindowFromHandleParams,
                 OsCursor,
                 OsGLPixelFormat, OsGLContext, OsGLProc,
-                OsMasterHidID,
-                OsControllerID, OsControllerState,
-                OsKeyboardID, OsKeyboardState, OsKeycode, OsKeysym,
-                OsMouseID, OsMouseButtonsState,
-                OsTabletID, OsTabletPadButtonsState, OsTabletStylusButtonsState,
-                OsTouchID,
-                OsDeviceID,
-                OsControllerInfo,
+                OsHidID,
+                OsControllerState, OsControllerInfo,
+                OsKeyboardState, OsKeycode, OsKeysym,
+                OsMouseButtonsState,
+                OsTabletPadButtonsState, OsTabletStylusButtonsState,
             };
         }
 

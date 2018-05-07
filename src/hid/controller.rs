@@ -1,15 +1,11 @@
 //! Controllers (Gamepads, Joysticks, Steering wheels, etc).
-// rationale : udev treats all these as ID_INPUT_JOYSTICK.
+//!
+//! On Linux, `udev` reports all of these with the `ID_INPUT_JOYSTICK` set to `1`.
 
 use std::time::Duration;
 use context::Context;
-use os::{OsControllerID, OsControllerState, OsControllerInfo, OsDeviceID};
-use super::{ButtonState, AxisInfo, Result};
-
-/// A device ID type for controllers.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct ControllerID(pub(crate) OsControllerID);
-impl OsDeviceID for ControllerID {}
+use os::{OsControllerState, OsControllerInfo};
+use super::{HidID, ButtonState, AxisInfo, Result};
 
 /// Opaque container for a snapshot of a controller's full state.
 #[derive(Debug, Clone, PartialEq)]
@@ -100,6 +96,9 @@ pub enum ControllerButton {
 }
 
 /// A known controller axis.
+///
+/// All of these axies are absolute; Relative axes are normally only relevant for e.g mice or
+/// scroll wheels.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum ControllerAxis {
     /// (Gamepads) The left stick's horizontal position, increasing rightwards.
@@ -190,27 +189,23 @@ impl ControllerState {
 
 impl Context {
     /// Lists all connected controller devices.
-    pub fn controllers(&self) -> Result<Vec<ControllerID>> {
+    pub fn controllers(&self) -> Result<Vec<HidID>> {
         self.0.controllers()
     }
-    /// Fetches the `ControllerInfo` for the controller which ID is given.
-    pub fn controller_info(&self, controller: ControllerID) -> Result<ControllerInfo> {
-        self.0.controller_info(controller)
-    }
     /// Gets a snapshot of a controller's current state, which ID is given.
-    pub fn controller_state(&self, controller: ControllerID) -> Result<ControllerState> {
+    pub fn controller_state(&self, controller: HidID) -> Result<ControllerState> {
         self.0.controller_state(controller)
     }
     /// Gets the current state of a button for the controller which ID is given.
-    pub fn controller_button_state(&self, controller: ControllerID, button: ControllerButton) -> Result<ButtonState> {
+    pub fn controller_button_state(&self, controller: HidID, button: ControllerButton) -> Result<ButtonState> {
         self.0.controller_button_state(controller, button)
     }
     /// Gets the current state of an axis for the controller which ID is given.
-    pub fn controller_axis_state(&self, controller: ControllerID, axis: ControllerAxis) -> Result<f64> {
+    pub fn controller_axis_state(&self, controller: HidID, axis: ControllerAxis) -> Result<f64> {
         self.0.controller_axis_state(controller, axis)
     }
     /// Plays a rumble effect for the controller which ID is given.
-    pub fn controller_play_rumble_effect(&self, controller: ControllerID, effect: &RumbleEffect) -> Result<()> {
+    pub fn controller_play_rumble_effect(&self, controller: HidID, effect: &RumbleEffect) -> Result<()> {
         self.0.controller_play_rumble_effect(controller, effect)
     }
 }

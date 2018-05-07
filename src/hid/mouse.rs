@@ -2,14 +2,9 @@
 
 use context::Context;
 use window::Window;
-use os::{OsMouseID, OsMouseButtonsState, OsDeviceID};
-use super::{ButtonState, Result};
+use os::OsMouseButtonsState;
+use super::{HidID, ButtonState, Result};
 use Vec2;
-
-/// A device ID type for mice.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct MouseID(pub(crate) OsMouseID);
-impl OsDeviceID for MouseID {}
 
 /// Known mouse buttons.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -35,6 +30,10 @@ pub enum MouseButton {
 /// An opaque container for the current state a mouse's buttons.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MouseButtonsState(pub(crate) OsMouseButtonsState);
+
+/// There's nothing in here, for now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MouseInfo;
 
 /// A snapshot of the mouse's global state.
 #[derive(Debug, Clone, PartialEq)]
@@ -69,22 +68,22 @@ impl MouseState {
 
 impl Context {
     /// Lists all currently connected mouse devices.
-    pub fn mice(&self) -> Result<Vec<MouseID>> {
+    pub fn mice(&self) -> Result<Vec<HidID>> {
         self.0.mice()
     }
     /// Gets the ID for the main mouse, if any.
-    pub fn main_mouse(&self) -> Result<MouseID> {
+    pub fn main_mouse(&self) -> Result<HidID> {
         self.0.main_mouse()
     }
     /// Captures the current state of the mouse which ID is given.
-    pub fn mouse_state(&self, mouse: MouseID) -> Result<MouseState> {
+    pub fn mouse_state(&self, mouse: HidID) -> Result<MouseState> {
         self.0.mouse_state(mouse)
     }
 }
 
 impl Window {
     /// Captures the current state of the mouse which ID is given, relatively to this window.
-    pub fn mouse_state(&self, mouse: MouseID) -> Result<WindowMouseState> {
+    pub fn mouse_state(&self, mouse: HidID) -> Result<WindowMouseState> {
         self.0.mouse_state(mouse)
     }
 }

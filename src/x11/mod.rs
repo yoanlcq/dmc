@@ -7,23 +7,13 @@ use std::os::raw::c_int;
 use self::x11::xlib as x;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum XIDeviceID {
-    XIMaster(c_int),
-    XISlave(c_int),
-}
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum X11DeviceID {
-    Main,
-    XI(XIDeviceID),
+    CorePointer,
+    CoreKeyboard,
+    XI2(c_int),
 }
-pub type X11MasterHidID = X11DeviceID;
-pub type X11MouseID = X11DeviceID;
-pub type X11KeyboardID = X11DeviceID;
-pub type X11TabletID = XIDeviceID;
-pub type X11TouchID = XIDeviceID;
 pub type X11Keysym = x::KeySym;
 pub type X11Keycode = x::KeyCode;
-
 
 pub mod context;
 pub use self::context::{X11Context, X11SharedContext};

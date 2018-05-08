@@ -1,4 +1,4 @@
-mod udev;
+mod linuxdev;
 
 extern crate x11;
 extern crate libc;
@@ -6,8 +6,8 @@ extern crate libc;
 use std::time::Instant;
 use std::os::raw::c_int;
 
-use self::udev::{UdevContext, TokenForUdev};
-pub use self::udev::{OsControllerInfo, OsControllerState};
+use self::linuxdev::{LinuxdevContext, LinuxdevToken};
+pub use self::linuxdev::{OsControllerInfo, OsControllerState};
 use x11::{
     X11Context, X11Window, X11WindowHandle, X11WindowFromHandleParams, X11Cursor,
     X11GLProc, X11GLPixelFormat, X11GLContext,
@@ -33,7 +33,7 @@ use Extent2;
 #[derive(Debug)]
 pub struct OsContext {
     pub x11: X11Context,
-    pub udev: UdevContext,
+    pub linuxdev: LinuxdevContext,
 }
 
 pub type OsWindow = X11Window;
@@ -54,13 +54,7 @@ pub enum OsHidID {
     CoreKeyboard,
     CorePointer,
     XISlave(c_int),
-    ControllerViaUdev(TokenForUdev),
-}
-
-impl From<TokenForUdev> for OsHidID {
-    fn from(token: TokenForUdev) -> Self {
-        OsHidID::ControllerViaUdev(token)
-    }
+    Linuxdev(LinuxdevToken),
 }
 
 
@@ -102,7 +96,7 @@ impl OsTabletStylusButtonsState {
 
 impl From<X11Context> for OsContext {
     fn from(x11: X11Context) -> Self {
-        Self { x11, udev: UdevContext::default(), }
+        Self { x11, linuxdev: LinuxdevContext::default(), }
     }
 }
 
@@ -138,13 +132,7 @@ impl OsContext {
         self.x11.untrap_mouse()
     }
     fn poll_next_event(&self) -> Option<Event> {
-        if let Some(e) = self.udev.poll_next_event() {
-            return Some(e);
-        }
-        if let Some(e) = self.x11.poll_next_event() {
-            return Some(e);
-        }
-        None
+        self.linuxdev.poll_next_event().or_else(|| self.x11.poll_next_event())
     }
     pub fn next_event(&self, timeout: Timeout) -> Option<Event> {
         match timeout.duration() {
@@ -161,7 +149,7 @@ impl OsContext {
                     if let Some(e) = self.poll_next_event() {
                         return Some(e);
                     }
-                    if Instant::now().duration_since(start) >= duration {
+                    if start.elapsed() >= duration {
                         return None; // Timed out
                     }
                 }
@@ -172,25 +160,31 @@ impl OsContext {
         self.x11.supports_raw_device_events()
     }
     pub fn hid_info(&self, id: HidID) -> hid::Result<HidInfo> {
-        self.udev.hid_info(id)
+        match id.0 {
+            OsHidID::Linuxdev(token) => self.linuxdev.controller_info(token),
+            _ => unimplemented!{},
+        }
     }
     pub fn ping_hid(&self, id: HidID) -> hid::Result<()> {
-        self.udev.ping_hid(id)
+        match id.0 {
+            OsHidID::Linuxdev(token) => self.linuxdev.ping_controller(token),
+            _ => unimplemented!{},
+        }
     }
     pub fn controllers(&self) -> hid::Result<Vec<HidID>> {
-        self.udev.controllers()
+        self.linuxdev.controllers()
     }
     pub fn controller_state(&self, controller: HidID) -> hid::Result<ControllerState> {
-        self.udev.controller_state(controller)
+        self.linuxdev.controller_state(controller)
     }
     pub fn controller_button_state(&self, controller: HidID, button: ControllerButton) -> hid::Result<ButtonState> {
-        self.udev.controller_button_state(controller, button)
+        self.linuxdev.controller_button_state(controller, button)
     }
     pub fn controller_axis_state(&self, controller: HidID, axis: ControllerAxis) -> hid::Result<f64> {
-        self.udev.controller_axis_state(controller, axis)
+        self.linuxdev.controller_axis_state(controller, axis)
     }
     pub fn controller_play_rumble_effect(&self, controller: HidID, effect: &RumbleEffect) -> hid::Result<()> {
-        self.udev.controller_play_rumble_effect(controller, effect)
+        self.linuxdev.controller_play_rumble_effect(controller, effect)
     }
     pub fn keyboards(&self) -> hid::Result<Vec<HidID>> {
         unimplemented!{}

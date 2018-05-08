@@ -4,6 +4,7 @@ extern crate x11;
 extern crate libc;
 
 use std::time::Instant;
+use std::os::raw::c_int;
 
 use self::udev::{UdevContext, TokenForUdev};
 pub use self::udev::{OsControllerInfo, OsControllerState};
@@ -11,7 +12,6 @@ use x11::{
     X11Context, X11Window, X11WindowHandle, X11WindowFromHandleParams, X11Cursor,
     X11GLProc, X11GLPixelFormat, X11GLContext,
     X11Keysym, X11Keycode,
-    X11DeviceID,
 };
 use error::Result;
 use desktop::Desktop;
@@ -50,25 +50,16 @@ pub mod event_instant;
 pub use self::event_instant::OsEventInstant;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct OsHidID {
-    pub x11: Option<X11DeviceID>,
-    pub token_for_udev: Option<TokenForUdev>,
+pub enum OsHidID {
+    CoreKeyboard,
+    CorePointer,
+    XISlave(c_int),
+    ControllerViaUdev(TokenForUdev),
 }
 
-impl From<X11DeviceID> for OsHidID {
-    fn from(x11: X11DeviceID) -> Self {
-        Self {
-            x11: Some(x11),
-            token_for_udev: None,
-        }
-    }
-}
 impl From<TokenForUdev> for OsHidID {
     fn from(token: TokenForUdev) -> Self {
-        Self {
-            x11: None,
-            token_for_udev: Some(token),
-        }
+        OsHidID::ControllerViaUdev(token)
     }
 }
 

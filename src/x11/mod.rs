@@ -3,15 +3,8 @@
 extern crate x11;
 extern crate libc;
 
-use std::os::raw::c_int;
 use self::x11::xlib as x;
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum X11DeviceID {
-    CorePointer,
-    CoreKeyboard,
-    XI2(c_int),
-}
 pub type X11Keysym = x::KeySym;
 pub type X11Keycode = x::KeyCode;
 

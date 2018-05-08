@@ -4,8 +4,8 @@ use std::os::raw::c_int;
 use super::context::X11SharedContext;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
-use super::{X11SharedWindow, X11DeviceID};
-use os::OsEventInstant;
+use super::X11SharedWindow;
+use os::{OsEventInstant, OsHidID};
 use error::{self, Result, failed};
 use event::{Event, EventInstant};
 use hid::{HidID, MouseButton, Key, Keysym, Keycode};
@@ -572,9 +572,9 @@ impl X11SharedContext {
         }
     }
     pub fn core_x_mouse(&self) -> HidID {
-        HidID(X11DeviceID::CorePointer.into())
+        HidID(OsHidID::CorePointer)
     }
     pub fn core_x_keyboard(&self) -> HidID {
-        HidID(X11DeviceID::CoreKeyboard.into())
+        HidID(OsHidID::CoreKeyboard)
     }
 }

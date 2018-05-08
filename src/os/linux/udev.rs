@@ -13,7 +13,7 @@ use std::num::Wrapping;
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
 use event::{Event, EventInstant};
-use super::OsEventInstant;
+use os::{OsEventInstant, OsHidID};
 use time_utils;
 use hid::{self, HidID, HidInfo, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState, Bus, RumbleEffect, AxisInfo};
 
@@ -429,12 +429,17 @@ impl UdevContext {
     }
     fn controller_device<T, F: FnMut(&Device) -> hid::Result<T>>(&self, controller: HidID, mut f: F) -> hid::Result<T> {
         let devices = self.devices.borrow();
-        match devices.get(&controller.0.token_for_udev.unwrap()) {
-            None => hid::disconnected(),
-            Some(dev) => {
-                debug_assert!(dev.is_a_controller());
-                f(dev)
-            },
+        match controller.0 {
+            OsHidID::ControllerViaUdev(token) => {
+                match devices.get(&token) {
+                    None => hid::disconnected(),
+                    Some(dev) => {
+                        debug_assert!(dev.is_a_controller());
+                        f(dev)
+                    },
+                }
+            }
+            _ => hid::not_supported_by_device(format!("This device does not refer to a controller")),
         }
     }
 }

@@ -252,7 +252,11 @@ impl Default for UdevContext {
                 let udev_device = libudev_sys::udev_device_new_from_syspath(udev, devname);
 
                 highest_id.replace_by_next();
-                let dev = Device::from_udev_device(udev_device, true);
+                let dev = Device::from_udev_device(FromUdevDevice {
+                    udev_device, 
+                    owns_udev_device: true,
+                    try_open_fd_if_allowed: true,
+                });
                 dev.pump_evdev(highest_id, &mut pending_translated_events);
                 devices.insert(highest_id, dev);
             }
@@ -330,7 +334,11 @@ impl UdevContext {
                 let id = self.highest_id.get().next();
                 self.highest_id.set(id);
                 let dev = unsafe {
-                    Device::from_udev_device(udev_device, true)
+                    Device::from_udev_device(FromUdevDevice {
+                        udev_device, 
+                        owns_udev_device: true,
+                        try_open_fd_if_allowed: true,
+                    })
                 };
                 let is_a_controller = dev.is_a_controller();
                 let instant = dev.plug_instant();
@@ -566,8 +574,18 @@ impl DeviceInfoUdevEvdev {
     }
 }
 
+struct FromUdevDevice {
+    udev_device: *mut libudev_sys::udev_device,
+    owns_udev_device: bool,
+    try_open_fd_if_allowed: bool,
+}
+
 impl Device {
-    unsafe fn from_udev_device(udev_device: *mut libudev_sys::udev_device, take_ownership: bool) -> Self {
+    unsafe fn from_udev_device(params: FromUdevDevice) -> Self {
+        let FromUdevDevice {
+            udev_device, owns_udev_device, try_open_fd_if_allowed,
+        } = params;
+
         assert!(!udev_device.is_null());
 
         // --- Getting as much info as we can
@@ -651,7 +669,7 @@ impl Device {
         let (fd, fd_has_write_access) = {
             // Don't even try if it's not a controller. All other device kinds are "owned" by the X
             // server so we're normally not allowed to open them.
-            if !info_udev.id_input_joystick {
+            if !try_open_fd_if_allowed || !info_udev.id_input_joystick {
                 (None, false)
             } else {
                 // O_RDWR for the ability to write force feedback events;
@@ -725,7 +743,7 @@ impl Device {
         };
 
         let mut dev = Self {
-            backend, owns_udev_device: take_ownership, udev_device, fd, fd_has_write_access, evdev,
+            backend, owns_udev_device, udev_device, fd, fd_has_write_access, evdev,
             info,
             ff_id: Cell::new(-1),
         };
@@ -736,14 +754,18 @@ impl Device {
         dev
     }
 
-    fn parent(&self) -> Option<Device> {
+    fn parent(&self, try_open_fd_if_allowed: bool) -> Option<Device> {
         let parent = unsafe {
             libudev_sys::udev_device_get_parent(self.udev_device)
         };
         if parent.is_null() {
             None
         } else {
-            Some(unsafe { Self::from_udev_device(parent, false) })
+            Some(unsafe { Self::from_udev_device(FromUdevDevice {
+                udev_device: parent,
+                owns_udev_device: false,
+                try_open_fd_if_allowed,
+            })})
         }
     }
 

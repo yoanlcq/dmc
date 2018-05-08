@@ -174,8 +174,7 @@ impl X11SharedContext {
             x::XDestroyImage(pix_img);
             x::XFreeGC(x_display, pix_gc);
             x::XFreePixmap(x_display, pix);
-            unimplemented!{"This code is probably wrong because data is RGBA but pict format is ARGB. Test me!"};
-            Ok(x_cursor)
+            unimplemented!{"This code is probably wrong because data is RGBA but pict format is ARGB. Test me!!!"}
         }
     }
 }

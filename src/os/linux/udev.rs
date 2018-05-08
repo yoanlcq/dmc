@@ -9,12 +9,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CStr;
 use std::ptr;
 use std::mem;
+use std::num::Wrapping;
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
-use event::{Event, Timestamp};
+use event::{Event, EventInstant};
+use super::OsEventInstant;
+use time_utils;
 use hid::{self, HidID, HidInfo, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState, Bus, RumbleEffect, AxisInfo};
 
-use self::c::{c_int, c_uint, c_char, c_ulonglong};
+use self::c::{c_int, c_uint, c_char};
 
 use nix::errno::Errno;
 
@@ -32,60 +35,30 @@ unsafe fn cstr<'a>(ptr: *const c_char) -> Option<&'a CStr> {
     Some(&CStr::from_ptr(ptr))
 }
 
-mod time {
-    use super::*;
-    pub fn timestamp_from_timeval(timeval: c::timeval) -> Timestamp {
-        let c::timeval { tv_sec, tv_usec } = timeval;
-        let secs: u64 = match tv_sec {
-            tv_sec if tv_sec < 0_i64 => 0,
-            tv_sec => tv_sec as u64,
-        };
-        let nanos: u32 = match tv_usec {
-            tv_usec if tv_usec < 0_i64 => 0,
-            tv_usec => 1000_u32.saturating_mul(::std::cmp::min(tv_usec, ::std::u32::MAX as i64 / 1000) as u32),
-        };
-        Timestamp::new(secs, nanos)
+// From linux/input.h:
+// "Values above 32767 ms (0x7fff) should not be used and have unspecified results."
+fn duration_to_safe_u16_millis(d: &Duration) -> u16 {
+    let ms = time_utils::duration_to_millis(d);
+    let max = 0x7fff;
+    if ms > max {
+        warn!("Duration for rumble effect will be clamped to {} ms (was {} ms) to prevent unspecified behaviour", max, ms);
+        return max as u16;
     }
-
-    pub fn duration_from_usecs(mut usecs: u64) -> Duration {
-        let secs = usecs / 1_000_000;
-        usecs -= secs * 1_000_000;
-        let nanos = usecs * 1_000;
-        Duration::new(secs, nanos as u32)
-    }
-
-    pub fn duration_to_millis(d: &Duration) -> u64 {
-        let secs = d.as_secs();
-        let nanos = d.subsec_nanos() as u64;
-        secs * 1_000 + nanos / 1_000_000
-    }
-    // From linux/input.h:
-    // "Values above 32767 ms (0x7fff) should not be used and have unspecified results."
-    pub fn duration_to_safe_u16_millis(d: &Duration) -> u16 {
-        let ms = duration_to_millis(d);
-        let max = 0x7fff;
-        if ms > max {
-            warn!("Duration for rumble effect will be clamped to {} ms (was {} ms) to prevent unspecified behaviour", max, ms);
-            return max as u16;
-        }
-        ms as u16
-    }
+    ms as u16
 }
-use self::time::*;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct TokenForUdev(u32);
+pub struct TokenForUdev(Wrapping<u32>);
 
 impl Default for TokenForUdev {
     fn default() -> Self {
-         // For debugging. Also, -1, 0, and values below 100 are nice to reserve.
-         TokenForUdev(100)
+         TokenForUdev(Wrapping(0))
     }
 }
 
 impl TokenForUdev {
     fn next(&self) -> Self {
-        TokenForUdev(self.0 + 1)
+        TokenForUdev(self.0 + Wrapping(1))
     }
     fn replace_by_next(&mut self) {
         *self = self.next();
@@ -146,7 +119,6 @@ struct DeviceInfoUdevEvdev {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct DeviceInfoUdev {
-    usec_since_initialized: c_ulonglong,
     usec_initialized: Option<u64>,
     id_usb_driver: Option<String>,
     id_bus: Option<String>,
@@ -285,12 +257,6 @@ impl Default for UdevContext {
                 devices.insert(highest_id, dev);
             }
 
-            {
-                let (all, nothing) = pending_translated_events.as_mut_slices();
-                debug_assert!(nothing.is_empty());
-                all.sort_by_key(|ev| ev.timestamp().unwrap_or(Timestamp::default()));
-            }
-
             Self {
                 udev, monitor, enumerate,
                 devices: RefCell::new(devices),
@@ -367,20 +333,21 @@ impl UdevContext {
                     Device::from_udev_device(udev_device, true)
                 };
                 let is_a_controller = dev.is_a_controller();
-                let timestamp = dev.info.udev.usec_initialized.map(|usecs| duration_from_usecs(usecs)).unwrap_or(Timestamp::default()); // Fine as long as we use stable sorts
+                let instant = dev.plug_instant();
                 dev.pump_evdev(id, &mut pending_translated_events);
                 devices.insert(id, dev);
-                let (all, nothing) = pending_translated_events.as_mut_slices();
-                debug_assert!(nothing.is_empty());
-                all.sort_by_key(|ev| ev.timestamp().unwrap_or(Timestamp::default()));
                 if is_a_controller {
                     let hid = HidID(id.into());
-                    Some(Event::HidConnected { hid, timestamp })
+                    Some(Event::HidConnected { hid, instant })
                 } else {
                     None // Connected/Disconnected events emitted by X11
                 }
             },
             UdevDeviceAction::Remove => {
+                // We only care about the pointer; Let's not leak this!
+                unsafe {
+                    libudev_sys::udev_device_unref(udev_device);
+                }
                 let id = {
                     let mut id_found = None;
                     for (id, dev) in self.devices.borrow().iter() {
@@ -394,8 +361,8 @@ impl UdevContext {
                 let dev = self.devices.borrow_mut().remove(&id).unwrap();
                 if dev.is_a_controller() {
                     let hid = HidID(id.into());
-                    let timestamp = dev.info.udev.usec_initialized.map(|usecs| duration_from_usecs(usecs)).unwrap_or(Timestamp::default()); // Fine as long as we use stable sorts
-                    Some(Event::HidDisconnected { hid, timestamp })
+                    let instant = dev.instant_now(); // Looks like it's the closest we can get... ._.
+                    Some(Event::HidDisconnected { hid, instant })
                 } else {
                     None // Connected/Disconnected events emitted by X11
                 }
@@ -421,9 +388,6 @@ impl UdevContext {
         for (id, dev) in self.devices.borrow().iter() {
             dev.pump_evdev(*id, &mut pending_translated_events);
         }
-        let (all, nothing) = pending_translated_events.as_mut_slices();
-        debug_assert!(nothing.is_empty());
-        all.sort_by_key(|ev| ev.timestamp().unwrap_or(Timestamp::default()));
     }
     pub fn poll_next_event(&self) -> Option<Event> {
         self.pump_events();
@@ -458,7 +422,7 @@ impl UdevContext {
     fn controller_device<T, F: FnMut(&Device) -> hid::Result<T>>(&self, controller: HidID, mut f: F) -> hid::Result<T> {
         let devices = self.devices.borrow();
         match devices.get(&controller.0.token_for_udev.unwrap()) {
-            None => hid::disconnected_no_timestamp(),
+            None => hid::disconnected(),
             Some(dev) => {
                 debug_assert!(dev.is_a_controller());
                 f(dev)
@@ -644,7 +608,6 @@ impl Device {
         }
 
         let info_udev = DeviceInfoUdev {
-            usec_since_initialized: libudev_sys::udev_device_get_usec_since_initialized(udev_device),
             usec_initialized: udev_prop_string(b"USEC_INITIALIZED\0").map(|s| s.parse().unwrap()),
             id_usb_driver: udev_prop_string(b"ID_USB_DRIVER\0"),
             id_bus: udev_prop_string(b"ID_BUS\0"),
@@ -795,6 +758,29 @@ impl Device {
     }
     pub fn is_a_joystick(&self) -> bool {
         self.info.is_a_joystick()
+    }
+    pub fn plug_usecs(&self) -> u64 {
+        match self.info.udev.usec_initialized {
+            Some(usecs) => usecs,
+            _ => {
+                error!("Controller {}: USEC_INITIALIZED property wasn't set by udev; this should never happen", self.display());
+                0
+            },
+        }
+    }
+    pub fn current_usecs_since_initialized(&self) -> u64 {
+        unsafe {
+            libudev_sys::udev_device_get_usec_since_initialized(self.udev_device)
+        }
+    }
+    pub fn usecs_now(&self) -> u64 {
+        self.plug_usecs().saturating_add(self.current_usecs_since_initialized())
+    }
+    pub fn plug_instant(&self) -> EventInstant {
+        EventInstant(OsEventInstant::UdevUsecs(self.plug_usecs()))
+    }
+    pub fn instant_now(&self) -> EventInstant {
+        EventInstant(OsEventInstant::UdevUsecs(self.usecs_now()))
     }
 }
 
@@ -1181,30 +1167,27 @@ impl Device {
         let &linux_input::input_event {
             time, type_, code, value
         } = ev;
-        let timestamp = timestamp_from_timeval(time);
+        let instant = {
+            let c::timeval { tv_sec, tv_usec } = time;
+            EventInstant(OsEventInstant::LinuxInputEventTimeval { tv_sec, tv_usec })
+        };
         let controller = HidID(with_id.into());
         match type_ {
             input_event_codes::EV_KEY => {
                 match self.translate_ev_key(code) {
                     TranslatedEvKey::Button(button) => Some(if value == 0 {
-                        Event::ControllerButtonReleased { controller, timestamp, button }
+                        Event::ControllerButtonReleased { controller, instant, button }
                     } else {
-                        Event::ControllerButtonPressed { controller, timestamp, button }
+                        Event::ControllerButtonPressed { controller, instant, button }
                     }),
                     TranslatedEvKey::Dpad(axis, value) => Some(Event::ControllerAxisMotion {
-                        controller,
-                        timestamp,
-                        axis,
-                        value: value as _,
+                        controller, instant, axis, value: value as _,
                     }),
                 }
             },
             input_event_codes::EV_ABS => {
                 Some(Event::ControllerAxisMotion {
-                    controller,
-                    timestamp,
-                    axis: self.translate_ev_abs(code),
-                    value: value as _,
+                    controller, instant, axis: self.translate_ev_abs(code), value: value as _,
                 })
             },
             input_event_codes::EV_REL => None,

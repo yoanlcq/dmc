@@ -1,6 +1,10 @@
 mod udev;
 
+extern crate x11;
+extern crate libc;
+
 use std::time::Instant;
+
 use self::udev::{UdevContext, TokenForUdev};
 pub use self::udev::{OsControllerInfo, OsControllerState};
 use x11::{
@@ -41,6 +45,9 @@ pub type OsGLContext = X11GLContext;
 pub type OsGLProc = X11GLProc;
 pub type OsKeycode = X11Keycode;
 pub type OsKeysym = X11Keysym;
+
+pub mod event_instant;
+pub use self::event_instant::OsEventInstant;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct OsHidID {
@@ -198,7 +205,7 @@ impl OsContext {
         unimplemented!{}
     }
     pub fn main_keyboard(&self) -> hid::Result<HidID> {
-        unimplemented!{}
+        Ok(self.x11.core_x_keyboard())
     }
     pub fn keyboard_state(&self, keyboard: HidID) -> hid::Result<KeyboardState> {
         unimplemented!{}
@@ -222,7 +229,7 @@ impl OsContext {
         unimplemented!{}
     }
     pub fn main_mouse(&self) -> hid::Result<HidID> {
-        unimplemented!{}
+        Ok(self.x11.core_x_mouse())
     }
     pub fn mouse_state(&self, mouse: HidID) -> hid::Result<MouseState> {
         unimplemented!{}

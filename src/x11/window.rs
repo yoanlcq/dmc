@@ -15,7 +15,6 @@ use hid::{self, HidID, WindowMouseState, WindowTabletState};
 use vek::{Vec2, Extent2, Rect, Clamp, Rgba};
 
 use super::x11::xlib as x;
-use super::x11::xinput2 as xi2;
 use super::{X11Context, X11SharedContext};
 use super::cursor::X11Cursor;
 use super::missing_bits;

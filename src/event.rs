@@ -1,18 +1,154 @@
 //! Events reported by the platform.
+//!
+//! # F.A.Q
+//!
+//! ## What's an `EventInstant`?
+//!
+//! A type akin to `std::time::Instant` for events reported by the platform.  
+//! Depending on the implementation, it may wrap an `enum` that has as many
+//! variants as there are possible timestamp sources.
+//!
+//! For instance on Linux, `X11` and `evdev` both report timestamps, but they are
+//! each relative to their own specific point in time, so it doesn't make sense
+//! to compare them, which in turns means we can't reliably sort events based on this.  
+//! Therefore, that could call for an `enum` that either contains an
+//! `X11` timestamp or an `evdev` timestamp.
+//!
+//!
+//! ## What's the point of the `instant` members in some events?
+//!
+//! Essentially, the moment your application _handles_ the event is not the same
+//! as the moment the event was _sent by the hardware_.
+//!
+//! You would rather be interested
+//! by the latter for computing input sequences (e.g double clicks, the precise time span
+//! within which some button was held down, etc).
+//!
+//!
+//! ## Why don't some events have an `instant`?
+//!
+//! This happens when most of the following conditions are true:
+//!
+//! - One or more backends don't report it, in which case there's not much we can do;
+//! - It is not particularly useful for this kind of event;
+//! - It is not particularly _relevant_ to this kind of event.
+//!
+//!
+//! ## Does this crate perform any kind of post-processing on events?
+//!
+//! The answer is "the least amount possible", for the sake of easing maintenance.  
+//! Dealing with platform-specific quirky APIs is enough of a pain already.
+//!
+//!
+//! ## Are events always sorted by instant?
+//!
+//! They are supposed to! But this crate never guarantees it, for the following reasons :
+//!
+//! - Backends or drivers do whatever they want. Nothing prevents them from reporting events
+//!   in the order they like (even though it's not supposed to happen).
+//! - It's not always possible, as `EventInstant` shows. Comparing timestamps just isn't always
+//!   possible when there are multiple APIs involved, e.g under Linux.
+//!
+//! However, this crate tries its best to process events in the most sensible way possible.
+//! For instance, if you're receiving an event from some gamepad device, it's likely that the next
+//! event will come from that same gamepad, with an `instant` you can compare to the previous.
+//!
+//! In fact...  
+//! You should _probably_ expect `EventInstant`s to be comparable when they come from a same device.  
+//! You should _probably_ not expect `EventInstant`s to be comparable when they don't come from a same device.  
+//!
+//! If you're paranoid about this, I strongly recommand you perform
+//! this as your own "post-processing" step, but don't overthink this; You really should be fine
+//! as long as you compare events `EventInstant`s that are associated to the same device.
+//!
+//! ## Why are axis values `f64`?
+//!
+//! See the `hid` module's FAQ.
+//!
+//!
+//! ## Why are mouse positions `f64`?
+//!
+//! Some backends offer subpixel precision, in which case values are more precise than simple
+//! integers; you can be "somewhere between" a few pixels.
+//!
+//! `f64` is likely overkill compared to `f32`, but y'know, in 2030 we might have Supra-Ultra-HD
+//! screens.
 
+use std::cmp::Ordering;
 use std::time::Duration;
+use std::ops::{Add, Sub, AddAssign, SubAssign};
 use timeout::Timeout;
 use super::{Vec2, Extent2, Rect};
 use context::Context;
 use error;
 use window::WindowHandle;
+use os::OsEventInstant;
 use hid::*;
 
-/// A platform-specific timestamp starting from an unspecified instant.
+/// A platform-specific timestamp for an event, starting from an unspecified instant.
 ///
-/// This type should be an alias to `Instant` instead, but the only way to create an `Instant` is
-/// via the `now()` associated function.
-pub type Timestamp = Duration;
+/// This type exists because, for a given platform, there may be multiple APIs in play,
+/// each of which reports timestamps which are relative to specific instants.  
+///
+/// For instance, on Linux, X11 reports timestamps as a duration since the X server was
+/// initialized, but `udev` and `struct input_event`s report timestamps as a duration since
+/// whichever relevant kernel service was initialized.  
+/// Therefore, computing the duration between an `input_event` timestamp and an X11 timestamp
+/// will give wrong results.
+/// This type allows computing that duration as long as it makes sense; otherwise the result is
+/// just `None`.
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd)]
+pub struct EventInstant(pub(crate) OsEventInstant);
+
+impl EventInstant {
+    /// Returns the amount of time elapsed from another `EventInstant` to this one, if they
+    /// originate from the same time source, and this one is not earlier than `earlier`.
+    ///
+    /// This function does not panic if `earlier` is later than `self` and returns `None` instead.
+    pub fn duration_since(&self, earlier: Self) -> Option<Duration> {
+        self.0.partial_cmp(&earlier.0).map(|ordering| match ordering {
+            Ordering::Less => None,
+            _ => self.0.duration_since(earlier.0),
+        }).unwrap_or(None)
+    }
+    /// Returns the absolute difference from another `EventInstant` to this one, as a `Duration`,
+    /// if they originate from the same time source.
+    pub fn abs_sub(&self, other: Self) -> Option<Duration> {
+        self.0.partial_cmp(&other.0).map(|ordering| match ordering {
+            Ordering::Less => other.0.duration_since(self.0),
+            _ => self.0.duration_since(other.0),
+        }).unwrap_or(None)
+    }
+}
+
+impl Sub<EventInstant> for EventInstant {
+    type Output = Option<Duration>;
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.duration_since(rhs)
+    }
+}
+impl Add<Duration> for EventInstant {
+    type Output = Self;
+    fn add(self, rhs: Duration) -> Self {
+        EventInstant(self.0.add(rhs))
+    }
+}
+impl AddAssign<Duration> for EventInstant {
+    fn add_assign(&mut self, rhs: Duration) {
+        self.0.add_assign(rhs)
+    }
+}
+impl Sub<Duration> for EventInstant {
+    type Output = Self;
+    fn sub(self, rhs: Duration) -> Self {
+        EventInstant(self.0.sub(rhs))
+    }
+}
+impl SubAssign<Duration> for EventInstant {
+    fn sub_assign(&mut self, rhs: Duration) {
+        self.0.sub_assign(rhs)
+    }
+}
 
 impl Context {
     /// Are raw device events supported ? (i.e `MouseMotionRaw`,
@@ -58,7 +194,7 @@ impl<'c> Iterator for Iter<'c> {
 // - Screen plugged/unplugged
 // - Audio device plugged/unplugged
 // - Trackball features for the mouse.
-// - Missing 'timestamp' field for most events
+// - Missing 'instant' field for most events
 
 /// An event, as reported by the platform.
 ///
@@ -108,57 +244,57 @@ pub enum Event {
     // HIDs
     //
 
-    HidConnected { hid: HidID, timestamp: Timestamp, },
-    HidDisconnected { hid: HidID, timestamp: Timestamp, },
+    HidConnected { hid: HidID, instant: EventInstant, },
+    HidDisconnected { hid: HidID, instant: EventInstant, },
 
     // User note: in MouseScroll, the y value is positive when "scrolling up"
     // (that is, pushing the wheel forwards) and negative otherwise.
-    MouseEnter             { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, is_grabbed: bool,  is_focused: bool, },
-    MouseLeave             { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, was_grabbed: bool, was_focused: bool, },
-    MouseButtonPressed     { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, clicks: Option<u32>, },
-    MouseButtonReleased    { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, },
-    MouseScroll            { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, scroll: Vec2<i32>, },
-    MouseMotion            { mouse: HidID, window: WindowHandle, timestamp: Timestamp, position: Vec2<f64>, root_position: Vec2<f64>, },
-    MouseButtonPressedRaw  { mouse: HidID, timestamp: Timestamp, button: MouseButton, },
-    MouseButtonReleasedRaw { mouse: HidID, timestamp: Timestamp, button: MouseButton, },
-    MouseScrollRaw         { mouse: HidID, timestamp: Timestamp, scroll: Vec2<i32>, },
-    MouseMotionRaw         { mouse: HidID, timestamp: Timestamp, displacement: Vec2<f64>, },
+    MouseEnter             { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, is_grabbed: bool,  is_focused: bool, },
+    MouseLeave             { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, was_grabbed: bool, was_focused: bool, },
+    MouseButtonPressed     { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, clicks: Option<u32>, },
+    MouseButtonReleased    { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, },
+    MouseScroll            { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, scroll: Vec2<i32>, },
+    MouseMotion            { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, },
+    MouseButtonPressedRaw  { mouse: HidID, instant: EventInstant, button: MouseButton, },
+    MouseButtonReleasedRaw { mouse: HidID, instant: EventInstant, button: MouseButton, },
+    MouseScrollRaw         { mouse: HidID, instant: EventInstant, scroll: Vec2<i32>, },
+    MouseMotionRaw         { mouse: HidID, instant: EventInstant, displacement: Vec2<f64>, },
 
     // Keyboard
     KeyboardFocusGained    { keyboard: HidID, window: WindowHandle, },
     KeyboardFocusLost      { keyboard: HidID, window: WindowHandle, },
-    KeyboardKeyPressed     { keyboard: HidID, window: WindowHandle, timestamp: Timestamp, key: Key, is_repeat: bool, text: Option<String>, },
-    KeyboardKeyReleased    { keyboard: HidID, window: WindowHandle, timestamp: Timestamp, key: Key, },
-    KeyboardKeyPressedRaw  { keyboard: HidID, timestamp: Timestamp, key: Key, },
-    KeyboardKeyReleasedRaw { keyboard: HidID, timestamp: Timestamp, key: Key, },
+    KeyboardKeyPressed     { keyboard: HidID, window: WindowHandle, instant: EventInstant, key: Key, is_repeat: bool, text: Option<String>, },
+    KeyboardKeyReleased    { keyboard: HidID, window: WindowHandle, instant: EventInstant, key: Key, },
+    KeyboardKeyPressedRaw  { keyboard: HidID, instant: EventInstant, key: Key, },
+    KeyboardKeyReleasedRaw { keyboard: HidID, instant: EventInstant, key: Key, },
 
     // Touch (Touchpad, Touch-screen, ....)
-    TouchFingerPressed  { touch: HidID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
-    TouchFingerReleased { touch: HidID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
-    TouchFingerMotion   { touch: HidID, timestamp: Timestamp, finger: u32, pressure: f64, normalized_motion:   Vec2<f64>, },
-    TouchMultiGesture   { touch: HidID, timestamp: Timestamp, nb_fingers: usize, rotation_radians: f64, pinch: f64, normalized_center: Vec2<f64>, },
+    TouchFingerPressed  { touch: HidID, instant: EventInstant, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
+    TouchFingerReleased { touch: HidID, instant: EventInstant, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
+    TouchFingerMotion   { touch: HidID, instant: EventInstant, finger: u32, pressure: f64, normalized_motion:   Vec2<f64>, },
+    TouchMultiGesture   { touch: HidID, instant: EventInstant, nb_fingers: usize, rotation_radians: f64, pinch: f64, normalized_center: Vec2<f64>, },
     // NOTE: Missing raw events
 
-    TabletPadButtonPressed        { tablet: HidID, timestamp: Timestamp, window: WindowHandle, button: TabletPadButton, },
-    TabletPadButtonReleased       { tablet: HidID, timestamp: Timestamp, window: WindowHandle, button: TabletPadButton, },
-    TabletStylusToolType          { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, tool_type: TabletStylusToolType, },
-    TabletStylusButtonPressed     { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
-    TabletStylusButtonReleased    { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
-    TabletStylusMotion            { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusPressed           { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusRaised            { tablet: HidID, timestamp: Timestamp, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletPadButtonPressedRaw     { tablet: HidID, timestamp: Timestamp, button: TabletPadButton, },
-    TabletPadButtonReleasedRaw    { tablet: HidID, timestamp: Timestamp, button: TabletPadButton, },
-    TabletStylusToolTypeRaw       { tablet: HidID, timestamp: Timestamp, tool_type: TabletStylusToolType, },
-    TabletStylusButtonPressedRaw  { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusButtonReleasedRaw { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusMotionRaw         { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusPressedRaw        { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusRaisedRaw         { tablet: HidID, timestamp: Timestamp, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletPadButtonPressed        { tablet: HidID, instant: EventInstant, window: WindowHandle, button: TabletPadButton, },
+    TabletPadButtonReleased       { tablet: HidID, instant: EventInstant, window: WindowHandle, button: TabletPadButton, },
+    TabletStylusToolType          { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, tool_type: TabletStylusToolType, },
+    TabletStylusButtonPressed     { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
+    TabletStylusButtonReleased    { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
+    TabletStylusMotion            { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusPressed           { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusRaised            { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletPadButtonPressedRaw     { tablet: HidID, instant: EventInstant, button: TabletPadButton, },
+    TabletPadButtonReleasedRaw    { tablet: HidID, instant: EventInstant, button: TabletPadButton, },
+    TabletStylusToolTypeRaw       { tablet: HidID, instant: EventInstant, tool_type: TabletStylusToolType, },
+    TabletStylusButtonPressedRaw  { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusButtonReleasedRaw { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusMotionRaw         { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusPressedRaw        { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusRaisedRaw         { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
 
-    ControllerButtonPressed  { controller: HidID, timestamp: Timestamp, button: ControllerButton, },
-    ControllerButtonReleased { controller: HidID, timestamp: Timestamp, button: ControllerButton, },
-    ControllerAxisMotion     { controller: HidID, timestamp: Timestamp, axis: ControllerAxis, value: f64, },
+    ControllerButtonPressed  { controller: HidID, instant: EventInstant, button: ControllerButton, },
+    ControllerButtonReleased { controller: HidID, instant: EventInstant, button: ControllerButton, },
+    ControllerAxisMotion     { controller: HidID, instant: EventInstant, axis: ControllerAxis, value: f64, },
     // NOTE: value (f64) above is not a normalized value. It is the raw value cast to an f64. The
     // user has to look up the axis info to know the (min,max) and deal with it.
     // The reason is, there are too many situations to handle:
@@ -170,9 +306,8 @@ pub enum Event {
 
 
 impl Event {
-    /// Gets the timestamp for this event, if any. This is useful for sorting events (this crate
-    /// actually does this automatically when it thinks it makes sense to do so, but do not rely on this!).
-    pub fn timestamp(&self) -> Option<Timestamp> {
+    /// Gets the `EventInstant` for this event, if any.
+    pub fn instant(&self) -> Option<EventInstant> {
         match *self {
             Event::Quit => None,
             Event::AppBeingTerminatedByOS => None,
@@ -192,47 +327,47 @@ impl Event {
             Event::WindowMaximized      { window: _, } => None,
             Event::WindowUnminized      { window: _, } => None,
             Event::WindowCloseRequested { window: _, } => None,
-            Event::HidConnected    { hid: _, timestamp, } => Some(timestamp),
-            Event::HidDisconnected { hid: _, timestamp, } => Some(timestamp),
-            Event::MouseEnter             { mouse: _, timestamp, window: _, position: _, root_position: _, is_grabbed: _,  is_focused: _, } => Some(timestamp),
-            Event::MouseLeave             { mouse: _, timestamp, window: _, position: _, root_position: _, was_grabbed: _, was_focused: _, } => Some(timestamp),
-            Event::MouseButtonPressed     { mouse: _, timestamp, window: _, position: _, root_position: _, button: _, clicks: _, } => Some(timestamp),
-            Event::MouseButtonReleased    { mouse: _, timestamp, window: _, position: _, root_position: _, button: _, } => Some(timestamp),
-            Event::MouseScroll            { mouse: _, timestamp, window: _, position: _, root_position: _, scroll: _, } => Some(timestamp),
-            Event::MouseMotion            { mouse: _, timestamp, window: _, position: _, root_position: _, } => Some(timestamp),
-            Event::MouseButtonPressedRaw  { mouse: _, timestamp, button: _, } => Some(timestamp),
-            Event::MouseButtonReleasedRaw { mouse: _, timestamp, button: _, } => Some(timestamp),
-            Event::MouseScrollRaw         { mouse: _, timestamp, scroll: _, } => Some(timestamp),
-            Event::MouseMotionRaw         { mouse: _, timestamp, displacement: _, } => Some(timestamp),
+            Event::HidConnected    { hid: _, instant, } => Some(instant),
+            Event::HidDisconnected { hid: _, instant, } => Some(instant),
+            Event::MouseEnter             { mouse: _, instant, window: _, position: _, root_position: _, is_grabbed: _,  is_focused: _, } => Some(instant),
+            Event::MouseLeave             { mouse: _, instant, window: _, position: _, root_position: _, was_grabbed: _, was_focused: _, } => Some(instant),
+            Event::MouseButtonPressed     { mouse: _, instant, window: _, position: _, root_position: _, button: _, clicks: _, } => Some(instant),
+            Event::MouseButtonReleased    { mouse: _, instant, window: _, position: _, root_position: _, button: _, } => Some(instant),
+            Event::MouseScroll            { mouse: _, instant, window: _, position: _, root_position: _, scroll: _, } => Some(instant),
+            Event::MouseMotion            { mouse: _, instant, window: _, position: _, root_position: _, } => Some(instant),
+            Event::MouseButtonPressedRaw  { mouse: _, instant, button: _, } => Some(instant),
+            Event::MouseButtonReleasedRaw { mouse: _, instant, button: _, } => Some(instant),
+            Event::MouseScrollRaw         { mouse: _, instant, scroll: _, } => Some(instant),
+            Event::MouseMotionRaw         { mouse: _, instant, displacement: _, } => Some(instant),
             Event::KeyboardFocusGained    { keyboard: _, window: _, } => None,
             Event::KeyboardFocusLost      { keyboard: _, window: _, } => None,
-            Event::KeyboardKeyPressed     { keyboard: _, window: _, timestamp, key: _, is_repeat: _, text: _, } => Some(timestamp),
-            Event::KeyboardKeyReleased    { keyboard: _, window: _, timestamp, key: _, } => Some(timestamp),
-            Event::KeyboardKeyPressedRaw  { keyboard: _, timestamp, key: _, } => Some(timestamp),
-            Event::KeyboardKeyReleasedRaw { keyboard: _, timestamp, key: _, } => Some(timestamp),
-            Event::TouchFingerPressed  { touch: _, timestamp, finger: _, pressure: _, normalized_position: _, } => Some(timestamp),
-            Event::TouchFingerReleased { touch: _, timestamp, finger: _, pressure: _, normalized_position: _, } => Some(timestamp),
-            Event::TouchFingerMotion   { touch: _, timestamp, finger: _, pressure: _, normalized_motion:   _, } => Some(timestamp),
-            Event::TouchMultiGesture   { touch: _, timestamp, nb_fingers: _, rotation_radians: _, pinch: _, normalized_center: _, } => Some(timestamp),
-            Event::TabletPadButtonPressed        { tablet: _, timestamp, window: _, button: _, } => Some(timestamp),
-            Event::TabletPadButtonReleased       { tablet: _, timestamp, window: _, button: _, } => Some(timestamp),
-            Event::TabletStylusToolType          { tablet: _, timestamp, window: _, position: _, root_position: _, tool_type: _, } => Some(timestamp),
-            Event::TabletStylusButtonPressed     { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, button: _, } => Some(timestamp),
-            Event::TabletStylusButtonReleased    { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, button: _, } => Some(timestamp),
-            Event::TabletStylusMotion            { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
-            Event::TabletStylusPressed           { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
-            Event::TabletStylusRaised            { tablet: _, timestamp, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
-            Event::TabletStylusButtonPressedRaw  { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
-            Event::TabletStylusButtonReleasedRaw { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
-            Event::TabletStylusMotionRaw         { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
-            Event::TabletStylusPressedRaw        { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
-            Event::TabletStylusRaisedRaw         { tablet: _, timestamp, pressure: _, tilt: _, physical_position: _, } => Some(timestamp),
-            Event::TabletPadButtonPressedRaw     { tablet: _, timestamp, button: _, } => Some(timestamp),
-            Event::TabletPadButtonReleasedRaw    { tablet: _, timestamp, button: _, } => Some(timestamp),
-            Event::TabletStylusToolTypeRaw       { tablet: _, timestamp, tool_type: _, } => Some(timestamp),
-            Event::ControllerButtonPressed  { controller: _, timestamp, button: _, } => Some(timestamp),
-            Event::ControllerButtonReleased { controller: _, timestamp, button: _, } => Some(timestamp),
-            Event::ControllerAxisMotion     { controller: _, timestamp, axis: _, value: _, } => Some(timestamp),
+            Event::KeyboardKeyPressed     { keyboard: _, window: _, instant, key: _, is_repeat: _, text: _, } => Some(instant),
+            Event::KeyboardKeyReleased    { keyboard: _, window: _, instant, key: _, } => Some(instant),
+            Event::KeyboardKeyPressedRaw  { keyboard: _, instant, key: _, } => Some(instant),
+            Event::KeyboardKeyReleasedRaw { keyboard: _, instant, key: _, } => Some(instant),
+            Event::TouchFingerPressed  { touch: _, instant, finger: _, pressure: _, normalized_position: _, } => Some(instant),
+            Event::TouchFingerReleased { touch: _, instant, finger: _, pressure: _, normalized_position: _, } => Some(instant),
+            Event::TouchFingerMotion   { touch: _, instant, finger: _, pressure: _, normalized_motion:   _, } => Some(instant),
+            Event::TouchMultiGesture   { touch: _, instant, nb_fingers: _, rotation_radians: _, pinch: _, normalized_center: _, } => Some(instant),
+            Event::TabletPadButtonPressed        { tablet: _, instant, window: _, button: _, } => Some(instant),
+            Event::TabletPadButtonReleased       { tablet: _, instant, window: _, button: _, } => Some(instant),
+            Event::TabletStylusToolType          { tablet: _, instant, window: _, position: _, root_position: _, tool_type: _, } => Some(instant),
+            Event::TabletStylusButtonPressed     { tablet: _, instant, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, button: _, } => Some(instant),
+            Event::TabletStylusButtonReleased    { tablet: _, instant, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, button: _, } => Some(instant),
+            Event::TabletStylusMotion            { tablet: _, instant, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(instant),
+            Event::TabletStylusPressed           { tablet: _, instant, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(instant),
+            Event::TabletStylusRaised            { tablet: _, instant, window: _, position: _, root_position: _, pressure: _, tilt: _, physical_position: _, } => Some(instant),
+            Event::TabletStylusButtonPressedRaw  { tablet: _, instant, pressure: _, tilt: _, physical_position: _, } => Some(instant),
+            Event::TabletStylusButtonReleasedRaw { tablet: _, instant, pressure: _, tilt: _, physical_position: _, } => Some(instant),
+            Event::TabletStylusMotionRaw         { tablet: _, instant, pressure: _, tilt: _, physical_position: _, } => Some(instant),
+            Event::TabletStylusPressedRaw        { tablet: _, instant, pressure: _, tilt: _, physical_position: _, } => Some(instant),
+            Event::TabletStylusRaisedRaw         { tablet: _, instant, pressure: _, tilt: _, physical_position: _, } => Some(instant),
+            Event::TabletPadButtonPressedRaw     { tablet: _, instant, button: _, } => Some(instant),
+            Event::TabletPadButtonReleasedRaw    { tablet: _, instant, button: _, } => Some(instant),
+            Event::TabletStylusToolTypeRaw       { tablet: _, instant, tool_type: _, } => Some(instant),
+            Event::ControllerButtonPressed  { controller: _, instant, button: _, } => Some(instant),
+            Event::ControllerButtonReleased { controller: _, instant, button: _, } => Some(instant),
+            Event::ControllerAxisMotion     { controller: _, instant, axis: _, value: _, } => Some(instant),
         }
     }
 }

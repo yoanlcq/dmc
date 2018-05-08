@@ -5,8 +5,9 @@ use super::context::X11SharedContext;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
 use super::{X11SharedWindow, X11DeviceID};
+use os::OsEventInstant;
 use error::{self, Result, failed};
-use event::{Event, Timestamp};
+use event::{Event, EventInstant};
 use hid::{HidID, MouseButton, Key, Keysym, Keycode};
 use window::WindowHandle;
 use {Vec2, Extent2, Rect};
@@ -191,7 +192,7 @@ impl X11SharedContext {
         } = e;
         let e = Event::MouseMotion {
             mouse: self.core_x_mouse(),
-            timestamp: Timestamp::from_millis(time as _),
+            instant: EventInstant(OsEventInstant::X11EventTimeMillis(time)),
             window: WindowHandle(window),
             position: Vec2::new(x as _, y as _),
             root_position: Vec2::new(x_root as _, y_root as _),
@@ -205,7 +206,7 @@ impl X11SharedContext {
         } = e;
         let mouse = self.core_x_mouse();
         let window = WindowHandle(window);
-        let timestamp = Timestamp::from_millis(time as _);
+        let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
         let position = Vec2::new(x as f64, y as _);
         let root_position = Vec2::new(x_root as f64, y_root as _);
         let is_focused = focus == x::True;
@@ -218,10 +219,10 @@ impl X11SharedContext {
         };
         let e = match type_ {
             x::EnterNotify => Event::MouseEnter {
-                mouse, window, timestamp, position, root_position, is_grabbed, is_focused,
+                mouse, window, instant, position, root_position, is_grabbed, is_focused,
             },
             x::LeaveNotify => Event::MouseLeave {
-                mouse, window, timestamp, position, root_position, was_grabbed, was_focused,
+                mouse, window, instant, position, root_position, was_grabbed, was_focused,
             },
             _ => unreachable!{},
         };
@@ -344,12 +345,12 @@ impl X11SharedContext {
 
         let keyboard = self.core_x_keyboard();
         let window = WindowHandle(window);
-        let timestamp = Timestamp::from_millis(time);
+        let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
 
         self.pending_translated_events.borrow_mut().push_back({
             Event::MouseMotion {
                 mouse: self.core_x_mouse(),
-                timestamp,
+                instant,
                 window,
                 position: Vec2::new(x as _, y as _),
                 root_position: Vec2::new(x_root as _, y_root as _),
@@ -381,7 +382,7 @@ impl X11SharedContext {
                 self.previous_x_key_release_time.set(time);
                 self.previous_x_key_release_keycode.set(keycode);
                 Event::KeyboardKeyReleased {
-                    keyboard, window, timestamp, key,
+                    keyboard, window, instant, key,
                 }
             },
             x::KeyPress => {
@@ -394,7 +395,7 @@ impl X11SharedContext {
                 };
                 let text = if is_text { text } else { None };
                 Event::KeyboardKeyPressed {
-                    keyboard, window, timestamp, key, is_repeat, text,
+                    keyboard, window, instant, key, is_repeat, text,
                 }
             },
             _ => unreachable!{},
@@ -412,7 +413,7 @@ impl X11SharedContext {
 
         let mouse = self.core_x_mouse();
         let window = WindowHandle(window);
-        let timestamp = Timestamp::from_millis(time);
+        let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
         let position = Vec2::new(x as _, y as _);
         let root_position = Vec2::new(x_root as _, y_root as _);
 
@@ -434,7 +435,7 @@ impl X11SharedContext {
         match scroll {
             Some(scroll) => match type_ {
                 x::ButtonPress => Ok(Event::MouseScroll {
-                    mouse, window, timestamp, position, root_position, scroll,
+                    mouse, window, instant, position, root_position, scroll,
                 }),
                 x::ButtonRelease => discard_event(),
                 _ => unreachable!{},
@@ -443,10 +444,10 @@ impl X11SharedContext {
                 let button = button.unwrap();
                 let e = match type_ {
                     x::ButtonPress => Event::MouseButtonPressed {
-                        mouse, window, timestamp, position, root_position, button, clicks: None,
+                        mouse, window, instant, position, root_position, button, clicks: None,
                     },
                     x::ButtonRelease => Event::MouseButtonReleased {
-                        mouse, window, timestamp, position, root_position, button,
+                        mouse, window, instant, position, root_position, button,
                     },
                     _ => unreachable!{},
                 };
@@ -570,10 +571,10 @@ impl X11SharedContext {
             trace!("Sucessfully set _NET_WM_USER_TIME to {} for X Window {}", time, window);
         }
     }
-    fn core_x_mouse(&self) -> HidID {
+    pub fn core_x_mouse(&self) -> HidID {
         HidID(X11DeviceID::CorePointer.into())
     }
-    fn core_x_keyboard(&self) -> HidID {
+    pub fn core_x_keyboard(&self) -> HidID {
         HidID(X11DeviceID::CoreKeyboard.into())
     }
 }

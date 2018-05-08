@@ -45,6 +45,7 @@ pub mod gl;
 // pub mod battery;
 
 mod version_cmp;
+mod time_utils;
 
 macro_rules! os_mod {
     ($os:ident) => {
@@ -54,6 +55,7 @@ macro_rules! os_mod {
                 OsContext, OsWindow, OsWindowHandle, OsWindowFromHandleParams,
                 OsCursor,
                 OsGLPixelFormat, OsGLContext, OsGLProc,
+                OsEventInstant,
                 OsHidID,
                 OsControllerState, OsControllerInfo,
                 OsKeyboardState, OsKeycode, OsKeysym,

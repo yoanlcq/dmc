@@ -13,9 +13,9 @@
 //! but both really are features of a single physical device; this physical device is the master
 //! HID.
 //!
-//! F.A.Q
+//! # F.A.Q
 //!
-//! # What's in a `HidID` ?
+//! ## What's in a `HidID` ?
 //!
 //! Essentially, two parts :
 //! - An actual, backend-specific ID; this ID is only valid as long as the device is "alive".
@@ -40,7 +40,7 @@
 //! the associated IDs.
 //!
 //!
-//! # Why aren't there strongly-typed ID types for each device kind?
+//! ## Why aren't there strongly-typed ID types for each device kind?
 //!
 //! This was my first approach and I ended up moving away from it, for these reasons:
 //!
@@ -52,7 +52,7 @@
 //!   See next question.
 //!
 //!
-//! # Why aren't there separate, well-defined device kinds ? There's no way my mouse is also a keyboard!
+//! ## Why aren't there separate, well-defined device kinds ? There's no way my mouse is also a keyboard!
 //!
 //! Famous last words! :) Here are the reasons there is no `enum DeviceKind { ... }` :
 //!
@@ -81,7 +81,7 @@
 //! in your application, but at least the loss of information is under your control, not enforced
 //! by this crate.
 //!
-//! # What's a master HID ?
+//! ## What's a master HID ?
 //!
 //! This concept exists on X11 with the XInput extension.
 //!
@@ -100,7 +100,7 @@
 //! The same applies for keyboards.
 //!
 //!
-//! # What's a parent HID ?
+//! ## What's a parent HID ?
 //!
 //! This concept exists at least on Linux. This corresponds to whatever the backend reports as
 //! being a "parent" device.
@@ -113,7 +113,7 @@
 //! Anyway this crate exposes this features because it might be useful.
 //!
 //!
-//! # Why expose so much information about devices?
+//! ## Why expose so much information about devices?
 //!
 //! My mindset is "if it exists and is exposed, it's going to be useful for someone".
 //!
@@ -132,7 +132,7 @@
 //! The same applies to anything backends are able to report.
 //!
 //!
-//! # Why prefetch so much information eagerly?
+//! ## Why prefetch so much information eagerly?
 //!
 //! Mostly convenience for the implementation. Other reasons include :
 //! - Predictable memory allocation patterns. If the information was returned "lazily",
@@ -147,7 +147,7 @@
 //!   the opportunity to keep using a device's information even after it is unplugged.
 //!
 //!
-//! # Why are axis values `f64`?
+//! ## Why are axis values `f64`?
 //! 
 //! Because this is the widest number type, so it is an excellent common denominator across
 //! implementations. Because of its width, conversion from 16-bit and 32-bit integers (which is what backends often report)
@@ -165,8 +165,8 @@ use uuid::Uuid as Guid;
 use std::path::PathBuf;
 use std::ops::{Range, Not};
 use context::Context;
-use event::Timestamp;
 use os::OsHidID;
+use event::EventInstant;
 
 pub mod mouse;
 pub use self::mouse::*;
@@ -182,8 +182,11 @@ pub use self::controller::*;
 /// Error returned by operations from this module and submodules.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Error {
-    /// The device was disconnected at the specific timestamp, if known.
-    DeviceDisconnected(Option<Timestamp>),
+    /// The device was disconnected at the specific instant, if known.
+    ///
+    /// The instant may also be `None` if you already received a `HidDiconnected` event
+    /// and the implementation decided to discard all data related to the offending `HidID`.
+    DeviceDisconnected(Option<EventInstant>),
     /// The device (or backend for the device) does not support this operation.
     NotSupportedByDevice { reason: Option<super::error::CowStr> },
     /// Another error occured (in the meantime, it is unknown whether or not the device is still connected).
@@ -194,11 +197,11 @@ pub enum Error {
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[allow(dead_code)]
-pub(crate) fn disconnected<T>(timestamp: Timestamp) -> Result<T> {
-    Err(Error::DeviceDisconnected(Some(timestamp)))
+pub(crate) fn disconnected_at<T>(instant: EventInstant) -> Result<T> {
+    Err(Error::DeviceDisconnected(Some(instant)))
 }
 #[allow(dead_code)]
-pub(crate) fn disconnected_no_timestamp<T>() -> Result<T> {
+pub(crate) fn disconnected<T>() -> Result<T> {
     Err(Error::DeviceDisconnected(None))
 }
 
@@ -324,7 +327,7 @@ pub struct HidInfo {
     /// GUID for this device, if any. This is normally only relevant for Windows.
     pub guid: Option<Guid>,
     /// The time at which this device was first plugged.
-    pub plug_timestamp: Option<Timestamp>,
+    pub plug_instant: Option<EventInstant>,
     /// The bus by which this device is connected.
     pub bus: Option<Bus>,
     /// The name of the driver, as advertised by the backend.

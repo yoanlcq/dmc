@@ -9,7 +9,7 @@
 use context::Context;
 use window::Window;
 use os::{OsTabletPadButtonsState, OsTabletStylusButtonsState};
-use super::{HidID, AxisInfo, ButtonState, Result};
+use super::{DeviceID, AxisInfo, ButtonState, Result};
 use Vec2;
 
 /// Tablet-specific information.
@@ -119,19 +119,15 @@ impl TabletState {
 }
 
 impl Context {
-    /// Lists all currently connected tablet devices.
-    pub fn tablets(&self) -> Result<Vec<HidID>> {
-        self.0.tablets()
-    }
     /// Fetches the current state of a tablet which ID is given.
-    pub fn tablet_state(&self, tablet: HidID) -> Result<TabletState> {
+    pub fn tablet_state(&self, tablet: DeviceID) -> Result<TabletState> {
         self.0.tablet_state(tablet)
     }
 }
 
 impl Window {
     /// Fetches the current state of a tablet which ID is given, relatively to this window.
-    pub fn tablet_state(&self, tablet: HidID) -> Result<WindowTabletState> {
+    pub fn tablet_state(&self, tablet: DeviceID) -> Result<WindowTabletState> {
         self.0.tablet_state(tablet)
     }
 }

@@ -1,11 +1,50 @@
 //! Controllers (Gamepads, Joysticks, Steering wheels, etc).
 //!
-//! On Linux, `udev` reports all of these with the `ID_INPUT_JOYSTICK` set to `1`.
+//! # F.A.Q
+//!
+//! ## What is meant by "Controller"?
+//!
+//! A catch-all term for "game input devices". A controller can be classified as one
+//! or more of the following :
+//!
+//! - Gamepads, such as Xbox gamepads and DualShock gamepads;
+//! - Steering wheels, for racing games;
+//! - Joysticks, as in "actual, single, large joystick devices";
+//!
+//! On Linux, `udev` reports all of these with the `ID_INPUT_JOYSTICK` property set to `1`,
+//! (even though a gamepad is not a joystick so to speak), which is how we know we can
+//! attempt to open the device file in order to read events (or write froce-feedback effects)
+//! ourselves.
+//!
+//! In any case, most (if not all) OSes do not treat controllers in the same way as mice, keyboards, etc,
+//! because they are mostly specific to games, they (normally) don't control the desktop, etc.  
+//! So, the APIs used to deal with them is usually separate from the "more commonly used" system APIs.
+//!
+//!
+//! ## Why do Y axes go down?
+//!
+//! Because this appears to be the most widespread standard for gamepad input, but I might be wrong.  
+//!
+//! I personnaly prefer "positive Y goes up", but sticking to the most widespread convention reduces
+//! maintenance efforts and overall likeliness of bugs.
+//!
+//! Hopefully, everybody seems to agree that positive X goes right!
+//!
+//! ### In favor of "positive Y goes down" :
+//!
+//! - [Linux Gamepad Specification](https://www.kernel.org/doc/html/v4.16/input/gamepad.html):
+//!   "for ABS values negative is left/up, positive is right/down".
+//! - [W3 Gamepad working draft](https://www.w3.org/TR/gamepad):
+//!   "As appropriate, -1.0 SHOULD correspond to "up" or "left", and 1.0 SHOULD correspond to "down" or "right"".
+//!
+//! ### In favor of "positive Y goes up" :
+//!
+//! - [`XINPUT_GAMEPAD` structure](https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinput_gamepad(v=vs.85).aspx):
+//!   "Negative values signify down or to the left. Positive values signify up or to the right".
 
-use std::time::Duration;
 use context::Context;
 use os::{OsControllerState, OsControllerInfo};
-use super::{HidID, ButtonState, AxisInfo, Result};
+use super::{DeviceID, ButtonState, AxisInfo, Result};
 
 /// Opaque container for a snapshot of a controller's full state.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,24 +55,40 @@ pub struct ControllerState(pub(crate) OsControllerState);
 pub struct ControllerInfo(pub(crate) OsControllerInfo);
 
 /// A rumble effect description.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct RumbleEffect {
-    /// Magnitude for the strong, high-frequency, right motor.
+#[derive(Debug, Default, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VibrationState {
+    /// Magnitude for the strong, high-amplitude, high-frequency, right motor.
     /// 0 signifies no motor use, and 65353 signifies 100% motor use.
     pub strong_magnitude: u16,
-    /// Magnitude for the weak, low-frequency, left motor.
+    /// Magnitude for the weak, low-amplitude, low-frequency, left motor.
     /// 0 signifies no motor use, and 65353 signifies 100% motor use.
     pub weak_magnitude: u16,
-    /// Duration of the effect.
-    ///
-    /// **Caution**: On Linux, an effect can't last more than 32767 (0x7fff) milliseconds.
-    /// The duration will be clamped as necessary by this implementation.
-    pub duration: Duration,
 }
+
+impl VibrationState {
+    /// The maximum value for a vibration state.
+    pub const MAX: Self = Self {
+        strong_magnitude: ::std::u16::MAX,
+        weak_magnitude: ::std::u16::MAX,
+    };
+    /// Does this correspond to zero vibration?
+    pub fn is_zero(&self) -> bool {
+        self.strong_magnitude == 0 && self.weak_magnitude == 0
+    }
+}
+
 
 /// A known controller button.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum ControllerButton {
+    /// (Gamepad, digital D-pad) The "up" button on the D-pad.
+    DpadUp,
+    /// (Gamepad, digital D-pad) The "down" button on the D-pad.
+    DpadDown,
+    /// (Gamepad, digital D-pad) The "left" button on the D-pad.
+    DpadLeft,
+    /// (Gamepad, digital D-pad) The "right" button on the D-pad.
+    DpadRight,
     /// (Gamepads) The X button, as for an Xbox 360 controller.
     X,
     /// (Gamepads) The Y button, as for an Xbox 360 controller.
@@ -109,19 +164,23 @@ pub enum ControllerAxis {
     RX,
     /// (Gamepads) The right stick's vertical position, increasing downwards.
     RY,
-    /// (Gamepads) The D-Pad's horizontal position, increasing rightwards.
+    /// (Gamepads, analog D-pad) The D-pad's horizontal position, increasing rightwards.
     DpadX,
-    /// (Gamepads) The D-Pad's vertical position, increasing downwards.
+    /// (Gamepads, analog D-pad) The D-pad's vertical position, increasing downwards.
     DpadY,
 
     /// (Joysticks) The main joystick's X position (TODO: which direction is it actually?).
-    X,
+    JoystickX,
     /// (Joysticks) The main joystick's Y position (TODO: which direction is it actually?).
-    Y,
+    JoystickY,
     /// (Joysticks) The main joystick's Z position (TODO: which direction is it actually?).
-    Z,
-    /// (Joysticks) The right joystick (if any)'s Z position (TODO: which direction is it actually?).
-    RZ,
+    JoystickZ,
+    /// (Joysticks) The main joystick's X rotation.
+    JoystickRotationX,
+    /// (Joysticks) The main joystick's Y rotation.
+    JoystickRotationY,
+    /// (Joysticks) The main joystick's Z rotation.
+    JoystickRotationZ,
 
     /// (Joysticks) A hat's X position, increasing rightwards. Hats are numbered from 0 to (usually) 3, inclusive.
     HatX(i32),
@@ -162,6 +221,10 @@ impl ControllerInfo {
     pub fn is_a_steering_wheel(&self) -> bool {
         self.0.is_a_steering_wheel()
     }
+    /// Does this controller support rumble effects?
+    pub fn supports_rumble(&self) -> bool {
+        self.0.supports_rumble()
+    }
     /// Does this controller have the given button?
     pub fn has_button(&self, button: ControllerButton) -> bool {
         self.0.has_button(button)
@@ -188,25 +251,28 @@ impl ControllerState {
 }
 
 impl Context {
-    /// Lists all connected controller devices.
-    pub fn controllers(&self) -> Result<Vec<HidID>> {
-        self.0.controllers()
-    }
     /// Gets a snapshot of a controller's current state, which ID is given.
-    pub fn controller_state(&self, controller: HidID) -> Result<ControllerState> {
+    pub fn controller_state(&self, controller: DeviceID) -> Result<ControllerState> {
         self.0.controller_state(controller)
     }
     /// Gets the current state of a button for the controller which ID is given.
-    pub fn controller_button_state(&self, controller: HidID, button: ControllerButton) -> Result<ButtonState> {
+    pub fn controller_button_state(&self, controller: DeviceID, button: ControllerButton) -> Result<ButtonState> {
         self.0.controller_button_state(controller, button)
     }
     /// Gets the current state of an axis for the controller which ID is given.
-    pub fn controller_axis_state(&self, controller: HidID, axis: ControllerAxis) -> Result<f64> {
+    pub fn controller_axis_state(&self, controller: DeviceID, axis: ControllerAxis) -> Result<f64> {
         self.0.controller_axis_state(controller, axis)
     }
-    /// Plays a rumble effect for the controller which ID is given.
-    pub fn controller_play_rumble_effect(&self, controller: HidID, effect: &RumbleEffect) -> Result<()> {
-        self.0.controller_play_rumble_effect(controller, effect)
+    /// Sets the vibration state for the controller which ID is given, if the device supports it.
+    ///
+    /// To stop vibrations, just set relevant members of `VibrationState` to zero.
+    ///
+    /// **N.B**: The vibration state may or may not be reset as the device is dropped (this is
+    /// because of implementation details. For instance on Linux, other processes may be playing an
+    /// effect on the device, with an effect ID we don't have access to).  
+    /// If you want to be extra sure, reset it yourself when your application exits.
+    pub fn controller_set_vibration(&self, controller: DeviceID, vibration: &VibrationState) -> Result<()> {
+        self.0.controller_set_vibration(controller, vibration)
     }
 }
 

@@ -1,6 +1,6 @@
 use super::x11::xlib as x;
 use super::x11::keysym;
-use hid::keyboard::Keysym;
+use device::keyboard::Keysym;
 
 macro_rules! x_keysyms {
     ($($Key:ident $XK:ident,)+ { ignored: $($Ignored:ident,)* }) => {

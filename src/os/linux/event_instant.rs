@@ -9,9 +9,12 @@ use time_utils;
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum OsEventInstant {
     X11EventTimeMillis(x::Time),
-    // We don't take a c::timeval directly because it doesn't derive the traits we want
+    // We don't take a c::timeval directly because it doesn't derive the traits we want.
     LinuxInputEventTimeval { tv_sec: c::time_t, tv_usec: c::suseconds_t },
     UdevUsecs(u64),
+    // By the way, these last two variants really are not the same. The number of seconds
+    // reported by a input_event may be crazy (unless udevadm and evtest tricked me
+    // by not having the same timestamp format).
 }
 
 impl PartialOrd for OsEventInstant {

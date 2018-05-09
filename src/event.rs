@@ -4,7 +4,7 @@
 //!
 //! ## What's an `EventInstant`?
 //!
-//! A type akin to `std::time::Instant` for events reported by the platform.  
+//! A type similar to `std::time::Instant` for events reported by the platform.  
 //! Depending on the implementation, it may wrap an `enum` that has as many
 //! variants as there are possible timestamp sources.
 //!
@@ -42,37 +42,27 @@
 //!
 //! ## Are events always sorted by instant?
 //!
-//! They are supposed to! But this crate never guarantees it, for the following reasons :
+//! They are mostly supposed to! But this crate never guarantees it, for the following reasons :
 //!
 //! - Backends or drivers do whatever they want. Nothing prevents them from reporting events
 //!   in the order they like (even though it's not supposed to happen).
 //! - It's not always possible, as `EventInstant` shows. Comparing timestamps just isn't always
-//!   possible when there are multiple APIs involved, e.g under Linux.
+//!   possible when there are multiple APIs (i.e timestamp sources) involved, e.g under Linux.
 //!
 //! However, this crate tries its best to process events in the most sensible way possible.
 //! For instance, if you're receiving an event from some gamepad device, it's likely that the next
 //! event will come from that same gamepad, with an `instant` you can compare to the previous.
 //!
 //! In fact...  
-//! You should _probably_ expect `EventInstant`s to be comparable when they come from a same device.  
-//! You should _probably_ not expect `EventInstant`s to be comparable when they don't come from a same device.  
-//!
-//! If you're paranoid about this, I strongly recommand you perform
-//! this as your own "post-processing" step, but don't overthink this; You really should be fine
-//! as long as you compare events `EventInstant`s that are associated to the same device.
-//!
-//! ## Why are axis values `f64`?
-//!
-//! See the `hid` module's FAQ.
+//! - You should _probably_ expect `EventInstant`s to be comparable when they come from a same device, with a similar event type.  
+//!   Comparing instants of `ControllerAxisMotion` and `ControllerButtonPressed` events is OK if they are from the same device.  
+//!   Comparing instants of `DeviceConnected` and `ControllerButtonPressed` events is **probably not** OK, but it may be, on some platforms.
+//! - You should _probably_ not expect `EventInstant`s to be comparable when they don't come from a same device.  
 //!
 //!
-//! ## Why are mouse positions `f64`?
+//! ## Why are axis values / mouse positions `f64`?
 //!
-//! Some backends offer subpixel precision, in which case values are more precise than simple
-//! integers; you can be "somewhere between" a few pixels.
-//!
-//! `f64` is likely overkill compared to `f32`, but y'know, in 2030 we might have Supra-Ultra-HD
-//! screens.
+//! See the `device` module's FAQ.
 
 use std::cmp::Ordering;
 use std::time::Duration;
@@ -83,7 +73,7 @@ use context::Context;
 use error;
 use window::WindowHandle;
 use os::OsEventInstant;
-use hid::*;
+use device::*;
 
 /// A platform-specific timestamp for an event, starting from an unspecified instant.
 ///
@@ -244,57 +234,58 @@ pub enum Event {
     // HIDs
     //
 
-    HidConnected { hid: HidID, instant: EventInstant, },
-    HidDisconnected { hid: HidID, instant: EventInstant, },
+    DeviceConnected { device: DeviceID, instant: EventInstant, info: DeviceInfo },
+    DeviceInfoChanged { device: DeviceID, instant: EventInstant, info: DeviceInfo },
+    DeviceDisconnected { device: DeviceID, instant: EventInstant, },
 
     // User note: in MouseScroll, the y value is positive when "scrolling up"
     // (that is, pushing the wheel forwards) and negative otherwise.
-    MouseEnter             { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, is_grabbed: bool,  is_focused: bool, },
-    MouseLeave             { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, was_grabbed: bool, was_focused: bool, },
-    MouseButtonPressed     { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, clicks: Option<u32>, },
-    MouseButtonReleased    { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, },
-    MouseScroll            { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, scroll: Vec2<i32>, },
-    MouseMotion            { mouse: HidID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, },
-    MouseButtonPressedRaw  { mouse: HidID, instant: EventInstant, button: MouseButton, },
-    MouseButtonReleasedRaw { mouse: HidID, instant: EventInstant, button: MouseButton, },
-    MouseScrollRaw         { mouse: HidID, instant: EventInstant, scroll: Vec2<i32>, },
-    MouseMotionRaw         { mouse: HidID, instant: EventInstant, displacement: Vec2<f64>, },
+    MouseEnter             { mouse: DeviceID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, is_grabbed: bool,  is_focused: bool, },
+    MouseLeave             { mouse: DeviceID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, was_grabbed: bool, was_focused: bool, },
+    MouseButtonPressed     { mouse: DeviceID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, clicks: Option<u32>, },
+    MouseButtonReleased    { mouse: DeviceID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, button: MouseButton, },
+    MouseScroll            { mouse: DeviceID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, scroll: Vec2<i32>, },
+    MouseMotion            { mouse: DeviceID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, },
+    MouseButtonPressedRaw  { mouse: DeviceID, instant: EventInstant, button: MouseButton, },
+    MouseButtonReleasedRaw { mouse: DeviceID, instant: EventInstant, button: MouseButton, },
+    MouseScrollRaw         { mouse: DeviceID, instant: EventInstant, scroll: Vec2<i32>, },
+    MouseMotionRaw         { mouse: DeviceID, instant: EventInstant, displacement: Vec2<f64>, },
 
     // Keyboard
-    KeyboardFocusGained    { keyboard: HidID, window: WindowHandle, },
-    KeyboardFocusLost      { keyboard: HidID, window: WindowHandle, },
-    KeyboardKeyPressed     { keyboard: HidID, window: WindowHandle, instant: EventInstant, key: Key, is_repeat: bool, text: Option<String>, },
-    KeyboardKeyReleased    { keyboard: HidID, window: WindowHandle, instant: EventInstant, key: Key, },
-    KeyboardKeyPressedRaw  { keyboard: HidID, instant: EventInstant, key: Key, },
-    KeyboardKeyReleasedRaw { keyboard: HidID, instant: EventInstant, key: Key, },
+    KeyboardFocusGained    { keyboard: DeviceID, window: WindowHandle, },
+    KeyboardFocusLost      { keyboard: DeviceID, window: WindowHandle, },
+    KeyboardKeyPressed     { keyboard: DeviceID, window: WindowHandle, instant: EventInstant, key: Key, is_repeat: bool, text: Option<String>, },
+    KeyboardKeyReleased    { keyboard: DeviceID, window: WindowHandle, instant: EventInstant, key: Key, },
+    KeyboardKeyPressedRaw  { keyboard: DeviceID, instant: EventInstant, key: Key, },
+    KeyboardKeyReleasedRaw { keyboard: DeviceID, instant: EventInstant, key: Key, },
 
     // Touch (Touchpad, Touch-screen, ....)
-    TouchFingerPressed  { touch: HidID, instant: EventInstant, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
-    TouchFingerReleased { touch: HidID, instant: EventInstant, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
-    TouchFingerMotion   { touch: HidID, instant: EventInstant, finger: u32, pressure: f64, normalized_motion:   Vec2<f64>, },
-    TouchMultiGesture   { touch: HidID, instant: EventInstant, nb_fingers: usize, rotation_radians: f64, pinch: f64, normalized_center: Vec2<f64>, },
+    TouchFingerPressed  { touch: DeviceID, instant: EventInstant, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
+    TouchFingerReleased { touch: DeviceID, instant: EventInstant, finger: u32, pressure: f64, normalized_position: Vec2<f64>, },
+    TouchFingerMotion   { touch: DeviceID, instant: EventInstant, finger: u32, pressure: f64, normalized_motion:   Vec2<f64>, },
+    TouchMultiGesture   { touch: DeviceID, instant: EventInstant, nb_fingers: usize, rotation_radians: f64, pinch: f64, normalized_center: Vec2<f64>, },
     // NOTE: Missing raw events
 
-    TabletPadButtonPressed        { tablet: HidID, instant: EventInstant, window: WindowHandle, button: TabletPadButton, },
-    TabletPadButtonReleased       { tablet: HidID, instant: EventInstant, window: WindowHandle, button: TabletPadButton, },
-    TabletStylusToolType          { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, tool_type: TabletStylusToolType, },
-    TabletStylusButtonPressed     { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
-    TabletStylusButtonReleased    { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
-    TabletStylusMotion            { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusPressed           { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusRaised            { tablet: HidID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletPadButtonPressedRaw     { tablet: HidID, instant: EventInstant, button: TabletPadButton, },
-    TabletPadButtonReleasedRaw    { tablet: HidID, instant: EventInstant, button: TabletPadButton, },
-    TabletStylusToolTypeRaw       { tablet: HidID, instant: EventInstant, tool_type: TabletStylusToolType, },
-    TabletStylusButtonPressedRaw  { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusButtonReleasedRaw { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusMotionRaw         { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusPressedRaw        { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
-    TabletStylusRaisedRaw         { tablet: HidID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletPadButtonPressed        { tablet: DeviceID, instant: EventInstant, window: WindowHandle, button: TabletPadButton, },
+    TabletPadButtonReleased       { tablet: DeviceID, instant: EventInstant, window: WindowHandle, button: TabletPadButton, },
+    TabletStylusToolType          { tablet: DeviceID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, tool_type: TabletStylusToolType, },
+    TabletStylusButtonPressed     { tablet: DeviceID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
+    TabletStylusButtonReleased    { tablet: DeviceID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, button: TabletStylusButton, },
+    TabletStylusMotion            { tablet: DeviceID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusPressed           { tablet: DeviceID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusRaised            { tablet: DeviceID, instant: EventInstant, window: WindowHandle, position: Vec2<f64>, root_position: Vec2<f64>, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletPadButtonPressedRaw     { tablet: DeviceID, instant: EventInstant, button: TabletPadButton, },
+    TabletPadButtonReleasedRaw    { tablet: DeviceID, instant: EventInstant, button: TabletPadButton, },
+    TabletStylusToolTypeRaw       { tablet: DeviceID, instant: EventInstant, tool_type: TabletStylusToolType, },
+    TabletStylusButtonPressedRaw  { tablet: DeviceID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusButtonReleasedRaw { tablet: DeviceID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusMotionRaw         { tablet: DeviceID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusPressedRaw        { tablet: DeviceID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
+    TabletStylusRaisedRaw         { tablet: DeviceID, instant: EventInstant, pressure: f64, tilt: Vec2<f64>, physical_position: Vec2<f64>, },
 
-    ControllerButtonPressed  { controller: HidID, instant: EventInstant, button: ControllerButton, },
-    ControllerButtonReleased { controller: HidID, instant: EventInstant, button: ControllerButton, },
-    ControllerAxisMotion     { controller: HidID, instant: EventInstant, axis: ControllerAxis, value: f64, },
+    ControllerButtonPressed  { controller: DeviceID, instant: EventInstant, button: ControllerButton, },
+    ControllerButtonReleased { controller: DeviceID, instant: EventInstant, button: ControllerButton, },
+    ControllerAxisMotion     { controller: DeviceID, instant: EventInstant, axis: ControllerAxis, value: f64, },
     // NOTE: value (f64) above is not a normalized value. It is the raw value cast to an f64. The
     // user has to look up the axis info to know the (min,max) and deal with it.
     // The reason is, there are too many situations to handle:
@@ -327,8 +318,9 @@ impl Event {
             Event::WindowMaximized      { window: _, } => None,
             Event::WindowUnminized      { window: _, } => None,
             Event::WindowCloseRequested { window: _, } => None,
-            Event::HidConnected    { hid: _, instant, } => Some(instant),
-            Event::HidDisconnected { hid: _, instant, } => Some(instant),
+            Event::DeviceConnected      { device: _, instant, info: _, } => Some(instant),
+            Event::DeviceInfoChanged    { device: _, instant, info: _, } => Some(instant),
+            Event::DeviceDisconnected   { device: _, instant, } => Some(instant),
             Event::MouseEnter             { mouse: _, instant, window: _, position: _, root_position: _, is_grabbed: _,  is_focused: _, } => Some(instant),
             Event::MouseLeave             { mouse: _, instant, window: _, position: _, root_position: _, was_grabbed: _, was_focused: _, } => Some(instant),
             Event::MouseButtonPressed     { mouse: _, instant, window: _, position: _, root_position: _, button: _, clicks: _, } => Some(instant),

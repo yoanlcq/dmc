@@ -5,6 +5,7 @@ extern crate libc;
 
 use std::time::Instant;
 use std::os::raw::c_int;
+use std::collections::HashMap;
 
 use self::linuxdev::{LinuxdevContext, LinuxdevToken};
 pub use self::linuxdev::{OsControllerInfo, OsControllerState};
@@ -18,10 +19,10 @@ use desktop::Desktop;
 use window::WindowSettings;
 use event::Event;
 use timeout::Timeout;
-use hid::{
+use device::{
     self, 
-    HidID, HidInfo, ButtonState,
-    ControllerButton, ControllerAxis, ControllerState, ControllerInfo, RumbleEffect,
+    DeviceID, DeviceInfo, ButtonState,
+    ControllerButton, ControllerAxis, ControllerState, VibrationState,
     KeyState, KeyboardState, Keysym, Keycode,
     MouseState, MouseButton,
     TabletInfo, TabletState, TabletPadButton, TabletStylusButton,
@@ -50,7 +51,7 @@ pub mod event_instant;
 pub use self::event_instant::OsEventInstant;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum OsHidID {
+pub enum OsDeviceID {
     CoreKeyboard,
     CorePointer,
     XISlave(c_int),
@@ -159,73 +160,65 @@ impl OsContext {
     pub fn supports_raw_device_events(&self) -> Result<bool> {
         self.x11.supports_raw_device_events()
     }
-    pub fn hid_info(&self, id: HidID) -> hid::Result<HidInfo> {
+    pub fn devices(&self) -> device::Result<HashMap<DeviceID, DeviceInfo>> {
+        match (self.x11.devices(), self.linuxdev.controllers()) {
+            (Ok(mut devs), Ok(controllers)) => Ok({
+                devs.extend(controllers.into_iter());
+                devs
+            }),
+            // Honestly, none of these should happen; at worst, we should get empty HashMaps.
+            // Don't even bother logging or returning the Ok() parts.
+            (Err(x11), Err(_linuxdev)) => Err(x11),
+            (Ok(_), Err(linuxdev)) => Err(linuxdev),
+            (Err(x11), Ok(_)) => Err(x11),
+        }
+    }
+    pub fn ping_device(&self, id: DeviceID) -> device::Result<()> {
         match id.0 {
-            OsHidID::Linuxdev(token) => self.linuxdev.controller_info(token),
+            OsDeviceID::Linuxdev(token) => self.linuxdev.ping_controller(token),
             _ => unimplemented!{},
         }
     }
-    pub fn ping_hid(&self, id: HidID) -> hid::Result<()> {
-        match id.0 {
-            OsHidID::Linuxdev(token) => self.linuxdev.ping_controller(token),
-            _ => unimplemented!{},
-        }
-    }
-    pub fn controllers(&self) -> hid::Result<Vec<HidID>> {
-        self.linuxdev.controllers()
-    }
-    pub fn controller_state(&self, controller: HidID) -> hid::Result<ControllerState> {
+    pub fn controller_state(&self, controller: DeviceID) -> device::Result<ControllerState> {
         self.linuxdev.controller_state(controller)
     }
-    pub fn controller_button_state(&self, controller: HidID, button: ControllerButton) -> hid::Result<ButtonState> {
+    pub fn controller_button_state(&self, controller: DeviceID, button: ControllerButton) -> device::Result<ButtonState> {
         self.linuxdev.controller_button_state(controller, button)
     }
-    pub fn controller_axis_state(&self, controller: HidID, axis: ControllerAxis) -> hid::Result<f64> {
+    pub fn controller_axis_state(&self, controller: DeviceID, axis: ControllerAxis) -> device::Result<f64> {
         self.linuxdev.controller_axis_state(controller, axis)
     }
-    pub fn controller_play_rumble_effect(&self, controller: HidID, effect: &RumbleEffect) -> hid::Result<()> {
-        self.linuxdev.controller_play_rumble_effect(controller, effect)
+    pub fn controller_set_vibration(&self, controller: DeviceID, vibration: &VibrationState) -> device::Result<()> {
+        self.linuxdev.controller_set_vibration(controller, vibration)
     }
-    pub fn keyboards(&self) -> hid::Result<Vec<HidID>> {
-        unimplemented!{}
-    }
-    pub fn main_keyboard(&self) -> hid::Result<HidID> {
-        Ok(self.x11.core_x_keyboard())
-    }
-    pub fn keyboard_state(&self, keyboard: HidID) -> hid::Result<KeyboardState> {
-        unimplemented!{}
-    }
-    pub fn keyboard_keycode_state(&self, keyboard: HidID, keycode: Keycode) -> hid::Result<KeyState> {
-        unimplemented!{}
-    }
-    pub fn keyboard_keysym_state(&self, keyboard: HidID, keysym: Keysym) -> hid::Result<KeyState> {
-        unimplemented!{}
-    }
-    pub fn keysym_name(&self, keysym: Keysym) -> hid::Result<String> {
-        unimplemented!{}
-    }
-    pub fn keysym_from_keycode(&self, keyboard: HidID, keycode: Keycode) -> hid::Result<Keysym> {
-        unimplemented!{}
-    }
-    pub fn keycode_from_keysym(&self, keyboard: HidID, keysym: Keysym) -> hid::Result<Keycode> {
-        unimplemented!{}
-    }
-    pub fn mice(&self) -> hid::Result<Vec<HidID>> {
-        unimplemented!{}
-    }
-    pub fn main_mouse(&self) -> hid::Result<HidID> {
+    pub fn main_mouse(&self) -> device::Result<DeviceID> {
         Ok(self.x11.core_x_mouse())
     }
-    pub fn mouse_state(&self, mouse: HidID) -> hid::Result<MouseState> {
+    pub fn main_keyboard(&self) -> device::Result<DeviceID> {
+        Ok(self.x11.core_x_keyboard())
+    }
+    pub fn keyboard_state(&self, keyboard: DeviceID) -> device::Result<KeyboardState> {
         unimplemented!{}
     }
-    pub fn tablets(&self) -> hid::Result<Vec<HidID>> {
+    pub fn keyboard_keycode_state(&self, keyboard: DeviceID, keycode: Keycode) -> device::Result<KeyState> {
         unimplemented!{}
     }
-    pub fn tablet_state(&self, tablet: HidID) -> hid::Result<TabletState> {
+    pub fn keyboard_keysym_state(&self, keyboard: DeviceID, keysym: Keysym) -> device::Result<KeyState> {
         unimplemented!{}
     }
-    pub fn touch_devices(&self) -> hid::Result<Vec<HidID>> {
+    pub fn keysym_name(&self, keysym: Keysym) -> device::Result<String> {
+        unimplemented!{}
+    }
+    pub fn keysym_from_keycode(&self, keyboard: DeviceID, keycode: Keycode) -> device::Result<Keysym> {
+        unimplemented!{}
+    }
+    pub fn keycode_from_keysym(&self, keyboard: DeviceID, keysym: Keysym) -> device::Result<Keycode> {
+        unimplemented!{}
+    }
+    pub fn mouse_state(&self, mouse: DeviceID) -> device::Result<MouseState> {
+        unimplemented!{}
+    }
+    pub fn tablet_state(&self, tablet: DeviceID) -> device::Result<TabletState> {
         unimplemented!{}
     }
 }

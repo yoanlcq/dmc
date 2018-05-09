@@ -10,15 +10,13 @@ use std::ffi::CStr;
 use std::ptr;
 use std::mem;
 use std::cell::{Cell, RefCell};
-use std::time::Duration;
 use event::{Event, EventInstant};
-use os::{OsEventInstant, OsHidID};
-use time_utils;
-use hid::{self, HidID, HidInfo, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState, Bus, RumbleEffect, AxisInfo};
+use os::{OsEventInstant, OsDeviceID};
+use device::{self, DeviceID, DeviceInfo, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState, Bus, VibrationState, AxisInfo};
 
 use self::c::{c_int, c_uint, c_char};
 
-use nix::errno::{self, Errno};
+use nix::{self, errno::{self, Errno}};
 
 use self::libevdev_sys::evdev;
 use self::libevdev_sys::evdev::libevdev_read_flag;
@@ -84,7 +82,7 @@ pub struct LinuxdevContext {
     udev: *mut libudev_sys::udev,
     udev_monitor: *mut libudev_sys::udev_monitor,
     udev_enumerate: *mut libudev_sys::udev_enumerate,
-    controllers: RefCell<HashMap<LinuxdevToken, Linuxdev>>,
+    evdev_controllers: RefCell<HashMap<LinuxdevToken, Linuxdev>>,
     token_generator: RefCell<LinuxdevTokenGenerator>,
     pending_translated_events: RefCell<VecDeque<Event>>,
 }
@@ -105,8 +103,9 @@ struct Linuxdev {
     /// A libevdev handle is obtained from an open file descriptor, but this may fail for some
     /// reason.
     evdev: Option<LinuxdevEvdev>,
-    /// The last Force-Feedback ID or -1.
-    last_ff_id: Cell<i16>,
+    /// The registered Force-Feedback ID for rumble effects, or -1.
+    rumble_ff_id: Cell<i16>,
+    max_simultaneous_ff_effects: c_int,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -147,12 +146,14 @@ struct LinuxdevEvdev {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct EvdevProps {
     name: String,
+	driver_version: (u16, u8, u8),
     id_bustype: c_int,
     id_product: u16,
     id_vendor: u16,
     is_a_steering_wheel: bool,
     is_a_gamepad: bool,
     is_a_joystick: bool,
+    supports_rumble: bool,
     repeat: Option<EvdevRepeat>,
 }
 
@@ -167,6 +168,7 @@ pub struct OsControllerInfo {
     is_a_gamepad: bool,
     is_a_joystick: bool,
     is_a_steering_wheel: bool,
+    supports_rumble: bool,
     buttons: HashSet<ControllerButton>,
     axes: HashMap<ControllerAxis, AxisInfo>,
 }
@@ -182,7 +184,7 @@ impl Drop for LinuxdevContext {
     fn drop(&mut self) {
         let &mut Self {
             udev, udev_monitor, udev_enumerate,
-            controllers: _,
+            evdev_controllers: _,
             token_generator: _,
             pending_translated_events: _,
         } = self;
@@ -200,21 +202,22 @@ impl Drop for Linuxdev {
             udev_device, owns_udev_device, ref udev_props,
             fd, fd_has_write_access: _, event_api: _,
             ref evdev,
-            ref last_ff_id,
+            ref rumble_ff_id, max_simultaneous_ff_effects: _,
         } = self;
         unsafe {
             if owns_udev_device {
                 libudev_sys::udev_device_unref(udev_device);
             }
             if let Some(evdev) = evdev.as_ref() {
-                evdev::libevdev_free(evdev.libevdev);
+                let _ignored_status = evdev::libevdev_free(evdev.libevdev);
             }
             if let Some(fd) = fd {
-                if last_ff_id.get() != -1 {
-                    let res = ev_ioctl::unregister_ff_effect(fd, last_ff_id.get() as _);
-                    if let Err(e) = res {
-                        error!("Controller {}: failed to unregister the last playing force feedback effect while dropping it! (ioctl() generated {})", udev_props.display(), e);
-                    }
+                if rumble_ff_id.get() != -1 {
+                    let res = ev_ioctl::unregister_ff_effect(fd, rumble_ff_id.get() as _);
+                    match res {
+                        Err(nix::Error::Sys(Errno::ENODEV)) | Ok(_) => (),
+                        Err(e) => error!("Controller {}: failed to unregister the rumble effect while dropping it! (ioctl() generated {})", udev_props.display(), e),
+                    };
                 }
                 c::close(fd);
             }
@@ -247,7 +250,7 @@ impl Default for LinuxdevContext {
 
             let mut pending_translated_events = VecDeque::with_capacity(32);
             let mut token_generator = LinuxdevTokenGenerator::default();
-            let mut controllers = HashMap::with_capacity(32);
+            let mut evdev_controllers = HashMap::with_capacity(32);
 
             for entry in udev_enumerate::scan_devices_iter(udev_enumerate) {
                 let _entry_value = libudev_sys::udev_list_entry_get_value(entry);
@@ -259,16 +262,26 @@ impl Default for LinuxdevContext {
                     owns_udev_device: true,
                     try_open_fd_if_is_a_controller: true,
                 });
-                if dev.is_a_controller() {
+                if dev.is_a_controller_and_evdev_node() {
                     let token = token_generator.next_token();
-                    dev.pump_evdev(token, &mut pending_translated_events);
-                    controllers.insert(token, dev);
+                    let status = dev.pump_evdev(token, &mut pending_translated_events);
+                    let worth_keeping = match status {
+                        Err(device::Error::DeviceDisconnected(_)) => false,
+                        Err(e) => {
+                            warn!("Controller {}: pumping evdev failed: {}", dev.display(), e);
+                            true
+                        },
+                        Ok(()) => true,
+                    };
+                    if worth_keeping {
+                        evdev_controllers.insert(token, dev);
+                    }
                 }
             }
 
             Self {
                 udev, udev_monitor, udev_enumerate,
-                controllers: RefCell::new(controllers),
+                evdev_controllers: RefCell::new(evdev_controllers),
                 token_generator: RefCell::new(token_generator),
                 pending_translated_events: RefCell::new(pending_translated_events),
             }
@@ -329,15 +342,22 @@ impl LinuxdevContext {
         self.pump_events();
 
         let ev = self.pending_translated_events.borrow_mut().pop_front();
-        if let Some(&Event::HidDisconnected { hid: HidID(OsHidID::Linuxdev(token)), .. }) = ev.as_ref() {
+        if let Some(&Event::DeviceDisconnected { device: DeviceID(OsDeviceID::Linuxdev(token)), .. }) = ev.as_ref() {
 
-            self.controllers.borrow_mut().remove(&token);
+            self.evdev_controllers.borrow_mut().remove(&token);
         }
         ev
     }
     fn pump_events(&self) {
-        for (token, dev) in self.controllers.borrow().iter() {
-            dev.pump_evdev(*token, &mut self.pending_translated_events.borrow_mut());
+        for (token, dev) in self.evdev_controllers.borrow().iter() {
+            let status = dev.pump_evdev(*token, &mut self.pending_translated_events.borrow_mut());
+            match status {
+                // If disconnected, don't do anything; let pump_udev_monitor() handle stuff.
+                // Further actions with the fd will fail and it's OK because everyone handles this
+                // in their own way.
+                Err(device::Error::DeviceDisconnected(_)) | Ok(()) => (), 
+                Err(e) => warn!("Controller {}: pumping evdev failed: {}", dev.display(), e),
+            };
         }
         // We want to pump existing devices _before_ learning that they have been
         // disconnected (all events matter), so pump the udev_monitor last. Any newly added device
@@ -387,22 +407,29 @@ impl LinuxdevContext {
         }
     }
     fn add_linuxdev(&self, dev: Linuxdev) {
-        if !dev.is_a_controller() {
+        if !dev.is_a_controller_and_evdev_node() {
             return;
         }
         let token = self.token_generator.borrow_mut().next_token();
-        let hid_connected_event = Event::HidConnected {
-            hid: HidID(OsHidID::Linuxdev(token)),
+        let device_connected_event = Event::DeviceConnected {
+            device: DeviceID(OsDeviceID::Linuxdev(token)),
             instant: dev.plug_instant(),
+            info: dev.device_info(),
         };
         let mut queue = self.pending_translated_events.borrow_mut();
-        queue.push_back(hid_connected_event);
-        dev.pump_evdev(token, &mut queue);
-        self.controllers.borrow_mut().insert(token, dev);
+        queue.push_back(device_connected_event);
+        let status = dev.pump_evdev(token, &mut queue);
+        match status {
+            Err(device::Error::DeviceDisconnected(_)) | Ok(()) => (), 
+            Err(e) => warn!("Controller {}: pumping evdev failed: {}", dev.display(), e),
+        };
+        // Still add it even though the device could have been disconnected.
+        // Wait until we receive the message from udev to do things properly.
+        self.evdev_controllers.borrow_mut().insert(token, dev);
     }
     fn on_udev_device_removed(&self, udev_device: *mut libudev_sys::udev_device) {
         // Reverse lookup
-        let token = self.controllers.borrow().iter().filter_map(|(token, dev)| {
+        let token = self.evdev_controllers.borrow().iter().filter_map(|(token, dev)| {
             if dev.udev_device == udev_device { Some(*token) } else { None }
         }).next();
 
@@ -410,46 +437,57 @@ impl LinuxdevContext {
             return; // It's fine; the udev_device is not necessarily a controller!
         }
         // NOTE: Don't remove the device from our list, yet !
-        // Wait until the HidDisconnected event is reported to the user to do it.
+        // Wait until the DeviceDisconnected event is reported to the user to do it.
         // See self.poll_next_event()
         let token = token.unwrap();
-        let hid_disconnected_event = Event::HidDisconnected {
-            hid: HidID(OsHidID::Linuxdev(token)),
-            instant: self.controllers.borrow()[&token].instant_now(), // Looks like it's the closest we can get... ._.
+        let device_disconnected_event = Event::DeviceDisconnected {
+            device: DeviceID(OsDeviceID::Linuxdev(token)),
+            instant: self.evdev_controllers.borrow()[&token].instant_now(), // Looks like it's the closest we can get... ._.
         };
-        self.pending_translated_events.borrow_mut().push_back(hid_disconnected_event);
+        self.pending_translated_events.borrow_mut().push_back(device_disconnected_event);
     }
-    pub fn controllers(&self) -> hid::Result<Vec<HidID>> {
-        Ok(self.controllers.borrow().keys().map(|token| HidID(OsHidID::Linuxdev(*token))).collect())
+    pub fn controllers(&self) -> device::Result<HashMap<DeviceID, DeviceInfo>> {
+		// We are not required to rescan devices via e.g udev_enumerate_scan_devices.
+		// We're in sync with the event queue and this is fine.
+        Ok(self.evdev_controllers.borrow().iter().map(|(token, dev)| {
+            let id = DeviceID(OsDeviceID::Linuxdev(*token));
+            let info = dev.device_info();
+            (id, info)
+        }).collect())
     }
-    pub fn controller_info(&self, token: LinuxdevToken) -> hid::Result<HidInfo> {
-        unimplemented!{}
+    pub fn ping_controller(&self, token: LinuxdevToken) -> device::Result<()> {
+        match self.evdev_controllers.borrow().get(&token) {
+            None => device::disconnected(),
+            Some(dev) => dev.pump_evdev(token, &mut self.pending_translated_events.borrow_mut()),
+        }
     }
-    pub fn ping_controller(&self, token: LinuxdevToken) -> hid::Result<()> {
-        unimplemented!{}
-    }
-    pub fn controller_state(&self, controller: HidID) -> hid::Result<ControllerState> {
+    pub fn controller_state(&self, controller: DeviceID) -> device::Result<ControllerState> {
         self.with_controller(controller, |dev| dev.controller_state().map(ControllerState))
     }
-    pub fn controller_button_state(&self, controller: HidID, button: ControllerButton) -> hid::Result<ButtonState> {
+    pub fn controller_button_state(&self, controller: DeviceID, button: ControllerButton) -> device::Result<ButtonState> {
         self.with_controller(controller, |dev| dev.controller_button_state(button))
     }
-    pub fn controller_axis_state(&self, controller: HidID, axis: ControllerAxis) -> hid::Result<f64> {
+    pub fn controller_axis_state(&self, controller: DeviceID, axis: ControllerAxis) -> device::Result<f64> {
         self.with_controller(controller, |dev| dev.controller_axis_state(axis))
     }
-    pub fn controller_play_rumble_effect(&self, controller: HidID, effect: &RumbleEffect) -> hid::Result<()> {
-        self.with_controller(controller, |dev| dev.play_rumble_effect(effect))
+    pub fn controller_set_vibration(&self, controller: DeviceID, vibration: &VibrationState) -> device::Result<()> {
+        self.with_controller(controller, |dev| dev.controller_set_vibration(vibration))
     }
-    fn with_controller<T, F: FnMut(&Linuxdev) -> hid::Result<T>>(&self, controller: HidID, mut f: F) -> hid::Result<T> {
-        if let OsHidID::Linuxdev(token) = controller.0 {
-            if let Some(dev) = self.controllers.borrow().get(&token) {
-                debug_assert!(dev.is_a_controller());
+    // We take a closure because we can't return a reference to the DeviceID (it outlives the
+    // borrow() of self.evdev_controllers).
+    fn with_controller<T, F: FnMut(&Linuxdev) -> device::Result<T>>(&self, controller: DeviceID, mut f: F) -> device::Result<T> {
+        if let OsDeviceID::Linuxdev(token) = controller.0 {
+            if let Some(dev) = self.evdev_controllers.borrow().get(&token) {
+                debug_assert!(dev.is_a_controller_and_evdev_node());
                 f(dev)
             } else {
-                hid::disconnected()    
+                device::disconnected()    
             }
         } else {
-            hid::not_supported_by_device(format!("This device does not refer to a controller"))
+            // Don't panic here. Sometimes the higher layer just passes the DeviceID as-is
+            // to use without checking if it is adressed to us in the first place.
+            // E.g user calls `controller_axis_state(some_device_that_is_not_a_controller)`.
+            device::not_supported_by_device("This device does not refer to a controller")
         }
     }
 }
@@ -464,6 +502,9 @@ impl OsControllerInfo {
     }
     pub fn is_a_steering_wheel(&self) -> bool {
         self.is_a_steering_wheel
+    }
+    pub fn supports_rumble(&self) -> bool {
+        self.supports_rumble
     }
     pub fn has_button(&self, button: ControllerButton) -> bool {
         self.buttons.contains(&button)
@@ -485,6 +526,7 @@ impl OsControllerState {
 }
 
 
+// For logging. This is very simple right now.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct LinuxdevDisplay<'a> {
     name: &'a str,
@@ -536,6 +578,15 @@ impl Linuxdev {
     pub fn vendor_id(&self) -> Option<u16> {
         self.evdev.as_ref().map(|e| e.props.id_vendor).or(self.udev_props.id_vendor_id)
     }
+    pub fn driver_name(&self) -> Option<String> {
+        self.udev_props.id_usb_driver.clone()
+    }
+    pub fn driver_version(&self) -> Option<String> {
+		self.evdev.as_ref().map(|e| {
+			let (major, minor, patch) = e.props.driver_version;
+			format!("{}.{}.{}", major, minor, patch)
+		})
+    }
     pub fn bus(&self) -> Option<Bus> {
         let bus_via_evdev = self.evdev.as_ref().map(|e| match e.props.id_bustype {
             linux_bus_id::BUS_PCI         => Some(Bus::Pci),
@@ -573,6 +624,9 @@ impl Linuxdev {
 
         bus_via_evdev.or(bus_via_udev)
     }
+    pub fn is_a_controller_and_evdev_node(&self) -> bool {
+        self.is_a_controller() && self.event_api == Some(LinuxEventAPI::Evdev)
+    }
     pub fn is_a_controller(&self) -> bool {
         self.udev_props.is_a_controller()
     }
@@ -584,6 +638,51 @@ impl Linuxdev {
     }
     pub fn is_a_joystick(&self) -> bool {
         self.is_a_controller() && self.evdev.as_ref().map(|e| e.props.is_a_joystick).unwrap_or(false)
+    }
+    pub fn supports_rumble(&self) -> bool {
+        // self.evdev.is_some() implies self.fd.is_some()
+        self.fd_has_write_access && self.evdev.as_ref().map(|e| e.props.supports_rumble).unwrap_or(false)
+    }
+    pub fn device_info(&self) -> DeviceInfo {
+        use ::std::os::unix::ffi::OsStrExt;
+        use ::std::ffi::OsStr;
+        let evdev = self.evdev.as_ref().unwrap();
+        DeviceInfo {
+            master: None,
+            parent: None, // This is more complicated than it looks and I doubt people do care.
+            device_node: unsafe {
+				cstr_or_none(libudev_sys::udev_device_get_devnode(self.udev_device)).map(|cstr| OsStr::from_bytes(cstr.to_bytes()).into())
+			},
+            name: self.name().map(|s| s.to_owned()),
+            serial: self.udev_props.id_serial.clone(),
+            usb_product_info: match (self.vendor_id(), self.product_id()) {
+                (Some(vendor_id), Some(product_id)) => Some(device::UsbProductInfo {
+                    vendor_id,
+                    product_id,
+                    vendor_name: self.udev_props.id_vendor.clone(),
+                    product_name: None,
+                }),
+                _ => None,
+            },
+            guid: None,
+            plug_instant: Some(self.plug_instant()),
+            bus: self.bus(),
+            driver_name: self.driver_name(),
+            driver_version: self.driver_version(),
+            is_physical: None, // WISH: I could actually investigate this
+            controller: Some(ControllerInfo(OsControllerInfo {
+                is_a_gamepad: self.is_a_gamepad(),
+                is_a_joystick: self.is_a_joystick(),
+                is_a_steering_wheel: self.is_a_steering_wheel(),
+                supports_rumble: self.supports_rumble(),
+                buttons: evdev.buttons.clone(),
+                axes: evdev.axes.clone(),
+            })),
+            mouse: None,
+            keyboard: None,
+            touch: None,
+            tablet: None,
+        }
     }
 }
 
@@ -700,6 +799,18 @@ impl Linuxdev {
             }
         };
 
+        let max_simultaneous_ff_effects = fd.map(|fd| {
+            let mut max_simultaneous_ff_effects = 0;
+            let status = ev_ioctl::max_simultaneous_ff_effects(fd, &mut max_simultaneous_ff_effects);
+            match status {
+                Ok(_) => max_simultaneous_ff_effects,
+                Err(e) => {
+                    warn!("EVIOCGEFFECTS ioctl() returned {}", e);
+                    0
+                },
+            }
+        }).unwrap_or(0);
+
         let evdev = event_api.map(|event_api| match event_api {
             LinuxEventAPI::Joydev => None,
             LinuxEventAPI::Evdev => fd.map(|fd| {
@@ -718,7 +829,8 @@ impl Linuxdev {
             udev_device, owns_udev_device, udev_props,
             fd, fd_has_write_access, event_api,
             evdev,
-            last_ff_id: Cell::new(-1),
+            rumble_ff_id: Cell::new(-1),
+            max_simultaneous_ff_effects,
         };
         if dev.evdev.is_some() {
             dev.evdev_refresh_all_controller_axes_support();
@@ -770,10 +882,21 @@ impl Linuxdev {
 impl LinuxdevEvdev {
     unsafe fn from_libevdev(libevdev: *mut evdev::libevdev) -> Self {
         let props = EvdevProps {
+            name      : remove_quotes_if_any(CStr::from_ptr(evdev::libevdev_get_name(libevdev)).to_string_lossy().into_owned()),
+			driver_version: {
+				let v = evdev::libevdev_get_driver_version(libevdev);
+				if v == -1 {
+					(0, 0, 0) // Device disconnected???
+				} else {
+					let major = v >> 16;
+					let minor = (v >> 8) & 0xff;
+					let patch = v & 0xff;
+					(major as _, minor as _, patch as _)
+				}
+			},
             id_bustype: evdev::libevdev_get_id_bustype(libevdev),
             id_product: evdev::libevdev_get_id_product(libevdev) as _,
             id_vendor : evdev::libevdev_get_id_vendor(libevdev) as _,
-            name      : remove_quotes_if_any(CStr::from_ptr(evdev::libevdev_get_name(libevdev)).to_string_lossy().into_owned()),
             is_a_steering_wheel: {
                 let has_abs_wheel = 0 != evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_ABS as _, input_event_codes::ABS_WHEEL as _);
                 let has_btn_wheel = 0 != evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_WHEEL as _);
@@ -781,6 +904,7 @@ impl LinuxdevEvdev {
             },
             is_a_gamepad : 0 != evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_GAMEPAD as _),
             is_a_joystick: 0 != evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_JOYSTICK as _),
+            supports_rumble: 0 != evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_FF as _, ff::FF_RUMBLE as _),
             // There's also BTN_MOUSE, BTN_DIGI, etc... but the X server has ownership, not us.
             repeat: {
                 let (mut delay, mut period) = (0, 0);
@@ -821,366 +945,413 @@ fn axis_info_from_linux_absinfo(absinfo: &linux_input::input_absinfo) -> AxisInf
 }
 
 
-macro_rules! event_mapping {
-    ($($EV_TYPE:ident => $(|$arg:ident|)* {$($EV_CODE:ident => $expr:expr,)*},)+) => {
-        $(event_mapping!{@ $EV_TYPE => $(|$arg|)* {$($EV_CODE => $expr,)*}})+
-    };
-    (@ EV_KEY => {$($EV_CODE:ident => $expr:expr,)+}) => {
-        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-        enum TranslatedEvKey {
-            Button(ControllerButton),
-            Dpad(ControllerAxis, i32),
+impl Linuxdev {
+    pub fn translate_ev_key(&self, code: u16) -> ControllerButton {
+        controller_button_from_ev_key_code(code)
+    }
+    pub fn untranslate_ev_key(&self, button: ControllerButton) -> Option<u16> {
+        controller_button_to_ev_key_code(button)
+    }
+    pub fn translate_ev_abs(&self, code: u16) -> ControllerAxis {
+        if self.is_a_joystick() {
+            controller_axis_from_ev_abs_code_for_joysticks(code)
+        } else {
+            controller_axis_from_ev_abs_code_for_gamepads_or_steering_wheels(code)
         }
-        impl From<ControllerButton> for TranslatedEvKey {
-            fn from(b: ControllerButton) -> Self {
-                TranslatedEvKey::Button(b)
+    }
+    pub fn untranslate_ev_abs(&self, axis: ControllerAxis) -> Option<u16> {
+        if self.is_a_joystick() {
+            controller_axis_to_ev_abs_code_for_joysticks(axis)
+        } else {
+            controller_axis_to_ev_abs_code_for_gamepads_or_steering_wheels(axis)
+        }
+    }
+
+    pub fn evdev_refresh_all_controller_buttons_support(&mut self) {
+        let buttons = self.evdev_all_controller_buttons_support();
+        self.evdev.as_mut().unwrap().buttons = buttons;
+    }
+    pub fn evdev_refresh_all_controller_axes_support(&mut self) {
+        let axes = self.evdev_all_controller_axes_support();
+        self.evdev.as_mut().unwrap().axes = axes;
+    }
+
+
+    pub fn evdev_all_controller_buttons_support(&self) -> HashSet<ControllerButton> {
+        let libevdev = self.evdev.as_ref().unwrap().libevdev;
+        let mut all_buttons = HashSet::with_capacity(ALL_BTN_CODES.len());
+        for code in ALL_BTN_CODES {
+            let has_it = 0 != unsafe {
+                evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, *code as _)
+            };
+            if has_it {
+                all_buttons.insert(self.translate_ev_key(*code));
             }
         }
-        impl From<(ControllerAxis, i32)> for TranslatedEvKey {
-            fn from(t: (ControllerAxis, i32)) -> Self {
-                TranslatedEvKey::Dpad(t.0, t.1)
+        all_buttons
+    }
+    pub fn evdev_all_controller_buttons_state(&self) -> HashMap<ControllerButton, ButtonState> {
+        let mut all_buttons = HashMap::with_capacity(ALL_BTN_CODES.len());
+        for code in ALL_BTN_CODES {
+            let button = self.translate_ev_key(*code);
+            if let Some(state) = self.evdev_controller_button_state(button) {
+                all_buttons.insert(button, state);
             }
         }
-        impl Linuxdev {
-            pub fn translate_ev_key(&self, code: u16) -> TranslatedEvKey {
-                match code {
-                    $(input_event_codes::$EV_CODE => TranslatedEvKey::from($expr),)+
-                    other => TranslatedEvKey::Button(ControllerButton::Other(other as _)),
-                }
-            }
-            pub fn untranslate_ev_key(&self, button: TranslatedEvKey) -> u16 {
-                match button {
-                    $(button if button == TranslatedEvKey::from($expr) => input_event_codes::$EV_CODE,)+
-                    TranslatedEvKey::Button(ControllerButton::Other(other)) => other as _,
-                    _ => unreachable!{},
-                }
-            }
-            pub fn evdev_all_controller_buttons_state(&self) -> HashMap<ControllerButton, ButtonState> {
-                let all_translated = &[$(TranslatedEvKey::from($expr),)+];
-                let mut all_buttons = HashMap::with_capacity(all_translated.len());
-                for translated in all_translated.iter() {
-                    match *translated {
-                        TranslatedEvKey::Dpad(_, _) => (), // Nothing to do
-                        TranslatedEvKey::Button(button) => {
-                            if let Some(state) = self.evdev_controller_button_state(button) {
-                                all_buttons.insert(button, state);
-                            }
-                        },
-                    };
-                }
-                all_buttons
-            }
-            pub fn evdev_controller_button_state(&self, button: ControllerButton) -> Option<ButtonState> {
-                let mut value = 0;
-                let status = unsafe {
-                    let libevdev = self.evdev.as_ref().unwrap().libevdev;
-                    let type_ = input_event_codes::EV_KEY;
-                    let code = self.untranslate_ev_key(TranslatedEvKey::Button(button));
-                    evdev::libevdev_fetch_event_value(libevdev, type_ as _, code as _, &mut value)
+        all_buttons
+    }
+    pub fn evdev_controller_button_state(&self, button: ControllerButton) -> Option<ButtonState> {
+        let mut value = 0;
+        let status = unsafe {
+            let libevdev = self.evdev.as_ref().unwrap().libevdev;
+            let type_ = input_event_codes::EV_KEY;
+            let code = self.untranslate_ev_key(button)?;
+            evdev::libevdev_fetch_event_value(libevdev, type_ as _, code as _, &mut value)
+        };
+        match status {
+            0 => None,
+            _ => Some(match value {
+                0 => ButtonState::Up,
+                _ => ButtonState::Down,
+            }),
+        }
+    }
+
+    pub fn evdev_all_controller_axes_support(&self) -> HashMap<ControllerAxis, AxisInfo> {
+        let libevdev = self.evdev.as_ref().unwrap().libevdev;
+        let mut all_axes = HashMap::with_capacity(ALL_ABS_CODES.len());
+        for code in ALL_ABS_CODES {
+            let has_it = 0 != unsafe {
+                evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_ABS as _, *code as _)
+            };
+            if has_it {
+                let absinfo = unsafe {
+                    evdev::libevdev_get_abs_info(libevdev, *code as _)
                 };
-                match status {
-                    0 => None,
-                    _ => Some(match value {
-                        0 => ButtonState::Up,
-                        _ => ButtonState::Down,
-                    }),
+                if !absinfo.is_null() {
+                    all_axes.insert(self.translate_ev_abs(*code), axis_info_from_linux_absinfo(unsafe { &*absinfo }));
                 }
-            }
-            pub fn evdev_refresh_all_controller_buttons_support(&mut self) {
-                let buttons = self.evdev_all_controller_buttons_support();
-                self.evdev.as_mut().unwrap().buttons = buttons;
-            }
-            pub fn evdev_all_controller_buttons_support(&self) -> HashSet<ControllerButton> {
-                let libevdev = self.evdev.as_ref().unwrap().libevdev;
-
-                let all_codes = &[$(input_event_codes::$EV_CODE,)+];
-                let all_translated = &[$(TranslatedEvKey::from($expr),)+];
-                assert_eq!(all_codes.len(), all_translated.len());
-
-                let mut all_buttons = HashSet::with_capacity(all_translated.len());
-
-                for (code, translated) in all_codes.iter().zip(all_translated.iter()) {
-                    match *translated {
-                        TranslatedEvKey::Dpad(_, _) => (), // Nothing to do
-                        TranslatedEvKey::Button(button) => {
-                            let has_it = 0 != unsafe {
-                                evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, *code as _)
-                            };
-                            if has_it {
-                                all_buttons.insert(button);
-                            }
-                        },
-                    };
-                }
-                all_buttons
             }
         }
-    };
-    (@ EV_ABS => |$device:ident| {$($EV_CODE:ident => $expr:expr,)+}) => {
-        impl Linuxdev {
-            pub fn translate_ev_abs(&self, code: u16) -> ControllerAxis {
-                let $device = self;
-                match code {
-                    $(input_event_codes::$EV_CODE => $expr,)+
-                    other => ControllerAxis::Other(other as _),
-                }
-            }
-            pub fn untranslate_ev_abs(&self, axis: ControllerAxis) -> u16 {
-                let $device = self;
-                match axis {
-                    $(axis if axis == ($expr) => input_event_codes::$EV_CODE,)+
-                    ControllerAxis::Other(other) => other as _,
-                    _ => unreachable!{},
-                }
-            }
-            pub fn evdev_all_controller_axes_state(&self) -> HashMap<ControllerAxis, f64> {
-                let $device = self;
-                let all_translated = &[$($expr,)+];
-                let mut all_axes = HashMap::with_capacity(all_translated.len());
-                for translated in all_translated.iter() {
-                    if let Some(state) = self.evdev_controller_axis_state(*translated) {
-                        all_axes.insert(*translated, state);
-                    }
-                }
-                all_axes
-            }
-            pub fn evdev_controller_axis_state(&self, axis: ControllerAxis) -> Option<f64> {
-                let libevdev = self.evdev.as_ref().unwrap().libevdev;
-                {
-                    let mut value = 0;
-                    let status = unsafe {
-                        let type_ = input_event_codes::EV_ABS;
-                        let code = self.untranslate_ev_abs(axis);
-                        evdev::libevdev_fetch_event_value(libevdev, type_ as _, code as _, &mut value)
-                    };
-                    if status != 0 {
-                        return Some(value as f64);
-                    };
-                }
-                // Special case for D-pad
-                match axis {
-                    ControllerAxis::DpadX => {
-                        let mut dpad_lt_value = 0;
-                        let mut dpad_rt_value = 0;
-                        let has_dpad_lt = 0 != unsafe { evdev::libevdev_fetch_event_value(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_LEFT as _, &mut dpad_lt_value) };
-                        let has_dpad_rt = 0 != unsafe { evdev::libevdev_fetch_event_value(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_RIGHT as _, &mut dpad_rt_value) };
-                        if !has_dpad_lt && !has_dpad_rt {
-                            None
-                        } else if has_dpad_lt && !has_dpad_rt {
-                            Some(-dpad_lt_value as f64)
-                        } else if !has_dpad_lt && has_dpad_rt {
-                            Some(dpad_rt_value as f64)
-                        } else {
-                            Some((dpad_rt_value - dpad_lt_value) as f64)
-                        }
-                    },
-                    ControllerAxis::DpadY => {
-                        let mut dpad_up_value = 0;
-                        let mut dpad_dn_value = 0;
-                        let has_dpad_up = 0 != unsafe { evdev::libevdev_fetch_event_value(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_UP as _, &mut dpad_up_value) };
-                        let has_dpad_dn = 0 != unsafe { evdev::libevdev_fetch_event_value(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_DOWN as _, &mut dpad_dn_value) };
-                        if !has_dpad_up && !has_dpad_dn {
-                            None
-                        } else if has_dpad_up && !has_dpad_dn {
-                            Some(-dpad_up_value as f64)
-                        } else if !has_dpad_up && has_dpad_dn {
-                            Some(dpad_dn_value as f64)
-                        } else {
-                            Some((dpad_dn_value - dpad_up_value) as f64)
-                        }
-                    },
-                    _ => None,
-                }
-            }
-            pub fn evdev_refresh_all_controller_axes_support(&mut self) {
-                let axes = self.evdev_all_controller_axes_support();
-                self.evdev.as_mut().unwrap().axes = axes;
-            }
-            pub fn evdev_all_controller_axes_support(&self) -> HashMap<ControllerAxis, AxisInfo> {
-                let $device = self;
-                let libevdev = self.evdev.as_ref().unwrap().libevdev;
-
-                let all_codes = &[$(input_event_codes::$EV_CODE,)+];
-                let all_translated = &[$($expr,)+];
-                assert_eq!(all_codes.len(), all_translated.len());
-
-                let mut all_axes = HashMap::with_capacity(all_translated.len());
-
-                for (code, translated) in all_codes.iter().zip(all_translated.iter()) {
-                    let has_it = 0 != unsafe {
-                        evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_ABS as _, *code as _)
-                    };
-                    if has_it {
-                        let absinfo = unsafe {
-                            evdev::libevdev_get_abs_info(libevdev, *code as _)
-                        };
-                        if !absinfo.is_null() {
-                            all_axes.insert(*translated, axis_info_from_linux_absinfo(unsafe { &*absinfo }));
-                        }
-                    }
-                }
-
-                // Special case for D-pad, which may be reported as a button, but we provide it as an axis
-                let has_dpad_up = 0 != unsafe { evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_UP as _) };
-                let has_dpad_dn = 0 != unsafe { evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_DOWN as _) };
-                let has_dpad_y = has_dpad_up || has_dpad_dn;
-                let has_dpad_lt = 0 != unsafe { evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_LEFT as _) };
-                let has_dpad_rt = 0 != unsafe { evdev::libevdev_has_event_code(libevdev, input_event_codes::EV_KEY as _, input_event_codes::BTN_DPAD_RIGHT as _) };
-                let has_dpad_x = has_dpad_lt || has_dpad_rt;
-
-                let dpad_axis_info = AxisInfo {
-                    range: -1. .. 1.,
-                    dead_zone: None,
-                    resolution: 1.,
-                    fuzz: 0.,
-                };
-                if has_dpad_x {
-                    all_axes.insert(ControllerAxis::DpadX, dpad_axis_info.clone());
-                }
-                if has_dpad_y {
-                    all_axes.insert(ControllerAxis::DpadY, dpad_axis_info.clone());
-                }
-                all_axes
+        all_axes
+    }
+    pub fn evdev_all_controller_axes_state(&self) -> HashMap<ControllerAxis, f64> {
+        let mut all_axes = HashMap::with_capacity(ALL_ABS_CODES.len());
+        for code in ALL_ABS_CODES {
+            let axis = self.translate_ev_abs(*code);
+            if let Some(state) = self.evdev_controller_axis_state(axis) {
+                all_axes.insert(axis, state);
             }
         }
-    };
-    (@ EV_REL       => {$($EV_CODE:ident => $expr:expr,)+}) => {};
-    (@ EV_MSC       => {$($EV_CODE:ident => $expr:expr,)+}) => {};
-    (@ EV_SYN       => {$($EV_CODE:ident => $expr:expr,)*}) => {};
-    (@ EV_SW        => {$($EV_CODE:ident => $expr:expr,)*}) => {};
-    (@ EV_LED       => {$($EV_CODE:ident => $expr:expr,)*}) => {};
-    (@ EV_SND       => {$($EV_CODE:ident => $expr:expr,)*}) => {};
-    (@ EV_REP       => {$($EV_CODE:ident => $expr:expr,)*}) => {};
-    (@ EV_FF        => {$($EV_CODE:ident => $expr:expr,)*}) => {};
-    (@ EV_PWR       => {$($EV_CODE:ident => $expr:expr,)*}) => {};
-    (@ EV_FF_STATUS => {$($EV_CODE:ident => $expr:expr,)*}) => {};
+        all_axes
+    }
+    pub fn evdev_controller_axis_state(&self, axis: ControllerAxis) -> Option<f64> {
+        let libevdev = self.evdev.as_ref().unwrap().libevdev;
+        let mut value = 0;
+        let status = unsafe {
+            let type_ = input_event_codes::EV_ABS;
+            let code = self.untranslate_ev_abs(axis)?;
+            evdev::libevdev_fetch_event_value(libevdev, type_ as _, code as _, &mut value)
+        };
+        match status {
+            0 => None,
+            _ => Some(value as f64),
+        }
+    }
 }
 
-event_mapping!{
-    EV_KEY => {
-        // Wheels
-        BTN_GEAR_DOWN => ControllerButton::GearDown,
-        BTN_GEAR_UP => ControllerButton::GearUp,
+static ALL_BTN_CODES: &[u16] = &[
+    input_event_codes::BTN_GEAR_DOWN ,
+    input_event_codes::BTN_GEAR_UP   ,
+    input_event_codes::BTN_TRIGGER   ,
+    input_event_codes::BTN_THUMB     ,
+    input_event_codes::BTN_THUMB2    ,
+    input_event_codes::BTN_TOP       ,
+    input_event_codes::BTN_TOP2      ,
+    input_event_codes::BTN_PINKIE    ,
+    input_event_codes::BTN_DEAD      ,
+    input_event_codes::BTN_BASE      ,
+    input_event_codes::BTN_BASE2     ,
+    input_event_codes::BTN_BASE3     ,
+    input_event_codes::BTN_BASE4     ,
+    input_event_codes::BTN_BASE5     ,
+    input_event_codes::BTN_BASE6     ,
+    input_event_codes::BTN_A         ,
+    input_event_codes::BTN_B         ,
+    input_event_codes::BTN_C         ,
+    input_event_codes::BTN_X         ,
+    input_event_codes::BTN_Y         ,
+    input_event_codes::BTN_Z         ,
+    input_event_codes::BTN_TL        ,
+    input_event_codes::BTN_TR        ,
+    input_event_codes::BTN_TL2       ,
+    input_event_codes::BTN_TR2       ,
+    input_event_codes::BTN_SELECT    ,
+    input_event_codes::BTN_START     ,
+    input_event_codes::BTN_MODE      ,
+    input_event_codes::BTN_THUMBL    ,
+    input_event_codes::BTN_THUMBR    ,
+    input_event_codes::BTN_DPAD_UP   ,
+    input_event_codes::BTN_DPAD_DOWN ,
+    input_event_codes::BTN_DPAD_LEFT ,
+    input_event_codes::BTN_DPAD_RIGHT,
+    input_event_codes::BTN_0         ,
+    input_event_codes::BTN_1         ,
+    input_event_codes::BTN_2         ,
+    input_event_codes::BTN_3         ,
+    input_event_codes::BTN_4         ,
+    input_event_codes::BTN_5         ,
+    input_event_codes::BTN_6         ,
+    input_event_codes::BTN_7         ,
+    input_event_codes::BTN_8         ,
+    input_event_codes::BTN_9         ,
+];
 
-        // Joysticks
-        BTN_TRIGGER => ControllerButton::Trigger,
-        BTN_THUMB => ControllerButton::Thumb(0),
-        BTN_THUMB2 => ControllerButton::Thumb(1),
-        BTN_TOP => ControllerButton::Top(0),
-        BTN_TOP2 => ControllerButton::Top(1),
-        BTN_PINKIE => ControllerButton::Pinkie,
-        BTN_DEAD => ControllerButton::Dead,
-        BTN_BASE => ControllerButton::Base(0),
-        BTN_BASE2 => ControllerButton::Base(1),
-        BTN_BASE3 => ControllerButton::Base(2),
-        BTN_BASE4 => ControllerButton::Base(3),
-        BTN_BASE5 => ControllerButton::Base(4),
-        BTN_BASE6 => ControllerButton::Base(5),
+static ALL_ABS_CODES: &[u16] = &[
+    input_event_codes::ABS_THROTTLE,
+    input_event_codes::ABS_RUDDER  ,
+    input_event_codes::ABS_WHEEL   ,
+    input_event_codes::ABS_GAS     ,
+    input_event_codes::ABS_BRAKE   ,
+    input_event_codes::ABS_HAT0X   ,
+    input_event_codes::ABS_HAT0Y   ,
+    input_event_codes::ABS_HAT1X   ,
+    input_event_codes::ABS_HAT1Y   ,
+    input_event_codes::ABS_HAT2X   ,
+    input_event_codes::ABS_HAT2Y   ,
+    input_event_codes::ABS_HAT3X   ,
+    input_event_codes::ABS_HAT3Y   ,
+    input_event_codes::ABS_X       ,
+    input_event_codes::ABS_Y       ,
+    input_event_codes::ABS_Z       ,
+    input_event_codes::ABS_RX      ,
+    input_event_codes::ABS_RY      ,
+    input_event_codes::ABS_RZ      ,
+];
 
-        // Gamepads
-        BTN_A => ControllerButton::A,
-        BTN_B => ControllerButton::B,
-        BTN_C => ControllerButton::C,
-        BTN_X => ControllerButton::X,
-        BTN_Y => ControllerButton::Y,
-        BTN_Z => ControllerButton::Z,
-        BTN_TL => ControllerButton::LShoulder,
-        BTN_TR => ControllerButton::RShoulder,
-        BTN_TL2 => ControllerButton::LShoulder2,
-        BTN_TR2 => ControllerButton::RShoulder2,
-        BTN_SELECT => ControllerButton::Select,
-        BTN_START => ControllerButton::Start,
-        BTN_MODE => ControllerButton::Mode,
-        BTN_THUMBL => ControllerButton::LStickClick,
-        BTN_THUMBR => ControllerButton::RStickClick,
-        BTN_DPAD_UP => (ControllerAxis::DpadY, -1),
-        BTN_DPAD_DOWN => (ControllerAxis::DpadY, 1),
-        BTN_DPAD_LEFT => (ControllerAxis::DpadX, -1),
-        BTN_DPAD_RIGHT => (ControllerAxis::DpadX, 1),
-
-        // Misc
-        BTN_0 => ControllerButton::Num(0),
-        BTN_1 => ControllerButton::Num(1),
-        BTN_2 => ControllerButton::Num(2),
-        BTN_3 => ControllerButton::Num(3),
-        BTN_4 => ControllerButton::Num(4),
-        BTN_5 => ControllerButton::Num(5),
-        BTN_6 => ControllerButton::Num(6),
-        BTN_7 => ControllerButton::Num(7),
-        BTN_8 => ControllerButton::Num(8),
-        BTN_9 => ControllerButton::Num(9),
-    },
-    // We don't handle these; they are relevant for e.g mice, but not controllers.
-    // Or are they?
-    EV_REL => {
-        REL_X    => None,
-        REL_Y    => None,
-        REL_Z    => None,
-        REL_RX   => None,
-        REL_RY   => None,
-        REL_RZ   => None,
-    },
-    EV_ABS => |device| {
-        ABS_X          => if device.is_a_gamepad() {
-            ControllerAxis::LX
-        } else {
-            ControllerAxis::X
-        },
-        ABS_Y          => if device.is_a_gamepad() {
-            ControllerAxis::LY
-        } else {
-            ControllerAxis::Y
-        },
-        ABS_Z          => if device.is_a_gamepad() {
-            ControllerAxis::LTrigger
-        } else {
-            ControllerAxis::Z
-        },
-        // XXX: The doc for input_absinfo says that ABS_RX, ABS_RY and ABS_RZ are
-        // rotational axes (for joysticks). What the heck? How is this any different
-        // from the joystick's "position" ?
-        // Also these definitely map to my gamepad's right stick.
-        ABS_RX         => ControllerAxis::RX,
-        ABS_RY         => ControllerAxis::RY,
-        ABS_RZ         => if device.is_a_gamepad() {
-            ControllerAxis::RTrigger
-        } else {
-            ControllerAxis::RZ
-        },
-        ABS_THROTTLE   => ControllerAxis::Throttle,
-        ABS_RUDDER     => ControllerAxis::Rudder,
-        ABS_WHEEL      => ControllerAxis::Wheel,
-        ABS_GAS        => ControllerAxis::Gas,
-        ABS_BRAKE      => ControllerAxis::Brake,
-        ABS_HAT0X      => if device.is_a_gamepad() {
-            ControllerAxis::DpadX
-        } else {
-            ControllerAxis::HatX(0)
-        },
-        ABS_HAT0Y      => if device.is_a_gamepad() {
-            ControllerAxis::DpadY
-        } else {
-            ControllerAxis::HatY(0)
-        },
-        ABS_HAT1X      => ControllerAxis::HatX(1),
-        ABS_HAT1Y      => ControllerAxis::HatY(1),
-        ABS_HAT2X      => ControllerAxis::HatX(2),
-        ABS_HAT2Y      => ControllerAxis::HatY(2),
-        ABS_HAT3X      => ControllerAxis::HatX(3),
-        ABS_HAT3Y      => ControllerAxis::HatY(3),
-    },
-    EV_MSC => {
-        MSC_TIMESTAMP => {},
-    },
-    EV_SYN => {},
-    EV_SW  => {},
-    EV_LED => {},
-    EV_SND => {},
-    EV_REP => {},
-    EV_FF  => {},
-    EV_PWR => {},
-    EV_FF_STATUS => {},
+fn controller_button_to_ev_key_code(button: ControllerButton) -> Option<u16> {
+    match button {
+        ControllerButton::GearDown    => Some(input_event_codes::BTN_GEAR_DOWN ),
+        ControllerButton::GearUp      => Some(input_event_codes::BTN_GEAR_UP   ),
+        ControllerButton::Trigger     => Some(input_event_codes::BTN_TRIGGER   ),
+        ControllerButton::Thumb(0)    => Some(input_event_codes::BTN_THUMB     ),
+        ControllerButton::Thumb(1)    => Some(input_event_codes::BTN_THUMB2    ),
+        ControllerButton::Thumb(_)    => None,
+        ControllerButton::Top(0)      => Some(input_event_codes::BTN_TOP       ),
+        ControllerButton::Top(1)      => Some(input_event_codes::BTN_TOP2      ),
+        ControllerButton::Top(_)      => None,
+        ControllerButton::Pinkie      => Some(input_event_codes::BTN_PINKIE    ),
+        ControllerButton::Dead        => Some(input_event_codes::BTN_DEAD      ),
+        ControllerButton::Base(0)     => Some(input_event_codes::BTN_BASE      ),
+        ControllerButton::Base(1)     => Some(input_event_codes::BTN_BASE2     ),
+        ControllerButton::Base(2)     => Some(input_event_codes::BTN_BASE3     ),
+        ControllerButton::Base(3)     => Some(input_event_codes::BTN_BASE4     ),
+        ControllerButton::Base(4)     => Some(input_event_codes::BTN_BASE5     ),
+        ControllerButton::Base(5)     => Some(input_event_codes::BTN_BASE6     ),
+        ControllerButton::Base(_)     => None,
+        ControllerButton::A           => Some(input_event_codes::BTN_A         ),
+        ControllerButton::B           => Some(input_event_codes::BTN_B         ),
+        ControllerButton::C           => Some(input_event_codes::BTN_C         ),
+        ControllerButton::X           => Some(input_event_codes::BTN_X         ),
+        ControllerButton::Y           => Some(input_event_codes::BTN_Y         ),
+        ControllerButton::Z           => Some(input_event_codes::BTN_Z         ),
+        ControllerButton::LShoulder   => Some(input_event_codes::BTN_TL        ),
+        ControllerButton::RShoulder   => Some(input_event_codes::BTN_TR        ),
+        ControllerButton::LShoulder2  => Some(input_event_codes::BTN_TL2       ),
+        ControllerButton::RShoulder2  => Some(input_event_codes::BTN_TR2       ),
+        ControllerButton::Select      => Some(input_event_codes::BTN_SELECT    ),
+        ControllerButton::Start       => Some(input_event_codes::BTN_START     ),
+        ControllerButton::Mode        => Some(input_event_codes::BTN_MODE      ),
+        ControllerButton::LStickClick => Some(input_event_codes::BTN_THUMBL    ),
+        ControllerButton::RStickClick => Some(input_event_codes::BTN_THUMBR    ),
+        ControllerButton::DpadUp      => Some(input_event_codes::BTN_DPAD_UP   ),
+        ControllerButton::DpadDown    => Some(input_event_codes::BTN_DPAD_DOWN ),
+        ControllerButton::DpadLeft    => Some(input_event_codes::BTN_DPAD_LEFT ),
+        ControllerButton::DpadRight   => Some(input_event_codes::BTN_DPAD_RIGHT),
+        ControllerButton::Num(0)      => Some(input_event_codes::BTN_0         ),
+        ControllerButton::Num(1)      => Some(input_event_codes::BTN_1         ),
+        ControllerButton::Num(2)      => Some(input_event_codes::BTN_2         ),
+        ControllerButton::Num(3)      => Some(input_event_codes::BTN_3         ),
+        ControllerButton::Num(4)      => Some(input_event_codes::BTN_4         ),
+        ControllerButton::Num(5)      => Some(input_event_codes::BTN_5         ),
+        ControllerButton::Num(6)      => Some(input_event_codes::BTN_6         ),
+        ControllerButton::Num(7)      => Some(input_event_codes::BTN_7         ),
+        ControllerButton::Num(8)      => Some(input_event_codes::BTN_8         ),
+        ControllerButton::Num(9)      => Some(input_event_codes::BTN_9         ),
+        ControllerButton::Num(_)      => None,
+        ControllerButton::Other(other)=> Some(other as _),
+    }
 }
+
+fn controller_button_from_ev_key_code(code: u16) -> ControllerButton {
+    match code {
+        input_event_codes::BTN_GEAR_DOWN  => ControllerButton::GearDown,
+        input_event_codes::BTN_GEAR_UP    => ControllerButton::GearUp,
+        input_event_codes::BTN_TRIGGER    => ControllerButton::Trigger,
+        input_event_codes::BTN_THUMB      => ControllerButton::Thumb(0),
+        input_event_codes::BTN_THUMB2     => ControllerButton::Thumb(1),
+        input_event_codes::BTN_TOP        => ControllerButton::Top(0),
+        input_event_codes::BTN_TOP2       => ControllerButton::Top(1),
+        input_event_codes::BTN_PINKIE     => ControllerButton::Pinkie,
+        input_event_codes::BTN_DEAD       => ControllerButton::Dead,
+        input_event_codes::BTN_BASE       => ControllerButton::Base(0),
+        input_event_codes::BTN_BASE2      => ControllerButton::Base(1),
+        input_event_codes::BTN_BASE3      => ControllerButton::Base(2),
+        input_event_codes::BTN_BASE4      => ControllerButton::Base(3),
+        input_event_codes::BTN_BASE5      => ControllerButton::Base(4),
+        input_event_codes::BTN_BASE6      => ControllerButton::Base(5),
+        input_event_codes::BTN_A          => ControllerButton::A,
+        input_event_codes::BTN_B          => ControllerButton::B,
+        input_event_codes::BTN_C          => ControllerButton::C,
+        input_event_codes::BTN_X          => ControllerButton::X,
+        input_event_codes::BTN_Y          => ControllerButton::Y,
+        input_event_codes::BTN_Z          => ControllerButton::Z,
+        input_event_codes::BTN_TL         => ControllerButton::LShoulder,
+        input_event_codes::BTN_TR         => ControllerButton::RShoulder,
+        input_event_codes::BTN_TL2        => ControllerButton::LShoulder2,
+        input_event_codes::BTN_TR2        => ControllerButton::RShoulder2,
+        input_event_codes::BTN_SELECT     => ControllerButton::Select,
+        input_event_codes::BTN_START      => ControllerButton::Start,
+        input_event_codes::BTN_MODE       => ControllerButton::Mode,
+        input_event_codes::BTN_THUMBL     => ControllerButton::LStickClick,
+        input_event_codes::BTN_THUMBR     => ControllerButton::RStickClick,
+        input_event_codes::BTN_DPAD_UP    => ControllerButton::DpadUp,
+        input_event_codes::BTN_DPAD_DOWN  => ControllerButton::DpadDown,
+        input_event_codes::BTN_DPAD_LEFT  => ControllerButton::DpadLeft,
+        input_event_codes::BTN_DPAD_RIGHT => ControllerButton::DpadRight,
+        input_event_codes::BTN_0          => ControllerButton::Num(0),
+        input_event_codes::BTN_1          => ControllerButton::Num(1),
+        input_event_codes::BTN_2          => ControllerButton::Num(2),
+        input_event_codes::BTN_3          => ControllerButton::Num(3),
+        input_event_codes::BTN_4          => ControllerButton::Num(4),
+        input_event_codes::BTN_5          => ControllerButton::Num(5),
+        input_event_codes::BTN_6          => ControllerButton::Num(6),
+        input_event_codes::BTN_7          => ControllerButton::Num(7),
+        input_event_codes::BTN_8          => ControllerButton::Num(8),
+        input_event_codes::BTN_9          => ControllerButton::Num(9),
+        other => ControllerButton::Other(other as _),
+    }
+}
+
+fn controller_axis_from_ev_abs_code_common(code: u16) -> ControllerAxis {
+    match code {
+        input_event_codes::ABS_THROTTLE => ControllerAxis::Throttle,
+        input_event_codes::ABS_RUDDER   => ControllerAxis::Rudder  ,
+        input_event_codes::ABS_WHEEL    => ControllerAxis::Wheel   ,
+        input_event_codes::ABS_GAS      => ControllerAxis::Gas     ,
+        input_event_codes::ABS_BRAKE    => ControllerAxis::Brake   ,
+        input_event_codes::ABS_HAT1X    => ControllerAxis::HatX(1) ,
+        input_event_codes::ABS_HAT1Y    => ControllerAxis::HatY(1) ,
+        input_event_codes::ABS_HAT2X    => ControllerAxis::HatX(2) ,
+        input_event_codes::ABS_HAT2Y    => ControllerAxis::HatY(2) ,
+        input_event_codes::ABS_HAT3X    => ControllerAxis::HatX(3) ,
+        input_event_codes::ABS_HAT3Y    => ControllerAxis::HatY(3) ,
+        input_event_codes::ABS_X        => unreachable!{},
+        input_event_codes::ABS_Y        => unreachable!{},
+        input_event_codes::ABS_Z        => unreachable!{},
+        input_event_codes::ABS_RX       => unreachable!{},
+        input_event_codes::ABS_RY       => unreachable!{},
+        input_event_codes::ABS_RZ       => unreachable!{},
+        input_event_codes::ABS_HAT0X    => unreachable!{},
+        input_event_codes::ABS_HAT0Y    => unreachable!{},
+        other => ControllerAxis::Other(other as _),
+    }
+}
+fn controller_axis_from_ev_abs_code_for_gamepads_or_steering_wheels(code: u16) -> ControllerAxis {
+    match code {
+        input_event_codes::ABS_X        => ControllerAxis::LX,
+        input_event_codes::ABS_Y        => ControllerAxis::LY,
+        input_event_codes::ABS_Z        => ControllerAxis::LTrigger,
+        input_event_codes::ABS_RX       => ControllerAxis::RX,
+        input_event_codes::ABS_RY       => ControllerAxis::RY,
+        input_event_codes::ABS_RZ       => ControllerAxis::RTrigger,
+        input_event_codes::ABS_HAT0X    => ControllerAxis::DpadX,
+        input_event_codes::ABS_HAT0Y    => ControllerAxis::DpadY,
+        _ => controller_axis_from_ev_abs_code_common(code),
+    }
+}
+fn controller_axis_from_ev_abs_code_for_joysticks(code: u16) -> ControllerAxis {
+    match code {
+        input_event_codes::ABS_X        => ControllerAxis::JoystickX,
+        input_event_codes::ABS_Y        => ControllerAxis::JoystickY,
+        input_event_codes::ABS_Z        => ControllerAxis::JoystickZ,
+        input_event_codes::ABS_RX       => ControllerAxis::JoystickRotationX,
+        input_event_codes::ABS_RY       => ControllerAxis::JoystickRotationY,
+        input_event_codes::ABS_RZ       => ControllerAxis::JoystickRotationZ,
+        input_event_codes::ABS_HAT0X    => ControllerAxis::HatX(0),
+        input_event_codes::ABS_HAT0Y    => ControllerAxis::HatY(0),
+        _ => controller_axis_from_ev_abs_code_common(code),
+    }
+}
+
+fn controller_axis_to_ev_abs_code_for_gamepads_or_steering_wheels(axis: ControllerAxis) -> Option<u16> {
+    match axis {
+        ControllerAxis::Throttle          => Some(input_event_codes::ABS_THROTTLE),
+        ControllerAxis::Rudder            => Some(input_event_codes::ABS_RUDDER  ),
+        ControllerAxis::Wheel             => Some(input_event_codes::ABS_WHEEL   ),
+        ControllerAxis::Gas               => Some(input_event_codes::ABS_GAS     ),
+        ControllerAxis::Brake             => Some(input_event_codes::ABS_BRAKE   ),
+        ControllerAxis::LX                => Some(input_event_codes::ABS_X       ),
+        ControllerAxis::LY                => Some(input_event_codes::ABS_Y       ),
+        ControllerAxis::RX                => Some(input_event_codes::ABS_RX      ),
+        ControllerAxis::RY                => Some(input_event_codes::ABS_RY      ),
+        ControllerAxis::LTrigger          => Some(input_event_codes::ABS_Z       ),
+        ControllerAxis::RTrigger          => Some(input_event_codes::ABS_RZ      ),
+        ControllerAxis::DpadX             => Some(input_event_codes::ABS_HAT0X   ),
+        ControllerAxis::DpadY             => Some(input_event_codes::ABS_HAT0Y   ),
+        ControllerAxis::HatX(1)           => Some(input_event_codes::ABS_HAT1X   ),
+        ControllerAxis::HatY(1)           => Some(input_event_codes::ABS_HAT1Y   ),
+        ControllerAxis::HatX(2)           => Some(input_event_codes::ABS_HAT2X   ),
+        ControllerAxis::HatY(2)           => Some(input_event_codes::ABS_HAT2Y   ),
+        ControllerAxis::HatX(3)           => Some(input_event_codes::ABS_HAT3X   ),
+        ControllerAxis::HatY(3)           => Some(input_event_codes::ABS_HAT3Y   ),
+        ControllerAxis::HatX(_)           => None,
+        ControllerAxis::HatY(_)           => None,
+        ControllerAxis::Other(other)      => Some(other as _),
+        ControllerAxis::JoystickX         => None,
+        ControllerAxis::JoystickY         => None,
+        ControllerAxis::JoystickZ         => None,
+        ControllerAxis::JoystickRotationX => None,
+        ControllerAxis::JoystickRotationY => None,
+        ControllerAxis::JoystickRotationZ => None,
+    }
+}
+
+fn controller_axis_to_ev_abs_code_for_joysticks(axis: ControllerAxis) -> Option<u16> {
+    match axis {
+        ControllerAxis::Throttle          => Some(input_event_codes::ABS_THROTTLE),
+        ControllerAxis::Rudder            => Some(input_event_codes::ABS_RUDDER  ),
+        ControllerAxis::Wheel             => Some(input_event_codes::ABS_WHEEL   ),
+        ControllerAxis::Gas               => Some(input_event_codes::ABS_GAS     ),
+        ControllerAxis::Brake             => Some(input_event_codes::ABS_BRAKE   ),
+        ControllerAxis::JoystickX         => Some(input_event_codes::ABS_X       ),
+        ControllerAxis::JoystickY         => Some(input_event_codes::ABS_Y       ),
+        ControllerAxis::JoystickZ         => Some(input_event_codes::ABS_Z       ),
+        ControllerAxis::JoystickRotationX => Some(input_event_codes::ABS_RX      ),
+        ControllerAxis::JoystickRotationY => Some(input_event_codes::ABS_RY      ),
+        ControllerAxis::JoystickRotationZ => Some(input_event_codes::ABS_RZ      ),
+        ControllerAxis::HatX(0)           => Some(input_event_codes::ABS_HAT0X   ),
+        ControllerAxis::HatY(0)           => Some(input_event_codes::ABS_HAT0Y   ),
+        ControllerAxis::HatX(1)           => Some(input_event_codes::ABS_HAT1X   ),
+        ControllerAxis::HatY(1)           => Some(input_event_codes::ABS_HAT1Y   ),
+        ControllerAxis::HatX(2)           => Some(input_event_codes::ABS_HAT2X   ),
+        ControllerAxis::HatY(2)           => Some(input_event_codes::ABS_HAT2Y   ),
+        ControllerAxis::HatX(3)           => Some(input_event_codes::ABS_HAT3X   ),
+        ControllerAxis::HatY(3)           => Some(input_event_codes::ABS_HAT3Y   ),
+        ControllerAxis::HatX(_)           => None,
+        ControllerAxis::HatY(_)           => None,
+        ControllerAxis::Other(other)      => Some(other as _),
+        ControllerAxis::LX                => None,
+        ControllerAxis::LY                => None,
+        ControllerAxis::DpadX             => None,
+        ControllerAxis::DpadY             => None,
+        ControllerAxis::RX                => None,
+        ControllerAxis::RY                => None,
+        ControllerAxis::LTrigger          => None,
+        ControllerAxis::RTrigger          => None,
+    }
+}
+
 
 impl Linuxdev {
     pub fn translate_linux_input_event(&self, with_token: LinuxdevToken, ev: &linux_input::input_event) -> Option<Event> {
@@ -1191,19 +1362,16 @@ impl Linuxdev {
             let c::timeval { tv_sec, tv_usec } = time;
             EventInstant(OsEventInstant::LinuxInputEventTimeval { tv_sec, tv_usec })
         };
-        let controller = HidID(OsHidID::Linuxdev(with_token));
+        let controller = DeviceID(OsDeviceID::Linuxdev(with_token));
         match type_ {
             input_event_codes::EV_KEY => {
-                match self.translate_ev_key(code) {
-                    TranslatedEvKey::Button(button) => Some(if value == 0 {
-                        Event::ControllerButtonReleased { controller, instant, button }
-                    } else {
-                        Event::ControllerButtonPressed { controller, instant, button }
-                    }),
-                    TranslatedEvKey::Dpad(axis, value) => Some(Event::ControllerAxisMotion {
-                        controller, instant, axis, value: value as _,
-                    }),
-                }
+                let button = self.translate_ev_key(code);
+                let ev = if value == 0 {
+                    Event::ControllerButtonReleased { controller, instant, button }
+                } else {
+                    Event::ControllerButtonPressed { controller, instant, button }
+                };
+                Some(ev)
             },
             input_event_codes::EV_ABS => {
                 Some(Event::ControllerAxisMotion {
@@ -1224,7 +1392,7 @@ impl Linuxdev {
         }
     }
 
-    fn pump_evdev(&self, with_token: LinuxdevToken, pending_translated_events: &mut VecDeque<Event>) {
+    fn pump_evdev(&self, with_token: LinuxdevToken, pending_translated_events: &mut VecDeque<Event>) -> device::Result<()> {
         if let Some(evdev) = self.evdev.as_ref() {
             let mut ev: linux_input::input_event = unsafe { mem::zeroed() };
             let mut read_flag = libevdev_read_flag::LIBEVDEV_READ_FLAG_NORMAL;
@@ -1237,7 +1405,7 @@ impl Linuxdev {
                         if read_flag as u32 == libevdev_read_flag::LIBEVDEV_READ_FLAG_SYNC as u32 {
                             read_flag = libevdev_read_flag::LIBEVDEV_READ_FLAG_NORMAL;
                         } else {
-                            break;
+                            break Ok(());
                         }
                     },
                     s if s == libevdev_read_status::LIBEVDEV_READ_STATUS_SUCCESS as _ => {
@@ -1251,115 +1419,145 @@ impl Linuxdev {
                             pending_translated_events.push_back(ev);
                         }
                     },
-                    other => {
-                        warn!("Controller {}: libevdev_next_event() returned -{}", self.display(), Errno::from_i32(-other));
-                        break;
-                    },
+                    s if s == -c::ENODEV => break device::disconnected(),
+                    other => break device::failed(format!("Controller {}: libevdev_next_event() returned -{}", self.display(), Errno::from_i32(-other))),
                 };
             }
+        } else {
+            Ok(())
         }
     }
 
-    fn controller_info(&self) -> hid::Result<OsControllerInfo> {
-        let evdev = self.evdev.as_ref().unwrap();
-        let info = OsControllerInfo {
-            is_a_gamepad: self.is_a_gamepad(),
-            is_a_joystick: self.is_a_joystick(),
-            is_a_steering_wheel: self.is_a_steering_wheel(),
-            buttons: evdev.buttons.clone(),
-            axes: evdev.axes.clone(),
-        };
-        Ok(info)
-    }
-    fn controller_state(&self) -> hid::Result<OsControllerState> {
+    fn controller_state(&self) -> device::Result<OsControllerState> {
         let state = OsControllerState {
             buttons: self.evdev_all_controller_buttons_state(),
             axes: self.evdev_all_controller_axes_state(),
         };
         Ok(state)
     }
-    fn controller_button_state(&self, button: ControllerButton) -> hid::Result<ButtonState> {
+    fn controller_button_state(&self, button: ControllerButton) -> device::Result<ButtonState> {
         match self.evdev_controller_button_state(button) {
             Some(state) => Ok(state),
-            None => hid::not_supported_by_device_unexplained(),
+            None => device::not_supported_by_device_unexplained(),
         }
     }
-    fn controller_axis_state(&self, axis: ControllerAxis) -> hid::Result<f64> {
+    fn controller_axis_state(&self, axis: ControllerAxis) -> device::Result<f64> {
         match self.evdev_controller_axis_state(axis) {
             Some(state) => Ok(state),
-            None => hid::not_supported_by_device_unexplained(),
+            None => device::not_supported_by_device_unexplained(),
         }
     }
-    fn play_rumble_effect(&self, effect: &RumbleEffect) -> hid::Result<()> {
+
+
+    //
+    // For this part, see
+    // https://www.kernel.org/doc/Documentation/input/ff.txt
+    //
+
+    fn controller_set_vibration(&self, vibration: &VibrationState) -> device::Result<()> {
         if self.fd.is_none() || !self.fd_has_write_access {
-            return hid::not_supported_by_device("Device file could not be opened for write access");
+            return device::not_supported_by_device("Device file could not be opened for write access");
         }
+        if self.max_simultaneous_ff_effects < 1 {
+            return device::not_supported_by_device("Device does not support playing at least one force feedback effect");
+        }
+        if vibration.is_zero() && self.rumble_ff_id.get() == -1 {
+            return Ok(());
+        }
+
+        let mut ff = vibration.to_ff_effect();
+        let number_of_times_to_play = ::std::i32::MAX * vibration.is_zero() as i32;
+
+        match self.rumble_ff_id.get() {
+            -1 => {
+                assert!(!vibration.is_zero());
+                assert_eq!(ff.id, -1);
+                self.register_ff_effect(&mut ff)?;
+                assert_ne!(ff.id, -1);
+                self.rumble_ff_id.set(ff.id);
+                // Full power!! we want the vibration to reflect the full capabilities
+                // of the device; the VibrationState is already a percentage of the
+                // amount of vibration wanted by the user, so let's not be slowed
+                // down by some default gain value that is lower than 100%.
+                let max_ff_gain = 0xffff_i32;
+                let status = self.set_ff_gain(max_ff_gain);
+                match status {
+                    Err(device::Error::DeviceDisconnected(_)) => status?,
+                    Err(e) => warn!("Controller {}: Could not set FF_GAIN to {:x}: write() returned {}", self.display(), max_ff_gain, e),
+                    Ok(()) => (),
+                };
+                self.write_ff_event(ff.id as u16, number_of_times_to_play)
+            },
+            id => {
+                ff.id = id;
+                self.register_ff_effect(&mut ff)?;
+                self.write_ff_event(id as u16, number_of_times_to_play)
+            },
+        }
+    }
+    // The FF_GAIN property defines a factor for the strength of force-feedback
+    // effects. It ranges from 0% to 100% (0 to 0xffff).
+    // The default value is not specified, but I've seen it set to something
+    // like 75%.
+    fn set_ff_gain(&self, gain: i32) -> device::Result<()> {
+        assert!(gain >= 0);
+        assert!(gain <= 0xffff);
+        self.write_ff_event(ff::FF_GAIN as u16, gain)
+    }
+    fn register_ff_effect(&self, ff: &mut linux_input::ff_effect) -> device::Result<()> {
         let fd = self.fd.unwrap();
+        assert!(self.fd_has_write_access);
 
-
-        if self.last_ff_id.get() != -1 {
-            let status = unsafe {
-                ev_ioctl::unregister_ff_effect(fd, self.last_ff_id.get() as _)
-            };
-            if let Err(e) = status {
-                error!("Controller {}: could not unregister force feedback effect: ioctl() generated {}", self.display(), e);
-            }
-        }
-
-        let mut ff = effect.to_ff_effect();
-
-        // Upload the effect. This also changes its id from -1 to some valid value given by the kernel.
+        // Upload the effect. If its id is set to -1, the kernel or driver changes it to a valid value.
         let status = unsafe {
-            ev_ioctl::register_ff_effect(fd, &mut ff)
+            ev_ioctl::register_ff_effect(fd, ff)
         };
-        if let Err(e) = status {
-            return hid::not_supported_by_device(format!("Controller {}: could not unregister force feedback effect: ioctl() generated {}", self.display(), e));
+        match status {
+            Err(nix::Error::Sys(Errno::ENODEV)) => return device::disconnected(),
+            Err(e) => return device::not_supported_by_device(format!("Controller {}: could not register force feedback effect: ioctl() generated {}", self.display(), e)),
+            Ok(_) => (),
         }
         if ff.id == -1 {
-            return hid::not_supported_by_device(format!("Controller {}: force feedback effect was not set by the kernel; We have no way to reference it later!", self.display()));
-        }
-        self.last_ff_id.set(ff.id);
-
-        let play = linux_input::input_event {
-            type_: input_event_codes::EV_FF,
-            code: ff.id as _,
-            value: 1,
-            time: unsafe { mem::zeroed() },
-        };
-        loop {
-            let nwritten = unsafe {
-                c::write(fd, &play as *const _ as _, mem::size_of_val(&play))
-            };
-            if nwritten == -1 {
-                match Errno::last() {
-                    Errno::EAGAIN | errno::EWOULDBLOCK => continue,
-                    err => error!("Controller {}: could not play rumble effect: write() generated {}", self.display(), err),
-                };
-            }
-            break;
+            return device::not_supported_by_device(format!("Controller {}: force feedback effect ID was not set by the kernel or driver; We have no way to reference it later!", self.display()));
         }
         Ok(())
     }
+    fn write_ff_event(&self, code: u16, value: i32) -> device::Result<()> {
+        let fd = self.fd.unwrap();
+        assert!(self.fd_has_write_access);
+
+        let ev = linux_input::input_event {
+            type_: input_event_codes::EV_FF,
+            code,
+            value,
+            time: unsafe { mem::zeroed() },
+        };
+        loop {
+            let size = mem::size_of_val(&ev);
+            let nwritten = unsafe {
+                c::write(fd, &ev as *const _ as _, size)
+            };
+            if nwritten == -1 {
+                #[allow(unreachable_patterns)] // EAGAIN and EWOULDBLOCK are the same on Linux, but maybe not on all other systems. It's more of a paranoid "what if" matter.
+                match Errno::last() {
+                    Errno::EAGAIN | errno::EWOULDBLOCK => continue,
+                    Errno::ENODEV => break device::disconnected(),
+                    err => break device::not_supported_by_device(format!("Controller {}: could not play rumble effect: write() generated {}", self.display(), err)),
+                };
+            } else if nwritten != size as isize {
+                // Like, this really should never happen. But let's not assert on it.
+                break device::not_supported_by_device_unexplained();
+            }
+            break Ok(());
+        }
+    }
 }
 
-impl RumbleEffect {
+impl VibrationState {
     pub(self) fn to_ff_effect(&self) -> linux_input::ff_effect {
         let &Self {
-            ref duration, weak_magnitude, strong_magnitude,
+            weak_magnitude, strong_magnitude,
         } = self;
-
-        // I don't know where else to put this function. It's fine here.
-        // From linux/input.h:
-        // "Values above 32767 ms (0x7fff) should not be used and have unspecified results."
-        fn duration_to_safe_u16_millis(d: &Duration) -> u16 {
-            let ms = time_utils::duration_to_millis(d);
-            let max = 0x7fff;
-            if ms > max {
-                warn!("Duration for rumble effect will be clamped to {} ms (was {} ms) to prevent unspecified behaviour", max, ms);
-                return max as u16;
-            }
-            ms as u16
-        }
 
         linux_input::ff_effect {
             type_: ff::FF_RUMBLE,
@@ -1377,7 +1575,9 @@ impl RumbleEffect {
                 interval: 0,
             },
             replay: linux_input::ff_replay {
-                length: duration_to_safe_u16_millis(duration),
+                // From linux/input.h:
+                // "Values above 32767 ms (0x7fff) should not be used and have unspecified results."
+                length: 0x7fff,
                 delay: 0,
             },
             u: {

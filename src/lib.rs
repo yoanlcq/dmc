@@ -39,8 +39,9 @@ pub mod cursor;
 pub use cursor::{Cursor, SystemCursor, RgbaCursorData, RgbaCursorAnimFrame};
 pub mod window;
 pub use window::{Window, WindowSettings, WindowTypeHint, NetWMWindowType};
-pub mod hid;
+pub mod device;
 pub mod event;
+pub use event::{Event, EventInstant};
 pub mod gl;
 // pub mod battery;
 
@@ -56,7 +57,7 @@ macro_rules! os_mod {
                 OsCursor,
                 OsGLPixelFormat, OsGLContext, OsGLProc,
                 OsEventInstant,
-                OsHidID,
+                OsDeviceID,
                 OsControllerState, OsControllerInfo,
                 OsKeyboardState, OsKeycode, OsKeysym,
                 OsMouseButtonsState,

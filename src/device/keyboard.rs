@@ -2,7 +2,7 @@
 
 use context::Context;
 use os::{OsKeyboardState, OsKeysym, OsKeycode};
-use super::{HidID, KeyState, Result};
+use super::{DeviceID, KeyState, Result};
 
 /// There's nothing in here, for now.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,24 +17,20 @@ pub struct KeyboardInfo;
 pub struct KeyboardState(pub(crate) OsKeyboardState);
 
 impl Context {
-    /// Lists currently connected keyboard devices.
-    pub fn keyboards(&self) -> Result<Vec<HidID>> {
-        self.0.keyboards()
-    }
     /// Gets the ID for the main keyboard, if any.
-    pub fn main_keyboard(&self) -> Result<HidID> {
+    pub fn main_keyboard(&self) -> Result<DeviceID> {
         self.0.main_keyboard()
     }
     /// Captures the current state of the keyboard which ID is given.
-    pub fn keyboard_state(&self, keyboard: HidID) -> Result<KeyboardState> {
+    pub fn keyboard_state(&self, keyboard: DeviceID) -> Result<KeyboardState> {
         self.0.keyboard_state(keyboard)
     }
     /// Captures the current state of a keyboard's key (by scan code) which ID is given.
-    pub fn keyboard_keycode_state(&self, keyboard: HidID, keycode: Keycode) -> Result<KeyState> {
+    pub fn keyboard_keycode_state(&self, keyboard: DeviceID, keycode: Keycode) -> Result<KeyState> {
         self.0.keyboard_keycode_state(keyboard, keycode)
     }
     /// Captures the current state of a keyboard's key (by virtual code) which ID is given.
-    pub fn keyboard_keysym_state(&self, keyboard: HidID, keysym: Keysym) -> Result<KeyState> {
+    pub fn keyboard_keysym_state(&self, keyboard: DeviceID, keysym: Keysym) -> Result<KeyState> {
         self.0.keyboard_keysym_state(keyboard, keysym)
     }
     /// Gets the friendly name for the given key.
@@ -42,11 +38,11 @@ impl Context {
         self.0.keysym_name(keysym)
     }
     /// Translates a scan code to a key code for the keyboard which ID is given.
-    pub fn keysym_from_keycode(&self, keyboard: HidID, keycode: Keycode) -> Result<Keysym> {
+    pub fn keysym_from_keycode(&self, keyboard: DeviceID, keycode: Keycode) -> Result<Keysym> {
         self.0.keysym_from_keycode(keyboard, keycode)
     }
     /// Retrieves the scan code that would translate to the given key code for the keyboard which ID is given.
-    pub fn keycode_from_keysym(&self, keyboard: HidID, keysym: Keysym) -> Result<Keycode> {
+    pub fn keycode_from_keysym(&self, keyboard: DeviceID, keysym: Keysym) -> Result<Keycode> {
         self.0.keycode_from_keysym(keyboard, keysym)
     }
 }

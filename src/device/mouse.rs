@@ -3,7 +3,7 @@
 use context::Context;
 use window::Window;
 use os::OsMouseButtonsState;
-use super::{HidID, ButtonState, Result};
+use super::{DeviceID, ButtonState, Result};
 use Vec2;
 
 /// Known mouse buttons.
@@ -67,23 +67,19 @@ impl MouseState {
 
 
 impl Context {
-    /// Lists all currently connected mouse devices.
-    pub fn mice(&self) -> Result<Vec<HidID>> {
-        self.0.mice()
-    }
     /// Gets the ID for the main mouse, if any.
-    pub fn main_mouse(&self) -> Result<HidID> {
+    pub fn main_mouse(&self) -> Result<DeviceID> {
         self.0.main_mouse()
     }
     /// Captures the current state of the mouse which ID is given.
-    pub fn mouse_state(&self, mouse: HidID) -> Result<MouseState> {
+    pub fn mouse_state(&self, mouse: DeviceID) -> Result<MouseState> {
         self.0.mouse_state(mouse)
     }
 }
 
 impl Window {
     /// Captures the current state of the mouse which ID is given, relatively to this window.
-    pub fn mouse_state(&self, mouse: HidID) -> Result<WindowMouseState> {
+    pub fn mouse_state(&self, mouse: DeviceID) -> Result<WindowMouseState> {
         self.0.mouse_state(mouse)
     }
 }

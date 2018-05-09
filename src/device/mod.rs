@@ -1,21 +1,14 @@
-//! Module for common human interface devices (HID).
-//!
-//! This module is named "HID" because it is a short and nice term for
-//! human input/output devices, which excludes e.g hard drives, usb disks, GPUs, etc.  
+//! Module for common human interface devices (HIDs).
 //!
 //! "Device" is a very generic term that could even qualify consoles, mobile phones and
-//! computers, but "HID" is more specific and includes mice, keyboards, gamepads and so on.
+//! computers, but this module really is more about "HID"s, a more specific term that
+//! qualifies mice, keyboards, gamepads and so on
+//! (see [Wikipedia's definition](https://en.wikipedia.org/wiki/Human_interface_device)).
 //!
-//! For a rationale, see [Wikipedia's definition](https://en.wikipedia.org/wiki/Human_interface_device).
 //!
-//! A master HID is the "physical" counterpart to what is called an HID in this module.  
-//! To illustrate, a graphics tablet may be reported as two devices: a `Touch` and a `Tablet`,
-//! but both really are features of a single physical device; this physical device is the master
-//! HID.
+//! # F.A.Q
 //!
-//! # F.A.Q
-//!
-//! ## What's in a `HidID` ?
+//! ## What's in a `DeviceID` ?
 //!
 //! Essentially, two parts :
 //! - An actual, backend-specific ID; this ID is only valid as long as the device is "alive".
@@ -28,15 +21,13 @@
 //! 3. User unplugs the gamepad, and then plugs some mouse.
 //!    The backend decides that the ID `13` is free for reuse since the gamepad was unplugged,
 //!    and decides to use it for the mouse now.
-//! 4. What your application thinks is a gamepad is now a mouse. As your application makes further
-//!    queries, this crate thinks "Errm dude stop this ain't a gamepad no more", and your
-//!    application thinks "Why does this fail? This ID definitely refers to a
-//!    gamepad, I've seen it work the first time; this crate sucks?? :(".
+//! 4. What your application thinks is a gamepad is now a mouse. Assumptions are broken and bad
+//!    things happen.
 //!
 //! The token gives this crate the ability to detect when your aplication is
 //! using a stale ID. What your app should do in this case is just drop the ID because
 //! it obviously breaks assumptions.  
-//! Also, either way, your app should handle `HidDisconnected` events and drop
+//! Also, either way, your app should handle `DeviceDisconnected` events and drop
 //! the associated IDs.
 //!
 //!
@@ -81,12 +72,37 @@
 //! in your application, but at least the loss of information is under your control, not enforced
 //! by this crate.
 //!
+//!
+//! ## If there's a catch-all `DeviceInfo`, why isn't there a `DeviceState` as well?
+//!
+//! Ideally, that's the way we would like it to be, but backends disagree.  
+//!
+//! Some allow querying the whole state of the device in a single call (e.g Windows' XInput),
+//! at which point it is a waste to call that API once for each button or axis. This also
+//! applies to keyboards on most platforms; they offer ways to efficiently retrieve the state
+//! of all keys at once.  
+//! Most others only allow querying one button or axis at a time, at which point it is a waste
+//! to try to collect everything if you're just interested in a handful of items.
+//!
+//! In fact, trying to cram everything into a `DeviceState` would not _reflect the reality_ of
+//! backends. Making `DeviceInfo` as big and generic as it is is a good decision, because it can
+//! deal with all cases and does not lose information, but this is not true of device _state_.  
+//! If you're interested in a tablet's state, there's no point in retrieving some associated "mouse state"
+//! as well, because all the info that you need is there already.
+//!
+//! So this crate provides such state query facilities on a careful case-by-case basis.  
+//! Notice, for instance, the `controller_state()`, `controller_button_state()` and
+//! `controller_axis_state()` methods. The former queries the whole state into an opaque
+//! `ControllerState` struct, and the last two query axes or buttons individually.  
+//! Which of these is more efficient is implementation-dependant, but you get to choose,
+//! especially when you _know_ your platform and what you want to do.
+//!
 //! ## What's a master HID ?
 //!
 //! This concept exists on X11 with the XInput extension.
 //!
-//! Basically you may have multiple devices that behave like a mouse (say, the touchpad on a laptop
-//! + an USB mouse + a pen tablet), all connected and working at the same time. However, they all
+//! Basically you may have multiple devices that behave like a mouse (say, the touchpad on a
+//! laptop, an USB mouse and a pen tablet), all connected and working at the same time. However, they all
 //! control a common, single _mouse pointer_, the one you see on the screen.
 //!
 //! XInput defines that mouse pointer as a _master_ device; your actual devices are defined as
@@ -147,9 +163,18 @@
 //!   the opportunity to keep using a device's information even after it is unplugged.
 //!
 //!
+//! ## Why do mouse position values use `f64`?
+//!
+//! Some backends offer subpixel precision, in which case values are more precise than simple
+//! integers; you can be "somewhere between" a few pixels.
+//!
+//! `f64` is likely overkill compared to `f32`, but y'know, in 2030 we might have Supra-Ultra-HD
+//! screens.
+//!
+//!
 //! ## Why are axis values `f64`?
 //! 
-//! Because this is the widest number type, so it is an excellent common denominator across
+//! Because this is the widest standard number type, so it is an excellent common denominator across
 //! implementations. Because of its width, conversion from 16-bit and 32-bit integers (which is what backends often report)
 //! is lossless.
 //!
@@ -158,16 +183,51 @@
 //! is up to you.
 //!
 //! Using a newtype would be pointless here, because it would have to provide `to_f64()` and
-//! `to_i32()` methods, but `f64`-to-`i32` conversion is lossy. Let's just use `f64` and call it a
-//! day.
+//! `to_i32()` methods, but `f64`-to-`i32` conversion is lossy.
+//!
+//! Let's just use `f64` and call it a day; you are free to cast it to whatever type you like.
+//!
+//!
+//! ## Why aren't axis values normalized to spare me some time?
+//!
+//! Because your definition of "normalized" does not make sense for all cases;
+//! here are examples of possible axis ranges:
+//!
+//! - [-100, 100]: OK. This could be normalized to [-1; 1].
+//! - [0, 100]: OK. This could be normalized to [0, 1].
+//! - [-32768, 32767]: (this is [i16::MIN, i16::MAX]) OK. This could be normalized to [-1; 1].
+//!   But notice already that the range's center does not lie exactly at 0.
+//! - [100, -100]: Ermmm, what? Indeed, this is never supposed to happen. But the definitions
+//!   of "minimum" and "maximum" are left quite vague by some backends.
+//!   I bet some drivers could report this when, for instance, an axis is reversed or something.  
+//!   **TL:DR;** Should not happen, but better be careful!
+//! - [-10, 30]: So what do we do now? We could normalize [-10, 0] to [-1, 0], then [0, 30] to [0, 1],
+//!   but then **our** zero does not represent the "center" of the range anymore.  
+//!   We could also "shift" the range to [-20, 20] and normalize this, but we've basically changed
+//!   the value's meaning!
+//!   We could also pretend this is a [-30, 30] range (taking the absolute maximum value) and
+//!   normalize the value using this range. This looks good, but I would not expect
+//!   everybody to agree on this.
+//!
+//! Normally, you should always get any or all of the first three, "good" cases.  
+//! The reason this crate does not normalize values for you really is because of the last, "bad"
+//! cases, that should never happen, but may, for some reason.
+//!
+//! This can be a complicated matter and you know best how you want to deal with it.  
+//! I would advise writing a utility function that performs the calculation that _you_ think
+//! make sense, as long as it doesn't `assert`, so your application doesn't panic just because
+//! of unexpected axis ranges.
 
 use uuid::Uuid as Guid;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::ops::{Range, Not};
 use context::Context;
-use os::OsHidID;
+use os::OsDeviceID;
 use event::EventInstant;
 
+pub mod error;
+pub use self::error::*;
 pub mod mouse;
 pub use self::mouse::*;
 pub mod keyboard;
@@ -178,43 +238,6 @@ pub mod tablet;
 pub use self::tablet::*;
 pub mod controller;
 pub use self::controller::*;
-
-/// Error returned by operations from this module and submodules.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum Error {
-    /// The device was disconnected at the specific instant, if known.
-    ///
-    /// The instant may also be `None` if you already received a `HidDiconnected` event
-    /// and the implementation decided to discard all data related to the offending `HidID`.
-    DeviceDisconnected(Option<EventInstant>),
-    /// The device (or backend for the device) does not support this operation.
-    NotSupportedByDevice { reason: Option<super::error::CowStr> },
-    /// Another error occured (in the meantime, it is unknown whether or not the device is still connected).
-    Other(super::error::Error),
-}
-
-/// Convenience alias to `Result<T, Error>`.
-pub type Result<T> = ::std::result::Result<T, Error>;
-
-#[allow(dead_code)]
-pub(crate) fn disconnected_at<T>(instant: EventInstant) -> Result<T> {
-    Err(Error::DeviceDisconnected(Some(instant)))
-}
-#[allow(dead_code)]
-pub(crate) fn disconnected<T>() -> Result<T> {
-    Err(Error::DeviceDisconnected(None))
-}
-
-#[allow(dead_code)]
-pub(crate) fn not_supported_by_device<T, S: Into<super::error::CowStr>>(s: S) -> Result<T> {
-    Err(Error::NotSupportedByDevice { reason: Some(s.into()) })
-}
-#[allow(dead_code)]
-pub(crate) fn not_supported_by_device_unexplained<T>() -> Result<T> {
-    Err(Error::NotSupportedByDevice { reason: None })
-}
-
-
 
 /// A button or key state, i.e "up" or "down".
 ///
@@ -310,11 +333,11 @@ pub struct AxisInfo {
 /// - Identifying the driver, which could be useful for bug reports and patching your application
 ///   accordingly if the driver is known to be buggy;
 #[derive(Debug, Clone, PartialEq)]
-pub struct HidInfo {
+pub struct DeviceInfo {
     /// The master HID, if any.
-    pub master: Option<HidID>,
+    pub master: Option<DeviceID>,
     /// The parent HID, if any.
-    pub parent: Option<HidID>,
+    pub parent: Option<DeviceID>,
     /// On Unices, a device is also a file, e.g `/dev/input/event13`.
     pub device_node: Option<PathBuf>,
     /// General-purpose, user-friendly name for this device.
@@ -364,8 +387,8 @@ pub struct HidInfo {
 pub struct UsbProductInfo {
     pub vendor_id: u16,
     pub product_id: u16,
-    pub vendor_name: String,
-    pub product_name: String,
+    pub vendor_name: Option<String>,
+    pub product_name: Option<String>,
 }
 
 /// Mostly taken from the `BUS_*` constants in Linux's `input.h`.
@@ -380,15 +403,40 @@ pub enum Bus {
 
 /// An ID for a HID.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct HidID(pub(crate) OsHidID);
+pub struct DeviceID(pub(crate) OsDeviceID);
 
 impl Context {
-    /// Get the `HidInfo` for the given device ID.
-    fn hid_info(&self, id: HidID) -> Result<HidInfo> {
-        self.0.hid_info(id)
+    /// Lists all currently connected devices, in no particular order.
+    /// 
+    /// **N.B**: The returned list is **never guaranteed** to be "in sync" wth the event queue.  
+    /// In fact, this method is supposed to ask the question "which devices are available
+    /// _at this very moment_?", which means some devices could have been added or removed
+    /// without you having handled the associated `DeviceConnected`/`DeviceDisconnected`
+    /// events _yet_.  
+    /// **This is important if you keep an internal list of devices.**  
+    /// When you handle `DeviceConnected`, do not assume the device **was not** present before.  
+    /// When you handle `DeviceDisconnected`, do not assume the device **was** present before.
+    ///
+    /// This method may be expensive, so you are advised to call this only once
+    /// when your application starts, and collect the output into your own data structure;
+    /// then, never call this again and only update (carefully) your own data structure via events.
+    ///
+    /// `DeviceInfo`s are provided in the process to avoid race conditions.  
+    /// If we can't get the `DeviceInfo` for a `DeviceID`, then we can't do anything with it
+    /// and there's no point in listing it (it was probably disconnected; bad timing!).  
+    /// If we _can_ get the `DeviceInfo` (99.9% of cases), then we want to do this only once, because it may
+    /// be expensive, and then get rid of it by handing it over to you.
+    pub fn devices(&self) -> Result<HashMap<DeviceID, DeviceInfo>> {
+        self.0.devices()
     }
-    /// Checks if the given device is still connected.
-    fn ping_hid(&self, id: HidID) -> Result<()> {
-        self.0.ping_hid(id)
+    /// Checks if the given device is still connected.  
+    ///
+    /// This may have an additional, harmless meaning in the future for devices
+    /// that do need to be ping-ed regurlarly by clients.
+    ///
+    /// This is normally not useful and prone to race conditions; If the device is connected
+    /// right now, that doesn't mean it will still be connected within the next few milliseconds.
+    pub fn ping_device(&self, id: DeviceID) -> Result<()> {
+        self.0.ping_device(id)
     }
 }

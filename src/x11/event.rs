@@ -1,14 +1,15 @@
 use std::mem;
 use std::rc::Rc;
 use std::os::raw::c_int;
+use std::collections::HashMap;
 use super::context::X11SharedContext;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
 use super::X11SharedWindow;
-use os::{OsEventInstant, OsHidID};
+use os::{OsEventInstant, OsDeviceID};
 use error::{self, Result, failed};
 use event::{Event, EventInstant};
-use hid::{HidID, MouseButton, Key, Keysym, Keycode};
+use device::{self, DeviceID, DeviceInfo, MouseButton, Key, Keysym, Keycode};
 use window::WindowHandle;
 use {Vec2, Extent2, Rect};
 
@@ -571,10 +572,13 @@ impl X11SharedContext {
             trace!("Sucessfully set _NET_WM_USER_TIME to {} for X Window {}", time, window);
         }
     }
-    pub fn core_x_mouse(&self) -> HidID {
-        HidID(OsHidID::CorePointer)
+    pub fn core_x_mouse(&self) -> DeviceID {
+        DeviceID(OsDeviceID::CorePointer)
     }
-    pub fn core_x_keyboard(&self) -> HidID {
-        HidID(OsHidID::CoreKeyboard)
+    pub fn core_x_keyboard(&self) -> DeviceID {
+        DeviceID(OsDeviceID::CoreKeyboard)
+    }
+    pub fn devices(&self) -> device::Result<HashMap<DeviceID, DeviceInfo>> {
+        unimplemented!{}
     }
 }

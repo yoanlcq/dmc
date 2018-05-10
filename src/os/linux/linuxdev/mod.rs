@@ -5,8 +5,11 @@ extern crate libevdev_sys;
 extern crate libudev_sys;
 extern crate libc as c;
 
+use std::fmt::{self, Display, Formatter};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::CStr;
+use std::os::unix::ffi::OsStrExt;
+use std::ffi::{CStr, OsStr};
+use std::path::PathBuf;
 use std::ptr;
 use std::mem;
 use std::cell::{Cell, RefCell};
@@ -60,6 +63,13 @@ impl LinuxdevTokenGenerator {
     }
 }
 
+impl Display for LinuxdevToken {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum UdevDeviceAction {
     Add,
@@ -103,9 +113,6 @@ struct Linuxdev {
     /// A libevdev handle is obtained from an open file descriptor, but this may fail for some
     /// reason.
     evdev: Option<LinuxdevEvdev>,
-    /// The registered Force-Feedback ID for rumble effects, or -1.
-    rumble_ff_id: Cell<i16>,
-    max_simultaneous_ff_effects: c_int,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -138,6 +145,8 @@ struct UdevProps {
 #[derive(Debug, PartialEq)]
 struct LinuxdevEvdev {
     libevdev: *mut evdev::libevdev,
+    /// The registered Force-Feedback ID for rumble effects, or -1.
+    rumble_ff_id: Cell<i16>,
     props: EvdevProps,
     buttons: HashSet<ControllerButton>,
     axes: HashMap<ControllerAxis, AxisInfo>,
@@ -155,6 +164,7 @@ struct EvdevProps {
     is_a_joystick: bool,
     supports_rumble: bool,
     repeat: Option<EvdevRepeat>,
+    max_simultaneous_ff_effects: c_int,
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -202,23 +212,23 @@ impl Drop for Linuxdev {
             udev_device, owns_udev_device, ref udev_props,
             fd, fd_has_write_access: _, event_api: _,
             ref evdev,
-            ref rumble_ff_id, max_simultaneous_ff_effects: _,
         } = self;
         unsafe {
             if owns_udev_device {
                 libudev_sys::udev_device_unref(udev_device);
             }
             if let Some(evdev) = evdev.as_ref() {
-                let _ignored_status = evdev::libevdev_free(evdev.libevdev);
-            }
-            if let Some(fd) = fd {
-                if rumble_ff_id.get() != -1 {
-                    let res = ev_ioctl::unregister_ff_effect(fd, rumble_ff_id.get() as _);
+                let fd = evdev::libevdev_get_fd(evdev.libevdev);
+                if evdev.rumble_ff_id.get() != -1 {
+                    let res = ev_ioctl::unregister_ff_effect(fd, evdev.rumble_ff_id.get() as _);
                     match res {
                         Err(nix::Error::Sys(Errno::ENODEV)) | Ok(_) => (),
                         Err(e) => error!("Controller {}: failed to unregister the rumble effect while dropping it! (ioctl() generated {})", udev_props.display(), e),
                     };
                 }
+                let _ignored_status = evdev::libevdev_free(evdev.libevdev);
+            }
+            if let Some(fd) = fd {
                 c::close(fd);
             }
         }
@@ -255,13 +265,20 @@ impl Default for LinuxdevContext {
             for entry in udev_enumerate::scan_devices_iter(udev_enumerate) {
                 let _entry_value = libudev_sys::udev_list_entry_get_value(entry);
                 let devname = libudev_sys::udev_list_entry_get_name(entry);
-                assert!(!devname.is_null());
+                if devname.is_null() {
+                    continue; // Should never happen, but better safe than sorry!
+                }
                 let udev_device = libudev_sys::udev_device_new_from_syspath(udev, devname);
+                if udev_device.is_null() {
+                    continue; // Same as above
+                }
+                trace!("Got an udev_list_entry named `{}`", cstr_or_none(devname).unwrap().to_string_lossy());
                 let dev = Linuxdev::from_udev_device(FromUdevDevice {
                     udev_device, 
                     owns_udev_device: true,
                     try_open_fd_if_is_a_controller: true,
                 });
+                trace!("Got device {}", dev.display());
                 if dev.is_a_controller_and_evdev_node() {
                     let token = token_generator.next_token();
                     let status = dev.pump_evdev(token, &mut pending_translated_events);
@@ -274,6 +291,7 @@ impl Default for LinuxdevContext {
                         Ok(()) => true,
                     };
                     if worth_keeping {
+                        debug!("Added {} to internal evdev_controllers list (token: {})", dev.display(), token);
                         evdev_controllers.insert(token, dev);
                     }
                 }
@@ -343,8 +361,8 @@ impl LinuxdevContext {
 
         let ev = self.pending_translated_events.borrow_mut().pop_front();
         if let Some(&Event::DeviceDisconnected { device: DeviceID(OsDeviceID::Linuxdev(token)), .. }) = ev.as_ref() {
-
-            self.evdev_controllers.borrow_mut().remove(&token);
+            let dev = self.evdev_controllers.borrow_mut().remove(&token).unwrap();
+            debug!("Removed disconnected {} from internal evdev_controllers list (token: {})", dev.display(), token);
         }
         ev
     }
@@ -425,12 +443,27 @@ impl LinuxdevContext {
         };
         // Still add it even though the device could have been disconnected.
         // Wait until we receive the message from udev to do things properly.
+        debug!("Added newly connected {} to internal evdev_controllers list (token: {})", dev.display(), token);
         self.evdev_controllers.borrow_mut().insert(token, dev);
     }
     fn on_udev_device_removed(&self, udev_device: *mut libudev_sys::udev_device) {
         // Reverse lookup
+        let target_devnode = unsafe {
+            Linuxdev::device_node_pathbuf_of_udev_device(udev_device)
+        };
+        if target_devnode.is_none() {
+            return; // Can't do anything about it
+        }
+        let target_devnode = target_devnode.unwrap();
         let token = self.evdev_controllers.borrow().iter().filter_map(|(token, dev)| {
-            if dev.udev_device == udev_device { Some(*token) } else { None }
+            let devnode = unsafe {
+                Linuxdev::device_node_pathbuf_of_udev_device(dev.udev_device)
+            };
+            devnode.map(|pathbuf| if pathbuf == target_devnode {
+                Some(*token)
+            } else {
+                None
+            }).unwrap_or(None)
         }).next();
 
         if token.is_none() {
@@ -440,11 +473,13 @@ impl LinuxdevContext {
         // Wait until the DeviceDisconnected event is reported to the user to do it.
         // See self.poll_next_event()
         let token = token.unwrap();
+        let dev = &self.evdev_controllers.borrow()[&token];
         let device_disconnected_event = Event::DeviceDisconnected {
             device: DeviceID(OsDeviceID::Linuxdev(token)),
-            instant: self.evdev_controllers.borrow()[&token].instant_now(), // Looks like it's the closest we can get... ._.
+            instant: dev.instant_now(), // Looks like it's the closest we can get... ._.
         };
         self.pending_translated_events.borrow_mut().push_back(device_disconnected_event);
+        debug!("{} disconnected but still kept in internal evdev_controllers list (token: {})", dev.display(), token);
     }
     pub fn controllers(&self) -> device::Result<HashMap<DeviceID, DeviceInfo>> {
 		// We are not required to rescan devices via e.g udev_enumerate_scan_devices.
@@ -532,8 +567,8 @@ struct LinuxdevDisplay<'a> {
     name: &'a str,
 }
 
-impl<'a> ::std::fmt::Display for LinuxdevDisplay<'a> {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+impl<'a> Display for LinuxdevDisplay<'a> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let &Self { ref name } = self;
         write!(f, "`{}`", name)
     }
@@ -643,15 +678,16 @@ impl Linuxdev {
         // self.evdev.is_some() implies self.fd.is_some()
         self.fd_has_write_access && self.evdev.as_ref().map(|e| e.props.supports_rumble).unwrap_or(false)
     }
+    pub unsafe fn device_node_pathbuf_of_udev_device(udev_device: *mut libudev_sys::udev_device) -> Option<PathBuf> {
+		cstr_or_none(libudev_sys::udev_device_get_devnode(udev_device)).map(|cstr| OsStr::from_bytes(cstr.to_bytes()).into())
+    }
     pub fn device_info(&self) -> DeviceInfo {
-        use ::std::os::unix::ffi::OsStrExt;
-        use ::std::ffi::OsStr;
         let evdev = self.evdev.as_ref().unwrap();
         DeviceInfo {
             master: None,
             parent: None, // This is more complicated than it looks and I doubt people do care.
             device_node: unsafe {
-				cstr_or_none(libudev_sys::udev_device_get_devnode(self.udev_device)).map(|cstr| OsStr::from_bytes(cstr.to_bytes()).into())
+                Self::device_node_pathbuf_of_udev_device(self.udev_device)
 			},
             name: self.name().map(|s| s.to_owned()),
             serial: self.udev_props.id_serial.clone(),
@@ -756,9 +792,9 @@ impl Linuxdev {
             id_input_trackball    : udev_prop_bool(b"ID_INPUT_TRACKBALL\0"),
         };
 
-        let devnode = cstr_or_none(libudev_sys::udev_device_get_devnode(udev_device)).unwrap();
+        let devnode = cstr_or_none(libudev_sys::udev_device_get_devnode(udev_device));
 
-        let event_api = {
+        let event_api = devnode.map(|devnode| {
             let devnode = devnode.to_str().unwrap();
             let last_slash = devnode.rfind('/').unwrap();
             if devnode[last_slash..].starts_with("/event") {
@@ -768,14 +804,15 @@ impl Linuxdev {
             } else {
                 None
             }
-        };
+        }).unwrap_or(None);
 
         let (fd, fd_has_write_access) = {
             // Don't even try if it's not a controller. All other device kinds are "owned" by the X
             // server so we're normally not allowed to open them.
-            if !try_open_fd_if_is_a_controller || !udev_props.is_a_controller() {
+            if devnode.is_none() || !try_open_fd_if_is_a_controller || !udev_props.is_a_controller() {
                 (None, false)
             } else {
+                let devnode = devnode.unwrap();
                 // O_RDWR for the ability to write force feedback events;
                 // O_NONBLOCK so reading events doesn't block (libevdev assumes this by default.
                 //    Changing is possible, but requires calling some APIs).
@@ -799,18 +836,6 @@ impl Linuxdev {
             }
         };
 
-        let max_simultaneous_ff_effects = fd.map(|fd| {
-            let mut max_simultaneous_ff_effects = 0;
-            let status = ev_ioctl::max_simultaneous_ff_effects(fd, &mut max_simultaneous_ff_effects);
-            match status {
-                Ok(_) => max_simultaneous_ff_effects,
-                Err(e) => {
-                    warn!("EVIOCGEFFECTS ioctl() returned {}", e);
-                    0
-                },
-            }
-        }).unwrap_or(0);
-
         let evdev = event_api.map(|event_api| match event_api {
             LinuxEventAPI::Joydev => None,
             LinuxEventAPI::Evdev => fd.map(|fd| {
@@ -829,8 +854,6 @@ impl Linuxdev {
             udev_device, owns_udev_device, udev_props,
             fd, fd_has_write_access, event_api,
             evdev,
-            rumble_ff_id: Cell::new(-1),
-            max_simultaneous_ff_effects,
         };
         if dev.evdev.is_some() {
             dev.evdev_refresh_all_controller_axes_support();
@@ -881,8 +904,13 @@ impl Linuxdev {
 
 impl LinuxdevEvdev {
     unsafe fn from_libevdev(libevdev: *mut evdev::libevdev) -> Self {
+        assert!(!libevdev.is_null());
         let props = EvdevProps {
-            name      : remove_quotes_if_any(CStr::from_ptr(evdev::libevdev_get_name(libevdev)).to_string_lossy().into_owned()),
+            name      : {
+                let cstr = cstr_or_none(evdev::libevdev_get_name(libevdev));
+                let name = cstr.map(|cstr| remove_quotes_if_any(cstr.to_string_lossy().into_owned()));
+                name.unwrap_or_else(|| "???".to_owned())
+            },
 			driver_version: {
 				let v = evdev::libevdev_get_driver_version(libevdev);
 				if v == -1 {
@@ -915,10 +943,24 @@ impl LinuxdevEvdev {
                     Some(EvdevRepeat { delay, period })
                 }
             },
+            max_simultaneous_ff_effects: {
+                let fd = evdev::libevdev_get_fd(libevdev);
+                assert_ne!(fd, -1);
+                let mut max_simultaneous_ff_effects = 0;
+                let status = ev_ioctl::max_simultaneous_ff_effects(fd, &mut max_simultaneous_ff_effects);
+                match status {
+                    Ok(_) => max_simultaneous_ff_effects,
+                    Err(e) => {
+                        warn!("EVIOCGEFFECTS ioctl() returned {}", e);
+                        0
+                    },
+                }
+            },
         };
 
         Self {
             libevdev, props,
+            rumble_ff_id: Cell::new(-1),
             // Filled later by the device. The reason is, the mapping depends
             // on the controller kind, which we aren't sure of until the Linuxdev
             // object is wholly created.
@@ -1455,26 +1497,32 @@ impl Linuxdev {
     //
 
     fn controller_set_vibration(&self, vibration: &VibrationState) -> device::Result<()> {
-        if self.fd.is_none() || !self.fd_has_write_access {
+        if self.evdev.is_none() {
+            return device::not_supported_by_device_unexplained();
+        }
+        assert!(self.fd.is_some());
+        let evdev = self.evdev.as_ref().unwrap();
+
+        if !self.fd_has_write_access {
             return device::not_supported_by_device("Device file could not be opened for write access");
         }
-        if self.max_simultaneous_ff_effects < 1 {
+        if evdev.props.max_simultaneous_ff_effects < 1 {
             return device::not_supported_by_device("Device does not support playing at least one force feedback effect");
         }
-        if vibration.is_zero() && self.rumble_ff_id.get() == -1 {
+        if vibration.is_zero() && evdev.rumble_ff_id.get() == -1 {
             return Ok(());
         }
 
         let mut ff = vibration.to_ff_effect();
         let number_of_times_to_play = ::std::i32::MAX * vibration.is_zero() as i32;
 
-        match self.rumble_ff_id.get() {
+        match evdev.rumble_ff_id.get() {
             -1 => {
                 assert!(!vibration.is_zero());
                 assert_eq!(ff.id, -1);
                 self.register_ff_effect(&mut ff)?;
                 assert_ne!(ff.id, -1);
-                self.rumble_ff_id.set(ff.id);
+                evdev.rumble_ff_id.set(ff.id);
                 // Full power!! we want the vibration to reflect the full capabilities
                 // of the device; the VibrationState is already a percentage of the
                 // amount of vibration wanted by the user, so let's not be slowed

@@ -41,9 +41,11 @@ impl PropElement for c_char   { const SERVER_BITS: usize =  8; }
 
 
 pub fn set<T: PropElement>(x_display: *mut x::Display, x_window: x::Window, prop: x::Atom, prop_type: PropType, mode: PropMode, data: &[T]) -> Result<()> {
-    xlib_error::sync_catch(x_display, || unsafe {
-        x::XChangeProperty(x_display, x_window, prop, prop_type as _, T::SERVER_BITS as _, mode as _, data.as_ptr() as *const _ as *mut _, data.len() as _);
-    })
+    unsafe {
+        xlib_error::sync_catch(x_display, || {
+            x::XChangeProperty(x_display, x_window, prop, prop_type as _, T::SERVER_BITS as _, mode as _, data.as_ptr() as *const _ as *mut _, data.len() as _);
+        })
+    }
 }
 
 // `long_offset` and `long_length` are expressed in multiples of server-side 32-bit elements.
@@ -58,14 +60,14 @@ pub fn get<T: PropElement>(x_display: *mut x::Display, x_window: x::Window, prop
     let mut bytes_remaining_to_be_read: c_ulong = 0;
 
     let mut data_ptr: *mut c_uchar = ptr::null_mut();
-    let status = xlib_error::sync_catch(x_display, || unsafe {
+    let status = unsafe { xlib_error::sync_catch(x_display, || {
         x::XGetWindowProperty(
             x_display, x_window, prop, long_offset as _, long_length as _, delete,
             req_type as _, &mut actual_type_return,
             &mut actual_format_return, &mut nitems_return,
             &mut bytes_remaining_to_be_read, &mut data_ptr
         )
-    })?;
+    })}?;
     if status != x::Success as _ {
         return failed(format!("XGetWindowProperty() returned {}", status));
     }

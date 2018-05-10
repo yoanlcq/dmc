@@ -2,9 +2,13 @@
 name = "main"
 version = "0.1.0"
 authors = ["Yoan Lecoq <yoanlecoq.io@gmail.com>"]
+build = "build.rs"
 
 [features]
 headless = [] # For testing on CI
+
+[build-dependencies]
+rustc_version = "~0.2.1"
 
 [dependencies]
 dmc = { path = "../.." }

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))]
+#[cfg(x11)]
 pub use self::c::*;
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))]
+#[cfg(x11)]
 pub mod c {
     use super::*;
     extern crate libc as c;

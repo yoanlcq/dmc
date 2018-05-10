@@ -14,13 +14,13 @@ use x11::{
     X11GLProc, X11GLPixelFormat, X11GLContext,
     X11Keysym, X11Keycode,
 };
-use error::Result;
+use error::{Result};
 use desktop::Desktop;
 use window::WindowSettings;
 use event::Event;
 use timeout::Timeout;
 use device::{
-    self, 
+    self,
     DeviceID, DeviceInfo, ButtonState,
     ControllerButton, ControllerAxis, ControllerState, VibrationState,
     KeyState, KeyboardState, Keysym, Keycode,
@@ -167,10 +167,17 @@ impl OsContext {
                 devs
             }),
             // Honestly, none of these should happen; at worst, we should get empty HashMaps.
-            // Don't even bother logging or returning the Ok() parts.
-            (Err(x11), Err(_linuxdev)) => Err(x11),
-            (Ok(_), Err(linuxdev)) => Err(linuxdev),
-            (Err(x11), Ok(_)) => Err(x11),
+            (Err(x11), Err(controllers)) => {
+                device::failed(format!("Could not get devices via X11 and udev: respective errors are:\n- X11: {}\n- udev: {}", x11, controllers))
+            },
+            (Ok(x11), Err(controllers)) => {
+                error!("Could not get devices via udev: {}", controllers);
+                Ok(x11)
+            },
+            (Err(x11), Ok(controllers)) => {
+                error!("Could not get devices via X11: {}", x11);
+                Ok(controllers)
+            },
         }
     }
     pub fn ping_device(&self, id: DeviceID) -> device::Result<()> {

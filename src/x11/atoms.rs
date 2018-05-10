@@ -30,18 +30,18 @@ macro_rules! atoms {
             pub fn load(x_display: *mut x::Display) -> Result<Self> {
                 $(assert_eq!(&0, $name.last().unwrap());)+
                 let mut atoms = Self::default();
-                xlib_error::sync_catch(x_display, || {
-                    let only_if_exists = x::True;
-                    let _were_all_of_these_atoms_present = unsafe {
-                        x::XInternAtoms(
+                unsafe {
+                    xlib_error::sync_catch(x_display, || {
+                        let only_if_exists = x::True;
+                        let _were_all_of_these_atoms_present = x::XInternAtoms(
                             x_display, 
                             ATOM_NAMES.as_ptr() as *mut _, 
                             ATOM_NAMES.len() as _,
                             only_if_exists,
                             &mut atoms as *mut _ as *mut x::Atom
-                        )
-                    };
-                })?;
+                        );
+                    })?;
+                }
                 Ok(atoms)
             }
         }

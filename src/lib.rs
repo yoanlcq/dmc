@@ -6,6 +6,7 @@
 #![doc(html_root_url = "https://docs.rs/dmc/0.2.0")]
 #![cfg_attr(nightly, feature(optin_builtin_traits))] // !Send, !Sync for Context
 #![warn(missing_docs)]
+#![deny(unused_must_use)]
 
 #[allow(unused_imports)]
 #[macro_use]
@@ -71,7 +72,7 @@ macro_rules! os_mod {
     };
 }
 
-#[cfg(any(target_os="linux", target_os="freebsd", target_os="dragonfly", target_os="openbsd", target_os="netbsd"))]
+#[cfg(x11)]
 mod x11;
 
 #[cfg(target_os="linux")]

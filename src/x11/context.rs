@@ -2,8 +2,9 @@ use std::ptr;
 use std::ffi::CStr;
 use std::rc::{Rc, Weak};
 use std::cell::{RefCell, Cell};
+use std::slice;
 use std::ops::{Deref, Range};
-use std::os::raw::{c_int, c_long, c_ulong, c_uchar};
+use std::os::raw::{c_int, c_long, c_ulong, c_uchar, c_char};
 use std::collections::{HashMap, VecDeque};
 
 use context::Context;
@@ -79,6 +80,7 @@ impl Drop for X11SharedContext {
             previous_x_key_release_time: _,
         } = self;
         unsafe {
+            x::XSync(x_display, x::False);
             x::XFreeCursor(x_display, invisible_x_cursor);
             x::XFreeCursor(x_display, default_x_cursor);
             if let Some(xim) = xim {
@@ -91,6 +93,7 @@ impl Drop for X11SharedContext {
 }
 
 unsafe fn close_x_display(x_display: *mut x::Display) {
+    x::XSync(x_display, x::False);
     let name = {
         let p = x::XDisplayString(x_display);
         CStr::from_ptr(p).to_string_lossy().into_owned()
@@ -99,6 +102,51 @@ unsafe fn close_x_display(x_display: *mut x::Display) {
     };
     x::XCloseDisplay(x_display);
     trace!("Closed X Display `{}`", name);
+}
+
+
+#[derive(Debug, Default, Clone)]
+pub struct ExtensionInfo {
+    pub name: String,
+    pub major_opcode: c_int,
+    pub first_event: c_int,
+    pub first_error: c_int,
+}
+
+// XXX: Assumes we'll only ever have a single display
+// This is global for error handling.
+pub static mut ALL_EXTENSIONS: Option<HashMap<c_int, ExtensionInfo>> = None;
+
+unsafe fn init_all_extensions(x_display: *mut x::Display) {
+    assert!(!x_display.is_null());
+    let mut all_extensions = HashMap::with_capacity(32); // reasonable. Try `xdpyinfo -queryExt`.
+    let mut nextensions = 0;
+    let list_ptr: *mut *mut c_char = x::XListExtensions(x_display, &mut nextensions);
+    if list_ptr.is_null() {
+        // Paranoid, should never happen...
+        ALL_EXTENSIONS = Some(HashMap::new());
+        return;
+    }
+    assert!(nextensions >= 0);
+    let list = slice::from_raw_parts(list_ptr, nextensions as usize);
+    for name in list.iter().cloned() {
+        if name.is_null() {
+            continue; // Paranoid. Should never happen.
+        }
+        let mut ext = ExtensionInfo {
+            name: CStr::from_ptr(name).to_string_lossy().into_owned(),
+            major_opcode: 0,
+            first_event: 0,
+            first_error: 0,
+        };
+        let is_ok = x::True == x::XQueryExtension(x_display, name, &mut ext.major_opcode, &mut ext.first_event, &mut ext.first_error);
+        if is_ok {
+            trace!("Found X11 extension: {:?}", ext);
+            all_extensions.insert(ext.major_opcode, ext);
+        }
+    }
+    x::XFreeExtensionList(list_ptr);
+    ALL_EXTENSIONS = Some(all_extensions);
 }
 
 
@@ -134,7 +182,7 @@ impl X11Context {
     }
 
     pub unsafe fn from_xlib_display(x_display: *mut x::Display) -> Result<Self> {
-        assert_ne!(x_display, ptr::null_mut());
+        assert!(!x_display.is_null());
 
         let screen_count      = x::XScreenCount(x_display);
         let protocol_version  = x::XProtocolVersion(x_display);
@@ -149,6 +197,9 @@ impl X11Context {
         let previous_x_key_release_time = Cell::new(x::Time::default());
         let pending_translated_events = RefCell::new(VecDeque::new());
         let weak_windows = RefCell::new(HashMap::new());
+
+        init_all_extensions(x_display);
+
         let atoms = atoms::PreloadedAtoms::load(x_display)?;
         let invisible_x_cursor = super::cursor::create_invisible_x_cursor(x_display);
         let default_x_cursor = super::cursor::create_default_x_cursor(x_display);

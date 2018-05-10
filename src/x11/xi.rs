@@ -1,9 +1,11 @@
-use std::os::raw::{c_int, c_uchar};
+use std::os::raw::c_int;
+use std::mem;
 use error::{Result, failed};
 use super::context::X11SharedContext;
+use super::xlib_error;
+use super::missing_bits;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
-use super::missing_bits;
 
 #[derive(Debug, Default, Clone, Hash, PartialEq, Eq)]
 pub struct XI {
@@ -18,30 +20,31 @@ impl X11SharedContext {
     pub fn xi(&self) -> Result<&XI> {
         self.xi.as_ref().map_err(Clone::clone)
     }
-    pub fn xi_select_all_non_raw_events_all_devices(&self, x_window: x::Window) {
-        if self.xi().is_err() {
-            return;
+    pub fn xi_select_all_non_raw_events_all_devices(&self, x_window: x::Window) -> Result<()> {
+        if let Err(e) = self.xi() {
+            return Err(e);
         }
-        let devices = &[xi2::XIAllDevices];
-        let events = &[
-            xi2::XI_ButtonPress,
-            xi2::XI_ButtonRelease,
-            xi2::XI_KeyPress,
-            xi2::XI_KeyRelease,
-            xi2::XI_Motion,
-            xi2::XI_DeviceChanged,
-            xi2::XI_Enter,
-            xi2::XI_Leave,
-            xi2::XI_FocusIn,
-            xi2::XI_FocusOut,
-            xi2::XI_TouchBegin,
-            xi2::XI_TouchUpdate,
-            xi2::XI_TouchEnd,
-            xi2::XI_HierarchyChanged,
-            xi2::XI_PropertyEvent,
-        ];
         unsafe {
-            xi_select_events(self.x_display, x_window, devices, &[events]);
+            xi_select_events(self.x_display, x_window, &[(
+                xi2::XIAllDevices,
+                &[
+                    xi2::XI_ButtonPress,
+                    xi2::XI_ButtonRelease,
+                    xi2::XI_KeyPress,
+                    xi2::XI_KeyRelease,
+                    xi2::XI_Motion,
+                    xi2::XI_DeviceChanged,
+                    xi2::XI_Enter,
+                    xi2::XI_Leave,
+                    xi2::XI_FocusIn,
+                    xi2::XI_FocusOut,
+                    xi2::XI_TouchBegin,
+                    xi2::XI_TouchUpdate,
+                    xi2::XI_TouchEnd,
+                    xi2::XI_HierarchyChanged,
+                    xi2::XI_PropertyEvent,
+                ]
+            )])
         }
     }
 }
@@ -66,13 +69,14 @@ impl XI {
         let status = xi2::XIQueryVersion(x_display, &mut xi.major_version, &mut xi.minor_version);
         match status as _ {
             x::Success => (),
-            x::BadRequest => return failed("X server doesn't have the XInput 2.3 extension"),
+            x::BadRequest => return failed(format!("X server doesn't have the XInput {}.{} extension", xi.major_version, xi.minor_version)),
             // They do this in the man page's example
             _ => return failed("XIQueryVersion() returned garbage"),
         }
 
         let root = x::XDefaultRootWindow(x_display);
-        xi_select_events(x_display, root, &[xi2::XIAllDevices], &[
+        let status = xi_select_events(x_display, root, &[(
+            xi2::XIAllDevices,
             &[
                 xi2::XI_RawKeyPress,
                 xi2::XI_RawKeyRelease,
@@ -83,29 +87,41 @@ impl XI {
                 xi2::XI_RawTouchUpdate,
                 xi2::XI_RawTouchEnd,
             ]
-        ]);
+        )]);
+
+        if let Err(e) = status {
+            error!("Could not select all XI raw events for XIAllDevices: {}", e);
+        }
 
         Ok(xi)
     }
 }
 
-pub unsafe fn xi_select_events(x_display: *mut x::Display, x_window: x::Window, devices: &[c_int], events: &[&[c_int]]) {
-    assert_eq!(devices.len(), events.len());
-    let mut masks_mem = Vec::with_capacity(devices.len());
-    let mut masks = Vec::with_capacity(devices.len());
-    for i in 0..devices.len() {
+pub unsafe fn xi_select_events(x_display: *mut x::Display, x_window: x::Window, devices_events: &[(c_int, &[c_int])]) -> Result<()> {
+    assert!(!x_display.is_null());
+    let mut masks_mem = vec![mem::zeroed(); devices_events.len()];
+    let mut masks = vec![mem::zeroed(); devices_events.len()];
+    for (deviceid, events) in devices_events.iter().cloned() {
         let mask_len = missing_bits::xi::XIMaskLen(xi2::XI_LASTEVENT);
-        let mut mask_mem = Vec::<c_uchar>::with_capacity(mask_len as _);
-        for ev in events[i] {
+        let mut mask_mem = vec![0; mask_len as usize];
+        for ev in events {
+            // These are macro translations and not actual Xlib calls, so no need to catch errors.
             xi2::XISetMask(&mut mask_mem, *ev);
         }
         let mask = mask_mem.as_mut_ptr();
         masks_mem.push(mask_mem);
-        masks.push(xi2::XIEventMask {
-            deviceid: devices[i],
-            mask_len, mask,
-        });
+        masks.push(xi2::XIEventMask { deviceid, mask_len, mask });
     }
-    xi2::XISelectEvents(x_display, x_window, masks.as_mut_ptr(), masks.len() as _);
+    let status = xlib_error::sync_catch(x_display, || {
+        xi2::XISelectEvents(x_display, x_window, masks.as_mut_ptr(), masks.len() as _)
+    });
     let _ = masks_mem; // Keep it alive since Non-Lexical Lifetimes???
+    match status {
+        Err(e) => failed(format!("XISelectEvents generated {}", e)),
+        Ok(status) => if status != x::Success as _ {
+            failed(format!("XISelectEvents returned {}", status))
+        } else {
+            Ok(())
+        },
+    }
 }

@@ -1,3 +1,5 @@
+//! Errors returned by operations from this module and submodules.
+
 use std::fmt::{self, Display, Formatter};
 use error::{self, CowStr};
 use event::EventInstant;
@@ -71,6 +73,4 @@ pub(crate) fn not_supported_by_device<T, S: Into<CowStr>>(s: S) -> Result<T> {
 pub(crate) fn not_supported_by_device_unexplained<T>() -> Result<T> {
     Err(Error::NotSupportedByDevice { reason: None })
 }
-
-
 

@@ -143,9 +143,9 @@ impl X11Context {
                 let visual = unsafe {
                     x::XDefaultVisual(x_display, screen_num)
                 };
-                let colormap = match xlib_error::sync_catch(x_display, || unsafe {
+                let colormap = match unsafe { xlib_error::sync_catch(x_display, || {
                     x::XCreateColormap(x_display, parent, visual, x::AllocNone)
-                }) {
+                })} {
                     Ok(c) => c,
                     Err(e) => return failed(format!("XCreateColormap failed with {}", e)),
                 };
@@ -158,18 +158,32 @@ impl X11Context {
         let valuemask = x::CWColormap | x::CWEventMask | x::CWBackPixel;
         let mut swa = x::XSetWindowAttributes {
             colormap,
-            event_mask: {
-                x::ButtonReleaseMask      | x::EnterWindowMask | x::ButtonPressMask |
-                x::LeaveWindowMask        | x::PointerMotionMask | 
-                x::Button1MotionMask      |
-                x::Button2MotionMask      | x::Button3MotionMask |
-                x::Button4MotionMask      | x::Button5MotionMask |
-                x::ButtonMotionMask       | x::KeymapStateMask |
-                x::ExposureMask           | x::VisibilityChangeMask | 
-                x::StructureNotifyMask    | /* ResizeRedirectMask | */
-                x::SubstructureNotifyMask | x::SubstructureRedirectMask |
-                x::FocusChangeMask        | x::PropertyChangeMask |
-                x::ColormapChangeMask     | x::OwnerGrabButtonMask
+            event_mask: { // Basically, all events. Copy-pasted from /usr/include/x11/X.h
+                  x::KeyPressMask
+                | x::KeyReleaseMask
+                | x::ButtonPressMask
+                | x::ButtonReleaseMask
+                | x::EnterWindowMask
+                | x::LeaveWindowMask
+                | x::PointerMotionMask
+                // | x::PointerMotionHintMask // But not this flag, it sucks! >:(
+                | x::Button1MotionMask
+                | x::Button2MotionMask
+                | x::Button3MotionMask
+                | x::Button4MotionMask
+                | x::Button5MotionMask
+                | x::ButtonMotionMask
+                | x::KeymapStateMask
+                | x::ExposureMask
+                | x::VisibilityChangeMask
+                | x::StructureNotifyMask
+                | x::ResizeRedirectMask
+                | x::SubstructureNotifyMask
+                | x::SubstructureRedirectMask
+                | x::FocusChangeMask
+                | x::PropertyChangeMask
+                | x::ColormapChangeMask
+                | x::OwnerGrabButtonMask
             },
             background_pixmap    : 0,
             background_pixel     : unsafe {
@@ -188,12 +202,12 @@ impl X11Context {
             cursor               : 0,
         };
 
-        let x_window = xlib_error::sync_catch(x_display, || unsafe {
+        let x_window = unsafe { xlib_error::sync_catch(x_display, || {
             x::XCreateWindow(
                 x_display, parent, x, y, w, h,
                 border_thickness, depth, class as _, visual, valuemask, &mut swa
             )
-        })?;
+        })}?;
         if x_window == 0 {
             unsafe {
                 x::XFreeColormap(x_display, colormap);
@@ -219,11 +233,11 @@ impl X11Context {
                 protocols[protocols_len] = atom;
                 protocols_len += 1;
             }
-            match xlib_error::sync_catch(x_display, || unsafe {
+            match unsafe { xlib_error::sync_catch(x_display, || {
                 x::XSetWMProtocols(
                     x_display, x_window, protocols.as_mut_ptr(), protocols_len as _
                 )
-            }) {
+            })} {
                 Ok(success) => if success == 0 {
                     warn!("XSetWMProtocols() returned 0")
                 },
@@ -245,14 +259,14 @@ impl X11Context {
 
         // Getting an X Input Context for this window
         let xic = if let Some(xim) = self.xim {
-            match xlib_error::sync_catch(x_display, || unsafe {
+            match unsafe { xlib_error::sync_catch(x_display, || {
                 x::XCreateIC(xim, 
                     x::XNClientWindow_0.as_ptr(), x_window as c_ulong,
                     x::XNFocusWindow_0.as_ptr(), x_window as c_ulong,
                     x::XNInputStyle_0.as_ptr(), (x::XIMPreeditNothing | x::XIMStatusNothing) as c_ulong,
                     ptr::null_mut() as *mut c_void,
                 )
-            }) {
+            })} {
                 Err(e) => {
                     warn!("XCreateIC() reported an error: {}", e);
                     None
@@ -337,7 +351,9 @@ impl X11Context {
             warn!("Could not set the X Window {}'s `_NET_WM_WINDOW_TYPE` to `_NET_WM_WINDOW_TYPE_NORMAL`: {}", x_window, e);
         }
 
-        self.xi_select_all_non_raw_events_all_devices(x_window);
+        if let Err(e) = self.xi_select_all_non_raw_events_all_devices(x_window) {
+            warn!("Could not select all XI non-raw events for XIAllDevices for X Window {}: {}", x_window, e);
+        }
 
         self.x_sync();
 
@@ -355,7 +371,9 @@ impl X11Context {
         let x_display = self.x_display;
         let wa = unsafe {
             let mut wa = mem::zeroed();
-            let status = xlib_error::sync_catch(x_display, || x::XGetWindowAttributes(x_display, x_window, &mut wa))?;
+            let status = xlib_error::sync_catch(x_display, || {
+                x::XGetWindowAttributes(x_display, x_window, &mut wa)
+            })?;
             if status != x::Success as _ {
                 return failed(format!("XGetWindowAttributes() returned {}", status));
             }
@@ -365,7 +383,11 @@ impl X11Context {
         let xic = None;
         let user_cursor = RefCell::new(None);
         let is_cursor_visible = Cell::new(true);
-        self.xi_select_all_non_raw_events_all_devices(x_window);
+
+        if let Err(e) = self.xi_select_all_non_raw_events_all_devices(x_window) {
+            warn!("Could not select all XI non-raw events for XIAllDevices for X Window {}: {}", x_window, e);
+        }
+
         warn!("Window created from X Window `{}` will NOT have an associated XIC. Also, its Colormap will be freed along with it, and the cursor is assumed to be visible.", x_window);
         self.x_sync();
         let context = Rc::clone(&self.0);
@@ -386,9 +408,11 @@ impl X11SharedWindow {
         prop::get(self.context.x_display, self.x_window, prop, req_type, long_range)
     }
     fn delete_prop(&self, prop: x::Atom) -> Result<()> {
-        xlib_error::sync_catch(self.context.x_display, || unsafe {
-            x::XDeleteProperty(self.context.x_display, self.x_window, prop);
-        })
+        unsafe {
+            xlib_error::sync_catch(self.context.x_display, || {
+                x::XDeleteProperty(self.context.x_display, self.x_window, prop);
+            })
+        }
     }
 
     // We must use the `XAlloc..()` functions because the structs might be extended in the
@@ -399,9 +423,13 @@ impl X11SharedWindow {
             let mem = x::XAllocWMHints();
             assert_ne!(mem, ptr::null_mut());
             *mem = wm_hints;
-            // Unhandled: BadAlloc, BadWindow
-            x::XSetWMHints(self.context.x_display, self.x_window, mem);
+            let status = xlib_error::sync_catch(self.context.x_display, || {
+                x::XSetWMHints(self.context.x_display, self.x_window, mem)
+            });
             x::XFree(mem as _);
+            if let Err(e) = status {
+                error!("XSetWMHints generated {}", e);
+            }
         }
     }
     fn x_set_wm_normal_hints(&self, normal_hints: x::XSizeHints) {
@@ -409,9 +437,13 @@ impl X11SharedWindow {
             let mem = x::XAllocSizeHints();
             assert_ne!(mem, ptr::null_mut());
             *mem = normal_hints;
-            // Unhandled: BadAlloc, BadWindow
-            x::XSetWMNormalHints(self.context.x_display, self.x_window, mem);
+            let status = xlib_error::sync_catch(self.context.x_display, || {
+                x::XSetWMNormalHints(self.context.x_display, self.x_window, mem)
+            });
             x::XFree(mem as _);
+            if let Err(e) = status {
+                error!("XSetWMNormalHints generated {}", e);
+            }
         }
     }
     fn x_set_class_hint(&self, class_hint: x::XClassHint) {
@@ -419,9 +451,13 @@ impl X11SharedWindow {
             let mem = x::XAllocClassHint();
             assert_ne!(mem, ptr::null_mut());
             *mem = class_hint;
-            // Unhandled: BadAlloc, BadWindow
-            x::XSetClassHint(self.context.x_display, self.x_window, mem);
+            let status = xlib_error::sync_catch(self.context.x_display, || {
+                x::XSetClassHint(self.context.x_display, self.x_window, mem)
+            });
             x::XFree(mem as _);
+            if let Err(e) = status {
+                error!("XSetClassHint generated {}", e);
+            }
         }
     }
     unsafe fn x_set_command(&self, argc: c_int, argv: *const *const c_char) {
@@ -588,7 +624,7 @@ impl X11SharedWindow {
     }
 
     pub fn title(&self) -> Result<String> {
-        unimplemented!{}
+        failed("This is not implemented yet")
     }
     pub fn set_title(&self, title: &str) -> Result<()> {
         unsafe {
@@ -628,7 +664,7 @@ impl X11SharedWindow {
     }
 
     pub fn icon(&self) -> Result<(Extent2<u32>, Vec<Rgba<u8>>)> {
-        unimplemented!{}
+        failed("This is not implemnted yet")
     }
     pub fn set_icon(&self, size: Extent2<u32>, data: &[Rgba<u8>]) -> Result<()> {
         let (w, h) = size.into_tuple();
@@ -804,16 +840,17 @@ impl X11SharedWindow {
         )
     }
     pub fn minimize(&self) -> Result<()> {
-        let status = unsafe {
+        let status = unsafe { xlib_error::sync_catch(self.context.x_display, || {
             x::XIconifyWindow(
                 self.context.x_display, self.x_window,
                 self.context.x_default_screen_num()
             )
-        };
-        if status != 0 {
-            return Ok(());
+        })};
+        match status {
+            Err(e) => Err(e),
+            Ok(0) => failed(format!("XIconifyWindow() returned 0")),
+            Ok(_) => Ok(()),
         }
-        failed(format!("XIconifyWindow() returned {}", status))
     }
     pub fn unminimize(&self) -> Result<()> {
         self.show()

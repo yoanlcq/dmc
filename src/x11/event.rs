@@ -13,90 +13,80 @@ use device::{self, DeviceID, DeviceInfo, MouseButton, Key, Keysym, Keycode};
 use window::WindowHandle;
 use {Vec2, Extent2, Rect};
 
-impl X11SharedContext {
-    pub fn supports_raw_device_events(&self) -> Result<bool> {
-        unimplemented!{}
-    }
-    pub fn poll_next_event(&self) -> Option<Event> {
-        if let Some(e) = self.pending_translated_events.borrow_mut().pop_front() {
-            return Some(e);
-        }
-        while unsafe { x::XPending(self.x_display) } > 0 {
-            if let Some(e) = self.wait_next_event() {
-                return Some(e);
-            }
-        }
-        None
-    }
-}
 
 type TranslateEventResult = ::std::result::Result<Event, Option<error::Error>>;
 
-fn discard_event() -> TranslateEventResult {
+fn ignore_event() -> TranslateEventResult {
     Err(None)
 }
-fn bad_event<S: Into<error::CowStr>>(s: S) -> TranslateEventResult {
+fn cannot_handle_event_yet<S: Into<error::CowStr>>(s: S) -> TranslateEventResult {
     Err(Some(error::Error::failed(s)))
 }
 
 
 impl X11SharedContext {
-    fn wait_next_event(&self) -> Option<Event> {
+    pub fn supports_raw_device_events(&self) -> Result<bool> {
+        self.xi()?;
+        Ok(true)
+    }
+    pub fn poll_next_event(&self) -> Option<Event> {
+        self.pump_events();
+        self.pending_translated_events.borrow_mut().pop_front()
+    }
+    fn pump_events(&self) {
+        while unsafe { x::XPending(self.x_display) } > 0 {
+            self.pump_next_event();
+        }
+    }
+    fn pump_next_event(&self) {
         let mut x_event = unsafe {
             let mut x_event: x::XEvent = mem::zeroed();
             x::XNextEvent(self.x_display, &mut x_event);
             x_event
         };
         match self.translate_x_event(&mut x_event) {
-            Ok(e) => Some(e),
-            Err(e) => {
-                match e {
-                    Some(e) => {
-                        warn!("Some X event was not handled properly: {}", e)
-                    },
-                    None => {
-                        trace!("Some X event was purposefully discarded: {:?}", x_event)
-                    },
-                }
-                None
+            Ok(e) => self.pending_translated_events.borrow_mut().push_back(e),
+            Err(e) => match e {
+                Some(e) => {
+                    warn!("Some X event was not handled properly: {}", e)
+                },
+                None => {
+                    trace!("Some X event was purposefully discarded: {:?}", x_event)
+                },
             },
         }
     }
 
     fn translate_x_event(&self, e: &mut x::XEvent) -> TranslateEventResult {
-        if let Ok(xi) = self.xi() {
-            unsafe {
+        match e.get_type() {
+            x::GenericEvent => {
                 let x_display = self.x_display;
                 let mut cookie = x::XGenericEventCookie::from(&*e);
-                if x::XGetEventData(x_display, &mut cookie) == x::True {
-                    if cookie.type_ == x::GenericEvent && cookie.extension == xi.major_opcode {
-                        let e = self.translate_xi_event(&mut *(cookie.data as *mut xi2::XIEvent));
-                        x::XFreeEventData(x_display, &mut cookie);
-                        return e;
+                unsafe {
+                    if x::XGetEventData(x_display, &mut cookie) == x::True {
+                        if let Ok(xi) = self.xi() {
+                            if cookie.type_ == x::GenericEvent && cookie.extension == xi.major_opcode {
+                                let e = self.translate_xi_event(&mut *(cookie.data as *mut xi2::XIEvent));
+                                x::XFreeEventData(x_display, &mut cookie);
+                                return e;
+                            }
+                        }
                     }
+                    // NOTE: Yes, do it even if XGetEventData() failed! See the man page.
+                    x::XFreeEventData(x_display, &mut cookie); 
                 }
-                // NOTE: Yes, do it even if XGetEventData() failed! See the man page.
-                x::XFreeEventData(x_display, &mut cookie); 
-            }
-        } else {
-            // These events are the older couterparts to XI2 events; they don't give as much
-            // information.
-            // If we have XI2, handle XI2 events instead (see the above 'if').
-            // If we don't, still handle them here.
-            let e = match e.get_type() {
-                x::KeyPress | x::KeyRelease => Some(self.translate_x_key_event(e.as_mut())),
-                x::ButtonPress | x::ButtonRelease => Some(self.translate_x_button_event(e.as_mut())),
-                x::MotionNotify => Some(self.translate_x_motion_event(e.as_mut())),
-                x::EnterNotify | x::LeaveNotify => Some(self.translate_x_crossing_event(e.as_mut())),
-                x::FocusIn | x::FocusOut => Some(self.translate_x_focus_change_event(e.as_mut())),
-                _ => None,
-            };
-            if let Some(e) = e {
-                return e;
-            }
-        }
-
-        match e.get_type() {
+                cannot_handle_event_yet(format!("Unhandled GenericEvent {:?}", e))
+            },
+            // These events are the older couterparts to XI2 events; they don't give as much information.
+            // In fact, if we were able to call XISelectEvents, we'll actually receive
+            // the XI2 events instead of these.
+            x::KeyPress | x::KeyRelease => self.translate_x_key_event(e.as_mut()),
+            x::ButtonPress | x::ButtonRelease => self.translate_x_button_event(e.as_mut()),
+            x::MotionNotify => self.translate_x_motion_event(e.as_mut()),
+            x::EnterNotify | x::LeaveNotify => self.translate_x_crossing_event(e.as_mut()),
+            x::FocusIn | x::FocusOut => self.translate_x_focus_change_event(e.as_mut()),
+            // ---
+            // ---
             x::ClientMessage => self.translate_x_client_message_event(e.as_mut()),
             x::GravityNotify => self.translate_x_gravity_event(e.as_mut()),
             x::ConfigureNotify => self.translate_x_configure_event(e.as_mut()),
@@ -107,7 +97,10 @@ impl X11SharedContext {
             x::UnmapNotify => self.translate_x_unmap_event(e.as_mut()),
             x::GraphicsExpose
             | x::NoExpose
-                => discard_event(),
+            | x::PropertyNotify  
+            | x::ReparentNotify  
+            | x::ColormapNotify  
+                => ignore_event(),
             x::KeymapNotify 
             | x::CirculateRequest
             | x::ConfigureRequest
@@ -116,14 +109,11 @@ impl X11SharedContext {
             | x::CirculateNotify
             | x::CreateNotify
             | x::DestroyNotify
-            | x::ReparentNotify  
-            | x::ColormapNotify  
-            | x::PropertyNotify  
             | x::SelectionClear  
             | x::SelectionNotify 
             | x::SelectionRequest
-                => bad_event(format!("Unhandled event {:?}", e)),
-            _   => bad_event(format!("Unknown event {:?}", e)),
+                => cannot_handle_event_yet(format!("Unhandled event {:?}", e)),
+            _   => cannot_handle_event_yet(format!("Unknown event {:?}", e)),
         }
     }
 
@@ -155,7 +145,7 @@ impl X11SharedContext {
             | xi2::XI_RawTouchUpdate  
             | xi2::XI_RawTouchEnd 
                 => self.translate_xi_raw_event(unsafe { mem::transmute(e) }),
-            _   => bad_event(format!("Unknown XI event: {:?}", e)),
+            _   => cannot_handle_event_yet(format!("Unknown XI event: {:?}", e)),
         }
     }
 
@@ -179,9 +169,9 @@ impl X11SharedContext {
         } = e;
         let _window = WindowHandle(window);
         match state {
-            x::VisibilityUnobscured => discard_event(),
-            x::VisibilityPartiallyObscured => discard_event(),
-            x::VisibilityFullyObscured => discard_event(),
+            x::VisibilityUnobscured => ignore_event(),
+            x::VisibilityPartiallyObscured => ignore_event(),
+            x::VisibilityFullyObscured => ignore_event(),
             _ => unreachable!{},
         }
     }
@@ -298,7 +288,7 @@ impl X11SharedContext {
         unsafe {
             x::XRefreshKeyboardMapping(e);
         }
-        discard_event()
+        ignore_event()
     }
     fn translate_x_client_message_event(&self, e: &mut x::XClientMessageEvent) -> TranslateEventResult {
         let &mut x::XClientMessageEvent {
@@ -306,10 +296,10 @@ impl X11SharedContext {
             message_type, format, data,
         } = e;
         if message_type != self.atoms.WM_PROTOCOLS().unwrap() {
-            return discard_event();
+            return ignore_event();
         }
         if format != 32 {
-            return discard_event();
+            return ignore_event();
         }
         if data.get_long(0) == self.atoms.WM_DELETE_WINDOW().unwrap() as _ {
             let window = WindowHandle(window);
@@ -330,10 +320,10 @@ impl X11SharedContext {
                         reply as *mut _ as _
                     );
                 }
-                return discard_event(); // We handled it but we have no equivalent in our API.
+                return ignore_event(); // We handled it but we have no equivalent in our API.
             }
         }
-        bad_event(format!("Unhandled ClientMessage event: {:?}", e))
+        cannot_handle_event_yet(format!("Unhandled ClientMessage event: {:?}", e))
     }
 
     fn translate_x_key_event(&self, e: &mut x::XKeyEvent) -> TranslateEventResult {
@@ -438,7 +428,7 @@ impl X11SharedContext {
                 x::ButtonPress => Ok(Event::MouseScroll {
                     mouse, window, instant, position, root_position, scroll,
                 }),
-                x::ButtonRelease => discard_event(),
+                x::ButtonRelease => ignore_event(),
                 _ => unreachable!{},
             },
             None => {
@@ -462,14 +452,14 @@ impl X11SharedContext {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
             time, deviceid, sourceid, reason, num_classes, classes,
         } = e;
-        unimplemented!{}
+        cannot_handle_event_yet(format!("Unhandled XIDeviceChangedEvent event: {:?}", e))
     }
     fn translate_xi_hierarchy_event(&self, e: &mut xi2::XIHierarchyEvent) -> TranslateEventResult {
         let &mut xi2::XIHierarchyEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
             time, flags, num_info, info,
         } = e;
-        unimplemented!{}
+        cannot_handle_event_yet(format!("Unhandled XIHierarchyEvent event: {:?}", e))
     }
     fn translate_xi_enter_event(&self, e: &mut xi2::XIEnterEvent) -> TranslateEventResult {
         let &mut xi2::XIEnterEvent {
@@ -479,14 +469,14 @@ impl X11SharedContext {
             event_x, event_y,
             mode, focus, same_screen, buttons, mods, group,
         } = e;
-        unimplemented!{}
+        cannot_handle_event_yet(format!("Unhandled XIEnterEvent event: {:?}", e))
     }
     fn translate_xi_property_event(&self, e: &mut xi2::XIPropertyEvent) -> TranslateEventResult {
         let &mut xi2::XIPropertyEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
             time, deviceid, property, what,
         } = e;
-        unimplemented!{}
+        cannot_handle_event_yet(format!("Unhandled XIPropertyEvent event: {:?}", e))
     }
     fn translate_xi_device_event(&self, e: &mut xi2::XIDeviceEvent) -> TranslateEventResult {
         let &mut xi2::XIDeviceEvent {
@@ -495,14 +485,14 @@ impl X11SharedContext {
             event: x_window, child, root_x, root_y,
             event_x, event_y, flags, buttons, valuators, mods, group,
         } = e;
-        unimplemented!{}
+        cannot_handle_event_yet(format!("Unhandled XIDeviceEvent event: {:?}", e))
     }
     fn translate_xi_raw_event(&self, e: &mut xi2::XIRawEvent) -> TranslateEventResult {
         let &mut xi2::XIRawEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
             time, deviceid, sourceid, detail, flags, valuators, raw_values,
         } = e;
-        unimplemented!{}
+        cannot_handle_event_yet(format!("Unhandled XIRawEvent event: {:?}", e))
     }
 
 
@@ -579,6 +569,6 @@ impl X11SharedContext {
         DeviceID(OsDeviceID::CoreKeyboard)
     }
     pub fn devices(&self) -> device::Result<HashMap<DeviceID, DeviceInfo>> {
-        unimplemented!{}
+        device::failed("This is not implemented yet, but this doesn't panic so I can test stuff")
     }
 }

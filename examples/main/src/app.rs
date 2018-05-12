@@ -7,8 +7,8 @@ use dmc::{self, Context, Window, WindowSettings, WindowTypeHint, Event, Extent2,
 
 #[derive(Debug, Default)]
 pub struct App {
-    pub context: Option<Context>,
-    pub main_window: Option<Window>,
+    context: Option<Context>,
+    main_window: Option<Window>,
 }
 
 macro_rules! tests {
@@ -155,10 +155,10 @@ impl App {
         failed_error("Window was not created")
     }
     #[allow(dead_code)]
-    fn main_window_mut(&mut self) -> dmc::error::Result<&mut Window> {
+    pub fn main_window_mut(&mut self) -> dmc::error::Result<&mut Window> {
         self.main_window.as_mut().map(Ok).unwrap_or(Err(Self::window_error()))
     }
-    fn main_window(&self) -> dmc::error::Result<&Window> {
+    pub fn main_window(&self) -> dmc::error::Result<&Window> {
         self.main_window.as_ref().map(Ok).unwrap_or(Err(Self::window_error()))
     }
 
@@ -166,16 +166,18 @@ impl App {
         failed_error("Context was not created")
     }
     #[allow(dead_code)]
-    fn context_mut(&mut self) -> dmc::error::Result<&mut Context> {
+    pub fn context_mut(&mut self) -> dmc::error::Result<&mut Context> {
         self.context.as_mut().map(Ok).unwrap_or(Err(Self::context_error()))
     }
-    fn context(&self) -> dmc::error::Result<&Context> {
+    pub fn context(&self) -> dmc::error::Result<&Context> {
         self.context.as_ref().map(Ok).unwrap_or(Err(Self::context_error()))
     }
 
 
     fn init_context(&mut self) -> test::Result {
         self.context = Some(Context::new()?);
+        #[cfg(x11)]
+        self.context()?.xlib_xsynchronize(false); // On purpose
         run_next_test()
     }
     fn init_window(&mut self) -> test::Result {
@@ -185,10 +187,12 @@ impl App {
             opengl: None,
             high_dpi: true,
         })?);
+        self.main_window()?.clear()?;
         run_next_test()
     }
     fn window_set_type_hint(&mut self) -> test::Result {
         self.main_window()?.set_type_hint(&WindowTypeHint::default())?;
+        self.main_window()?.clear()?;
         run_next_test()
     }
     fn window_set_title(&mut self) -> test::Result {
@@ -204,10 +208,12 @@ impl App {
     }
     fn window_raise(&mut self) -> test::Result {
         self.main_window()?.raise()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_show(&mut self) -> test::Result {
         self.main_window()?.show()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_hide(&mut self) -> test::Result {
@@ -216,6 +222,7 @@ impl App {
     }
     fn window_toggle_visibility(&mut self) -> test::Result {
         self.main_window()?.toggle_visibility()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_set_half_opacity(&mut self) -> test::Result {
@@ -231,20 +238,26 @@ impl App {
         run_next_test()
     }
     fn window_set_min_size(&mut self) -> test::Result {
+        self.main_window()?.clear()?;
         self.main_window()?.set_min_size(Extent2::new(500, 500))?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_set_max_size(&mut self) -> test::Result {
+        self.main_window()?.clear()?;
         self.main_window()?.set_max_size(Extent2::new(400, 400))?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_reset_min_max_size(&mut self) -> test::Result {
         self.main_window()?.set_min_size(Extent2::new(0, 0))?;
         self.main_window()?.set_max_size(Extent2::new(99999999, 99999999))?;
+        self.main_window()?.clear()?;
         run_next_test()
     }
     fn window_maximize(&mut self) -> test::Result {
         self.main_window()?.maximize()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_unmaximize(&mut self) -> test::Result {
@@ -253,6 +266,7 @@ impl App {
     }
     fn window_toggle_maximize(&mut self) -> test::Result {
         self.main_window()?.toggle_maximize()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_minimize(&mut self) -> test::Result {
@@ -261,23 +275,26 @@ impl App {
     }
     fn window_unminimize(&mut self) -> test::Result {
         self.main_window()?.unminimize()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_toggle_minimize(&mut self) -> test::Result {
         self.main_window()?.toggle_minimize()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_enter_fullscreen(&mut self) -> test::Result {
         self.main_window()?.enter_fullscreen()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
-    // TODO: test opacity while in full-screen
     fn window_leave_fullscreen(&mut self) -> test::Result {
         self.main_window()?.leave_fullscreen()?;
         wait_for_approval()
     }
     fn window_toggle_fullscreen(&mut self) -> test::Result {
         self.main_window()?.toggle_fullscreen()?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_demand_attention(&mut self) -> test::Result {
@@ -294,10 +311,12 @@ impl App {
     }
     fn window_set_size(&mut self) -> test::Result {
         self.main_window()?.set_size(Extent2::new(600, 600))?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
     fn window_set_position_and_size(&mut self) -> test::Result {
         self.main_window()?.set_position_and_size(Rect { x: 200, y: 200, w: 200, h: 200, })?;
+        self.main_window()?.clear()?;
         wait_for_approval()
     }
 }

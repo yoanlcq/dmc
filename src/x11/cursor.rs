@@ -22,26 +22,28 @@ pub struct X11SharedCursor {
 
 impl Drop for X11SharedCursor {
     fn drop(&mut self) {
+        let x_display = self.context.lock_x_display();
         unsafe {
             for x_anim_cursor in &self.x_anim_cursors {
-                x::XFreeCursor(self.context.x_display, x_anim_cursor.cursor);
+                x::XFreeCursor(*x_display, x_anim_cursor.cursor);
             }
-            x::XFreeCursor(self.context.x_display, self.x_cursor);
+            x::XFreeCursor(*x_display, self.x_cursor);
         }
     }
 }
 
 impl X11SharedWindow {
     fn refresh_cursor_internal(&self) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
             if self.is_cursor_visible.get() {
                 if let Some(ref user_cursor) = *self.user_cursor.borrow() {
-                    x::XDefineCursor(self.context.x_display, self.x_window, user_cursor.0.x_cursor);
+                    x::XDefineCursor(*x_display, self.x_window, user_cursor.0.x_cursor);
                 } else {
-                    x::XUndefineCursor(self.context.x_display, self.x_window);
+                    x::XUndefineCursor(*x_display, self.x_window);
                 }
             } else {
-                x::XDefineCursor(self.context.x_display, self.x_window, self.context.invisible_x_cursor);
+                x::XDefineCursor(*x_display, self.x_window, self.context.invisible_x_cursor);
             }
         }
         self.context.x_flush();
@@ -79,7 +81,7 @@ impl X11SharedWindow {
             None => {
                 warn!("There is no reliable way to retrieve a windows's cursor on X11");
                 let x_cursor = unsafe {
-                    create_default_x_cursor(self.context.x_display)
+                    create_default_x_cursor(*self.context.lock_x_display())
                 };
                 Ok(X11Cursor(Rc::new(X11SharedCursor { context: Rc::clone(&self.context), x_cursor, x_anim_cursors: vec![] })))
             },
@@ -91,7 +93,7 @@ impl X11Context {
     pub fn create_system_cursor(&self, s: SystemCursor) -> Result<X11Cursor> {
         let x_cursor = unsafe {
             // Ignoring BadAlloc, BadValue
-            x::XCreateFontCursor(self.x_display, system_cursor_to_x_font_cursor_shape(s))
+            x::XCreateFontCursor(*self.lock_x_display(), system_cursor_to_x_font_cursor_shape(s))
         };
         Ok(X11Cursor(Rc::new(X11SharedCursor { context: Rc::clone(&self.0), x_cursor, x_anim_cursors: vec![] })))
     }
@@ -116,17 +118,19 @@ impl X11Context {
         .filter_map(Result::ok)
         .collect();
 
+        let x_display = self.lock_x_display();
+
         if x_anim_cursors.len() < frames.len() {
             for x_anim_cursor in x_anim_cursors {
                 unsafe {
-                    x::XFreeCursor(self.x_display, x_anim_cursor.cursor);
+                    x::XFreeCursor(*x_display, x_anim_cursor.cursor);
                 }
             }
             return errors.swap_remove(0);
         }
 
         let x_cursor = unsafe {
-            xrender::XRenderCreateAnimCursor(self.x_display, x_anim_cursors.len() as _, x_anim_cursors.as_mut_ptr())
+            xrender::XRenderCreateAnimCursor(*x_display, x_anim_cursors.len() as _, x_anim_cursors.as_mut_ptr())
         };
 
         Ok(X11Cursor(Rc::new(X11SharedCursor { context: Rc::clone(&self.0), x_cursor, x_anim_cursors: vec![] })))
@@ -140,7 +144,7 @@ impl X11SharedContext {
         let status = unsafe {
             // Ignoring BadDrawable
             x::XQueryBestCursor(
-                self.x_display, drawable,
+                *self.lock_x_display(), drawable,
                 size_hint.w as _, size_hint.h as _,
                 &mut best.w, &mut best.h
             )
@@ -154,26 +158,26 @@ impl X11SharedContext {
         // Return early if we don't have XRender, before allocating anything
         let xrender = self.xrender()?;
 
-        let x_display = self.x_display;
+        let x_display = self.lock_x_display();
         let root = self.x_default_root_window();
         let visual = self.x_default_visual();
         let Extent2 { w, h } = frame.size;
         let Vec2 { x: hot_x, y: hot_y } = frame.hotspot;
         unsafe {
-            let pix = x::XCreatePixmap(x_display, root, w, h, 32);
-            let pix_gc = x::XCreateGC(x_display, pix, 0, ptr::null_mut());
+            let pix = x::XCreatePixmap(*x_display, root, w, h, 32);
+            let pix_gc = x::XCreateGC(*x_display, pix, 0, ptr::null_mut());
             let pix_img = x::XCreateImage(
-                x_display, visual, 32, x::ZPixmap, 0,
+                *x_display, visual, 32, x::ZPixmap, 0,
                 frame.rgba.as_ptr() as *const _ as *mut _,
                 w, h, 32, 4*(w as c_int)
             );
-            x::XPutImage(x_display, pix, pix_gc, pix_img, 0, 0, 0, 0, w, h);
-            let pic = xrender::XRenderCreatePicture(x_display, pix, xrender.argb32_pict_format, 0, ptr::null_mut());
-            let x_cursor = xrender::XRenderCreateCursor(x_display, pic, hot_x as _, hot_y as _);
-            xrender::XRenderFreePicture(x_display, pic);
+            x::XPutImage(*x_display, pix, pix_gc, pix_img, 0, 0, 0, 0, w, h);
+            let pic = xrender::XRenderCreatePicture(*x_display, pix, xrender.argb32_pict_format, 0, ptr::null_mut());
+            let x_cursor = xrender::XRenderCreateCursor(*x_display, pic, hot_x as _, hot_y as _);
+            xrender::XRenderFreePicture(*x_display, pic);
             x::XDestroyImage(pix_img);
-            x::XFreeGC(x_display, pix_gc);
-            x::XFreePixmap(x_display, pix);
+            x::XFreeGC(*x_display, pix_gc);
+            x::XFreePixmap(*x_display, pix);
             unimplemented!{"This code is probably wrong because data is RGBA but pict format is ARGB. Test me!!!"}
         }
     }

@@ -1,4 +1,5 @@
 use std::ptr;
+use std::mem;
 use std::ffi::CStr;
 use std::rc::{Rc, Weak};
 use std::cell::{RefCell, Cell};
@@ -38,18 +39,80 @@ impl Context {
     }
     /// (X11-only) Gets the `Display` pointer associated with this `Context`.
     ///
-    /// Be careful: It is closed when the `Context` is dropped.
+    /// Be careful: It is closed when the `Context` is dropped.  
+    /// Also, it is not locked via `XLockDisplay()`. It's up to you to call it
+    /// if necessary and call `XUnlockDisplay()` as appropriate.
     pub fn xlib_display(&self) -> *mut x::Display {
-        self.0.x11.x_display
+        self.0.x11.x11_owned_display.0
+    }
+    /// (X11-only) Calls `XSynchronize` to enable or disable synchronous behaviour.
+    ///
+    /// This should be avoided but is useful for debugging.  
+    /// See also
+    /// [this page](https://tronche.com/gui/x/xlib/event-handling/protocol-errors/synchronization.html).
+    pub fn xlib_xsynchronize(&self, enable: bool) {
+        unsafe {
+            x::XSynchronize(*self.0.x11.lock_x_display(), enable as _);
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct X11Context(pub Rc<X11SharedContext>);
 
+/// An "owned" Xlib `Display` pointer, which is closed when dropped.
+#[derive(Debug)]
+pub struct X11OwnedDisplay(*mut x::Display);
+
+#[derive(Debug)]
+pub struct X11LockedDisplay<'a>(*mut x::Display, ::std::marker::PhantomData<&'a ()>);
+
+impl X11OwnedDisplay {
+    // `XLockDisplay()` is fine to call anywhere as long as there's a matching
+    // `XUnlockDisplay()` in the end.
+    //
+    // Calls to `XLockDisplay()` can safely be nested (as if there was an internal refcount).
+    //
+    // In addition, we pay no cost for `XLockDisplay()` and `XUnlockDisplay()` if `XInitThreads()`
+    // was not called in the first place.
+    fn lock<'a>(&'a self) -> X11LockedDisplay<'a> {
+        unsafe {
+            x::XLockDisplay(self.0);
+        }
+        X11LockedDisplay(self.0, ::std::marker::PhantomData)
+    }
+}
+impl<'a> Drop for X11LockedDisplay<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            x::XUnlockDisplay(self.0);
+        }
+    }
+}
+impl Drop for X11OwnedDisplay {
+    fn drop(&mut self) {
+        unsafe {
+            close_x_display(self.0)
+        }
+    }
+}
+
+impl<'a> Deref for X11LockedDisplay<'a> {
+    type Target = *mut x::Display;
+    fn deref(&self) -> &*mut x::Display {
+        &self.0
+    }
+}
+
+impl X11SharedContext {
+    pub fn lock_x_display<'a>(&'a self) -> X11LockedDisplay<'a> {
+        self.x11_owned_display.lock()
+    }
+}
+
 #[derive(Debug)]
 pub struct X11SharedContext {
-    pub x_display: *mut x::Display,
+    x11_owned_display: X11OwnedDisplay,
     pub xim: Option<x::XIM>,
     pub atoms: atoms::PreloadedAtoms,
     pub xrender: Result<xrender::XRender>,
@@ -73,21 +136,21 @@ impl Deref for X11Context {
 impl Drop for X11SharedContext {
     fn drop(&mut self) {
         let &mut Self {
-            x_display, xim, atoms: _, xrender: _, xi: _,
+            x11_owned_display: _, xim, atoms: _, xrender: _, xi: _,
             invisible_x_cursor, default_x_cursor, weak_windows: _,
             pending_translated_events: _,
             previous_x_key_release_keycode: _,
             previous_x_key_release_time: _,
         } = self;
+        let x_display = self.lock_x_display();
         unsafe {
-            x::XSync(x_display, x::False);
-            x::XFreeCursor(x_display, invisible_x_cursor);
-            x::XFreeCursor(x_display, default_x_cursor);
+            x::XSync(*x_display, x::False);
+            x::XFreeCursor(*x_display, invisible_x_cursor);
+            x::XFreeCursor(*x_display, default_x_cursor);
             if let Some(xim) = xim {
                 x::XCloseIM(xim);
                 trace!("Closed XIM {:?}", xim);
             }
-            close_x_display(x_display);
         }
     }
 }
@@ -164,65 +227,66 @@ impl X11Context {
             x::XOpenDisplay(x_display_name_ptr)
         };
         let actual_name = unsafe {
+            // NOTE: Still works if x_display is NULL. That's the point.
             CStr::from_ptr(x::XDisplayString(x_display)).to_string_lossy()
         };
         if x_display.is_null() {
             return failed(format!("Failed to open X display `{}`", actual_name));
         }
         trace!("Opened X Display `{}`", actual_name);
-        unsafe {
-            match Self::from_xlib_display(x_display) {
-                Ok(s) => Ok(s),
-                Err(e) => {
-                    close_x_display(x_display);
-                    Err(e)
-                },
-            }
-        }
+        Self::from_x11_owned_display(X11OwnedDisplay(x_display))
     }
 
     pub unsafe fn from_xlib_display(x_display: *mut x::Display) -> Result<Self> {
         assert!(!x_display.is_null());
+        Self::from_x11_owned_display(X11OwnedDisplay(x_display))
+    }
 
-        let screen_count      = x::XScreenCount(x_display);
-        let protocol_version  = x::XProtocolVersion(x_display);
-        let protocol_revision = x::XProtocolRevision(x_display);
-        let vendor_release    = x::XVendorRelease(x_display);
-        let server_vendor     = CStr::from_ptr(x::XServerVendor(x_display)).to_string_lossy();
-        trace!("X protocol version {}, revision {}", protocol_version, protocol_revision);
-        trace!("X server vendor: `{}`, release {}", server_vendor, vendor_release);
-        trace!("X server screen count: {}", screen_count);
+    pub fn from_x11_owned_display(x11_owned_display: X11OwnedDisplay) -> Result<Self> {
+        let mut c = unsafe {
+            let x_display = x11_owned_display.lock();
+            let screen_count      = x::XScreenCount(*x_display);
+            let protocol_version  = x::XProtocolVersion(*x_display);
+            let protocol_revision = x::XProtocolRevision(*x_display);
+            let vendor_release    = x::XVendorRelease(*x_display);
+            let server_vendor     = CStr::from_ptr(x::XServerVendor(*x_display)).to_string_lossy();
+            trace!("X protocol version {}, revision {}", protocol_version, protocol_revision);
+            trace!("X server vendor: `{}`, release {}", server_vendor, vendor_release);
+            trace!("X server screen count: {}", screen_count);
 
-        let previous_x_key_release_keycode = Cell::new(x::KeyCode::default());
-        let previous_x_key_release_time = Cell::new(x::Time::default());
-        let pending_translated_events = RefCell::new(VecDeque::new());
-        let weak_windows = RefCell::new(HashMap::new());
+            let previous_x_key_release_keycode = Cell::new(x::KeyCode::default());
+            let previous_x_key_release_time = Cell::new(x::Time::default());
+            let pending_translated_events = RefCell::new(VecDeque::new());
+            let weak_windows = RefCell::new(HashMap::new());
 
-        init_all_extensions(x_display);
+            init_all_extensions(*x_display);
 
-        let atoms = atoms::PreloadedAtoms::load(x_display)?;
-        let invisible_x_cursor = super::cursor::create_invisible_x_cursor(x_display);
-        let default_x_cursor = super::cursor::create_default_x_cursor(x_display);
-        let xrender = super::xrender::XRender::query(x_display);
-        let xi = super::xi::XI::query(x_display);
+            let atoms = atoms::PreloadedAtoms::load(*x_display)?; // Sneaky return, watch out for unmanaged resources created before this line!
+            let invisible_x_cursor = super::cursor::create_invisible_x_cursor(*x_display);
+            let default_x_cursor = super::cursor::create_default_x_cursor(*x_display);
+            let xrender = super::xrender::XRender::query(*x_display);
+            let xi = super::xi::XI::query(*x_display);
 
-        let xim = {
-            let (db, res_name, res_class) = (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
-            let xim = x::XOpenIM(x_display, db, res_name, res_class);
-            if xim.is_null() {
-                warn!("XOpenIM() returned NULL");
-                None
-            } else {
-                trace!("Opened XIM {:?}", xim);
-                Some(xim)
+            let xim = {
+                let (db, res_name, res_class) = (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
+                let xim = x::XOpenIM(*x_display, db, res_name, res_class);
+                if xim.is_null() {
+                    warn!("XOpenIM() returned NULL");
+                    None
+                } else {
+                    trace!("Opened XIM {:?}", xim);
+                    Some(xim)
+                }
+            };
+            X11SharedContext {
+                xim, atoms, xrender, xi, invisible_x_cursor, default_x_cursor,
+                weak_windows, pending_translated_events,
+                previous_x_key_release_keycode,
+                previous_x_key_release_time,
+                x11_owned_display: mem::zeroed(), // Can't move x11_owned_display because it is borrowed
             }
         };
-        let c = X11SharedContext {
-            x_display, xim, atoms, xrender, xi, invisible_x_cursor, default_x_cursor,
-            weak_windows, pending_translated_events,
-            previous_x_key_release_keycode,
-            previous_x_key_release_time,
-        };
+        mem::forget(mem::replace(&mut c.x11_owned_display, x11_owned_display));
         Ok(X11Context(Rc::new(c)))
     }
 }
@@ -231,28 +295,28 @@ impl X11Context {
 impl X11SharedContext {
     pub fn x_default_screen(&self) -> *mut x::Screen {
         unsafe {
-            x::XDefaultScreenOfDisplay(self.x_display)
+            x::XDefaultScreenOfDisplay(*self.lock_x_display())
         }
     }
     pub fn x_default_screen_num(&self) -> c_int {
         unsafe {
-            x::XDefaultScreen(self.x_display)
+            x::XDefaultScreen(*self.lock_x_display())
         }
     }
     pub fn x_default_root_window(&self) -> x::Window {
         unsafe {
-            x::XDefaultRootWindow(self.x_display)
+            x::XDefaultRootWindow(*self.lock_x_display())
         }
     }
     pub fn x_default_visual(&self) -> *mut x::Visual {
         unsafe {
-            x::XDefaultVisual(self.x_display, self.x_default_screen_num())
+            x::XDefaultVisual(*self.lock_x_display(), self.x_default_screen_num())
         }
     }
     /// XFlush() flushes the output buffer.
     pub fn x_flush(&self) {
         unsafe {
-            x::XFlush(self.x_display);
+            x::XFlush(*self.lock_x_display());
         }
     }
     /// XSync() is like XFlush() except that it also waits for all requests
@@ -260,18 +324,18 @@ impl X11SharedContext {
     /// called before going any further.
     pub fn x_sync(&self) {
         unsafe {
-            x::XSync(self.x_display, x::False);
+            x::XSync(*self.lock_x_display(), x::False);
         }
     }
     #[allow(dead_code)]
     fn x_sync_discarding_all_events_in_the_queue(&self) {
         unsafe {
-            x::XSync(self.x_display, x::True);
+            x::XSync(*self.lock_x_display(), x::True);
         }
     }
 
     fn root_prop<T: PropElement>(&self, prop: x::Atom, req_type: PropType, long_range: Range<usize>) -> Result<PropData<T>> {
-        prop::get(self.x_display, self.x_default_root_window(), prop, req_type, long_range)
+        prop::get(*self.lock_x_display(), self.x_default_root_window(), prop, req_type, long_range)
     }
 
     fn number_of_desktops(&self) -> Result<usize> {
@@ -320,7 +384,7 @@ impl X11SharedContext {
     pub fn untrap_mouse(&self) -> Result<()> {
         unsafe {
             // No status or error to check for.
-            x::XUngrabPointer(self.x_display, x::CurrentTime);
+            x::XUngrabPointer(*self.lock_x_display(), x::CurrentTime);
         }
         Ok(())
     }

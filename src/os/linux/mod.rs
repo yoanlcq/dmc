@@ -14,6 +14,7 @@ use uuid::Uuid as Guid;
 use self::linuxdev::{LinuxdevContext, LinuxdevToken, LinuxdevAxisInfo, LinuxdevDeviceInfo};
 pub use self::linuxdev::{OsControllerInfo, OsControllerState};
 use x11::{
+    set_hint as set_hint_x11,
     X11Context, X11Window, X11WindowHandle, X11WindowFromHandleParams, X11Cursor,
     X11GLProc, X11GLPixelFormat, X11GLContext,
     X11Keysym, X11Keycode,
@@ -35,6 +36,11 @@ use device::{
 };
 use cursor::{SystemCursor, RgbaCursorData, RgbaCursorAnimFrame};
 use {Vec2, Extent2};
+
+
+pub fn set_hint(hint: ::hint::Hint) -> Result<()> {
+    set_hint_x11(hint)
+}
 
 #[derive(Debug)]
 pub struct OsContext {

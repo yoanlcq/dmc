@@ -34,14 +34,16 @@ impl X11SharedContext {
         self.pending_translated_events.borrow_mut().pop_front()
     }
     fn pump_events(&self) {
-        while unsafe { x::XPending(self.x_display) } > 0 {
+        let x_display = self.lock_x_display();
+        while unsafe { x::XPending(*x_display) } > 0 {
             self.pump_next_event();
         }
     }
     fn pump_next_event(&self) {
+        let x_display = self.lock_x_display();
         let mut x_event = unsafe {
             let mut x_event: x::XEvent = mem::zeroed();
-            x::XNextEvent(self.x_display, &mut x_event);
+            x::XNextEvent(*x_display, &mut x_event);
             x_event
         };
         match self.translate_x_event(&mut x_event) {
@@ -60,20 +62,20 @@ impl X11SharedContext {
     fn translate_x_event(&self, e: &mut x::XEvent) -> TranslateEventResult {
         match e.get_type() {
             x::GenericEvent => {
-                let x_display = self.x_display;
+                let x_display = self.lock_x_display();
                 let mut cookie = x::XGenericEventCookie::from(&*e);
                 unsafe {
-                    if x::XGetEventData(x_display, &mut cookie) == x::True {
+                    if x::XGetEventData(*x_display, &mut cookie) == x::True {
                         if let Ok(xi) = self.xi() {
                             if cookie.type_ == x::GenericEvent && cookie.extension == xi.major_opcode {
                                 let e = self.translate_xi_event(&mut *(cookie.data as *mut xi2::XIEvent));
-                                x::XFreeEventData(x_display, &mut cookie);
+                                x::XFreeEventData(*x_display, &mut cookie);
                                 return e;
                             }
                         }
                     }
                     // NOTE: Yes, do it even if XGetEventData() failed! See the man page.
-                    x::XFreeEventData(x_display, &mut cookie); 
+                    x::XFreeEventData(*x_display, &mut cookie); 
                 }
                 cannot_handle_event_yet(format!("Unhandled GenericEvent {:?}", e))
             },
@@ -291,6 +293,7 @@ impl X11SharedContext {
         ignore_event()
     }
     fn translate_x_client_message_event(&self, e: &mut x::XClientMessageEvent) -> TranslateEventResult {
+        let x_display = self.lock_x_display();
         let &mut x::XClientMessageEvent {
             type_: _, serial: _, send_event: _, display: _, window,
             message_type, format, data,
@@ -315,7 +318,7 @@ impl X11SharedContext {
                 unsafe {
                     // BadValue, BadWindow
                     x::XSendEvent(
-                        self.x_display, window, x::False, 
+                        *x_display, window, x::False, 
                         x::SubstructureNotifyMask | x::SubstructureRedirectMask,
                         reply as *mut _ as _
                     );

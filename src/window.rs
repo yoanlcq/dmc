@@ -498,4 +498,15 @@ impl Window {
     pub fn trap_mouse(&self) -> Result<()> {
         self.0.trap_mouse()
     }
+    /// Clears the window's contents. This is currently only used for testing
+    /// (e.g when changing a window's size in any way).
+    ///
+    /// You should probably not use it if an OpenGL context is current for this window.
+    pub fn clear(&self) -> Result<()> {
+        self.0.clear()
+    }
+    /// Clears some area within the window. See `clear()` for additional comments.
+    pub fn clear_rect(&self, r: Rect<i32, u32>) -> Result<()> {
+        self.0.clear_rect(r)
+    }
 }

@@ -25,7 +25,7 @@ impl X11SharedContext {
             return Err(e);
         }
         unsafe {
-            xi_select_events(self.x_display, x_window, &[(
+            xi_select_events(*self.lock_x_display(), x_window, &[(
                 xi2::XIAllDevices,
                 &[
                     xi2::XI_ButtonPress,

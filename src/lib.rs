@@ -28,6 +28,7 @@ pub use vek::{
     Vec2, Extent2, Rect, Rgb, Rgba,
 };
 
+pub mod hint;
 pub mod error;
 pub use error::{ErrorKind, Error};
 pub mod timeout;
@@ -54,6 +55,7 @@ macro_rules! os_mod {
         mod os {
             pub mod $os;
             pub use self::$os::{
+                set_hint,
                 OsContext, OsWindow, OsWindowHandle, OsWindowFromHandleParams,
                 OsCursor,
                 OsGLPixelFormat, OsGLContext, OsGLProc,

@@ -46,12 +46,6 @@ pub struct X11Window(pub Rc<X11SharedWindow>);
 
 
 impl Window {
-    /// (X11-only) Gets the X `Display` pointer associated with the `Context` for this `Window`.
-    ///
-    /// Be careful: It is closed when the `Context` is dropped.
-    pub fn xlib_display(&self) -> *mut x::Display {
-        self.0.context.x_display
-    }
     /// (X11-only) Gets the X input context (XIC) associated with this `Window`, if present.
     ///
     /// Be careful: It is destroyed when the `Window` is dropped.
@@ -81,7 +75,7 @@ impl Drop for X11SharedWindow {
             is_cursor_visible: _,
         } = self;
 
-        let x_display = context.x_display;
+        let x_display = context.lock_x_display();
 
         match context.weak_windows.borrow_mut().remove(&x_window) {
             Some(_weak) => trace!("Removed X Window {} from the context's list", x_window),
@@ -93,9 +87,9 @@ impl Drop for X11SharedWindow {
                 x::XDestroyIC(xic);
                 trace!("Destroyed XIC {:?}", xic);
             }
-            x::XDestroyWindow(x_display, x_window);
+            x::XDestroyWindow(*x_display, x_window);
             trace!("Destroyed X Window {}", x_window);
-            x::XFreeColormap(x_display, colormap);
+            x::XFreeColormap(*x_display, colormap);
             trace!("Freed Colormap {}", colormap);
         }
     }
@@ -104,10 +98,10 @@ impl Drop for X11SharedWindow {
 
 impl X11Context {
     pub fn create_window(&self, window_settings: &WindowSettings) -> Result<X11Window> {
-        let x_display = self.x_display;
+        let x_display = self.lock_x_display();
 
         let parent = unsafe {
-            x::XDefaultRootWindow(x_display)
+            x::XDefaultRootWindow(*x_display)
         };
 
         let &WindowSettings {
@@ -130,21 +124,21 @@ impl X11Context {
                 }
                 let vi = unsafe { *pixel_format.0.visual_info };
                 let colormap = unsafe {
-                    x::XCreateColormap(x_display, parent, vi.visual, x::AllocNone)
+                    x::XCreateColormap(*x_display, parent, vi.visual, x::AllocNone)
                 };
                 (vi.visual, vi.depth, colormap)
                 */
             },
             None => {
                 let screen_num = unsafe {
-                    x::XDefaultScreen(x_display)
+                    x::XDefaultScreen(*x_display)
                 };
                 let depth = x::CopyFromParent;
                 let visual = unsafe {
-                    x::XDefaultVisual(x_display, screen_num)
+                    x::XDefaultVisual(*x_display, screen_num)
                 };
-                let colormap = match unsafe { xlib_error::sync_catch(x_display, || {
-                    x::XCreateColormap(x_display, parent, visual, x::AllocNone)
+                let colormap = match unsafe { xlib_error::sync_catch(*x_display, || {
+                    x::XCreateColormap(*x_display, parent, visual, x::AllocNone)
                 })} {
                     Ok(c) => c,
                     Err(e) => return failed(format!("XCreateColormap failed with {}", e)),
@@ -187,7 +181,7 @@ impl X11Context {
             },
             background_pixmap    : 0,
             background_pixel     : unsafe {
-                x::XWhitePixel(x_display, 0)
+                x::XWhitePixel(*x_display, 0)
             },
             border_pixmap        : 0,
             border_pixel         : 0,
@@ -202,15 +196,15 @@ impl X11Context {
             cursor               : 0,
         };
 
-        let x_window = unsafe { xlib_error::sync_catch(x_display, || {
+        let x_window = unsafe { xlib_error::sync_catch(*x_display, || {
             x::XCreateWindow(
-                x_display, parent, x, y, w, h,
+                *x_display, parent, x, y, w, h,
                 border_thickness, depth, class as _, visual, valuemask, &mut swa
             )
         })}?;
         if x_window == 0 {
             unsafe {
-                x::XFreeColormap(x_display, colormap);
+                x::XFreeColormap(*x_display, colormap);
             }
             return failed("XCreateWindow() returned 0");
         }
@@ -233,9 +227,9 @@ impl X11Context {
                 protocols[protocols_len] = atom;
                 protocols_len += 1;
             }
-            match unsafe { xlib_error::sync_catch(x_display, || {
+            match unsafe { xlib_error::sync_catch(*x_display, || {
                 x::XSetWMProtocols(
-                    x_display, x_window, protocols.as_mut_ptr(), protocols_len as _
+                    *x_display, x_window, protocols.as_mut_ptr(), protocols_len as _
                 )
             })} {
                 Ok(success) => if success == 0 {
@@ -249,7 +243,7 @@ impl X11Context {
             unsafe {
                 match libc::getpid() {
                     pid if pid <= 0 => warn!("getpid() returned {}; _NET_WM_PID won't be set!", pid),
-                    pid => match prop::set(x_display, x_window, net_wm_pid, PropType::Cardinal, PropMode::Replace, &[pid as c_ulong]) {
+                    pid => match prop::set(*x_display, x_window, net_wm_pid, PropType::Cardinal, PropMode::Replace, &[pid as c_ulong]) {
                         Err(e) => warn!("Failed to set _NET_WM_PID: {}", e),
                         _ => (),
                     },
@@ -259,7 +253,7 @@ impl X11Context {
 
         // Getting an X Input Context for this window
         let xic = if let Some(xim) = self.xim {
-            match unsafe { xlib_error::sync_catch(x_display, || {
+            match unsafe { xlib_error::sync_catch(*x_display, || {
                 x::XCreateIC(xim, 
                     x::XNClientWindow_0.as_ptr(), x_window as c_ulong,
                     x::XNFocusWindow_0.as_ptr(), x_window as c_ulong,
@@ -368,11 +362,11 @@ impl X11Context {
                 warn!("X Window {} was destroyed but not removed from the context's list", x_window);
             }
         }
-        let x_display = self.x_display;
+        let x_display = self.lock_x_display();
         let wa = unsafe {
             let mut wa = mem::zeroed();
-            let status = xlib_error::sync_catch(x_display, || {
-                x::XGetWindowAttributes(x_display, x_window, &mut wa)
+            let status = xlib_error::sync_catch(*x_display, || {
+                x::XGetWindowAttributes(*x_display, x_window, &mut wa)
             })?;
             if status != x::Success as _ {
                 return failed(format!("XGetWindowAttributes() returned {}", status));
@@ -402,15 +396,16 @@ impl X11Context {
 
 impl X11SharedWindow {
     fn set_prop<T: PropElement>(&self, prop: x::Atom, prop_type: PropType, mode: PropMode, data: &[T]) -> Result<()> {
-        prop::set(self.context.x_display, self.x_window, prop, prop_type, mode, data)
+        prop::set(*self.context.lock_x_display(), self.x_window, prop, prop_type, mode, data)
     }
     fn prop<T: PropElement>(&self, prop: x::Atom, req_type: PropType, long_range: Range<usize>) -> Result<PropData<T>> {
-        prop::get(self.context.x_display, self.x_window, prop, req_type, long_range)
+        prop::get(*self.context.lock_x_display(), self.x_window, prop, req_type, long_range)
     }
     fn delete_prop(&self, prop: x::Atom) -> Result<()> {
         unsafe {
-            xlib_error::sync_catch(self.context.x_display, || {
-                x::XDeleteProperty(self.context.x_display, self.x_window, prop);
+            let x_display = self.context.lock_x_display();
+            xlib_error::sync_catch(*x_display, || {
+                x::XDeleteProperty(*x_display, self.x_window, prop);
             })
         }
     }
@@ -419,12 +414,13 @@ impl X11SharedWindow {
     // future and only the XAlloc* functions know how big they are.
     // Silly if you ask me.
     fn x_set_wm_hints(&self, wm_hints: x::XWMHints) {
+        let x_display = self.context.lock_x_display();
         unsafe {
             let mem = x::XAllocWMHints();
             assert_ne!(mem, ptr::null_mut());
             *mem = wm_hints;
-            let status = xlib_error::sync_catch(self.context.x_display, || {
-                x::XSetWMHints(self.context.x_display, self.x_window, mem)
+            let status = xlib_error::sync_catch(*x_display, || {
+                x::XSetWMHints(*x_display, self.x_window, mem)
             });
             x::XFree(mem as _);
             if let Err(e) = status {
@@ -433,12 +429,13 @@ impl X11SharedWindow {
         }
     }
     fn x_set_wm_normal_hints(&self, normal_hints: x::XSizeHints) {
+        let x_display = self.context.lock_x_display();
         unsafe {
             let mem = x::XAllocSizeHints();
             assert_ne!(mem, ptr::null_mut());
             *mem = normal_hints;
-            let status = xlib_error::sync_catch(self.context.x_display, || {
-                x::XSetWMNormalHints(self.context.x_display, self.x_window, mem)
+            let status = xlib_error::sync_catch(*x_display, || {
+                x::XSetWMNormalHints(*x_display, self.x_window, mem)
             });
             x::XFree(mem as _);
             if let Err(e) = status {
@@ -447,12 +444,13 @@ impl X11SharedWindow {
         }
     }
     fn x_set_class_hint(&self, class_hint: x::XClassHint) {
+        let x_display = self.context.lock_x_display();
         unsafe {
             let mem = x::XAllocClassHint();
             assert_ne!(mem, ptr::null_mut());
             *mem = class_hint;
-            let status = xlib_error::sync_catch(self.context.x_display, || {
-                x::XSetClassHint(self.context.x_display, self.x_window, mem)
+            let status = xlib_error::sync_catch(*x_display, || {
+                x::XSetClassHint(*x_display, self.x_window, mem)
             });
             x::XFree(mem as _);
             if let Err(e) = status {
@@ -461,7 +459,7 @@ impl X11SharedWindow {
         }
     }
     unsafe fn x_set_command(&self, argc: c_int, argv: *const *const c_char) {
-        x::XSetCommand(self.context.x_display, self.x_window, argv as _, argc);
+        x::XSetCommand(*self.context.lock_x_display(), self.x_window, argv as _, argc);
     }
 
     pub(crate) fn set_net_wm_user_time(&self, time: x::Time) -> Result<()> {
@@ -497,13 +495,13 @@ impl X11SharedWindow {
         )
     }
     fn send_client_message_to_root_window_long(&self, message_type: x::Atom, data: [c_long; 4]) -> Result<()> {
-        let x_display = self.context.x_display;
+        let x_display = self.context.lock_x_display();
 
         let mut e = x::XClientMessageEvent {
             type_: x::ClientMessage,
             serial: 0,
             send_event: x::True,
-            display: x_display,
+            display: *x_display,
             window: self.x_window,
             message_type,
             format: 32,
@@ -517,8 +515,8 @@ impl X11SharedWindow {
 
             let root = self.x_root_window()?;
             let event_mask = x::SubstructureNotifyMask | x::SubstructureRedirectMask;
-            let status = xlib_error::sync_catch(x_display, || x::XSendEvent(
-                x_display, root, x::False,
+            let status = xlib_error::sync_catch(*x_display, || x::XSendEvent(
+                *x_display, root, x::False,
                 event_mask, &mut e as *mut _ as *mut x::XEvent
             ))?;
             if status == 0 {
@@ -577,7 +575,7 @@ impl X11SharedWindow {
 
     fn x_geometry_and_root(&self) -> Result<(Rect<i32, u32>, x::Window)> {
         unsafe {
-            let x_display = self.context.x_display;
+            let x_display = self.context.lock_x_display();
             let mut out_root: x::Window = 0;
             let (mut x, mut y): (c_int, c_int) = (0, 0);
             let (mut w, mut h): (c_uint, c_uint) = (0, 0);
@@ -586,7 +584,7 @@ impl X11SharedWindow {
             self.context.x_sync();
             // Inoring BadDrawable, BadWindow
             let status = x::XGetGeometry(
-                x_display, self.x_window, &mut out_root,
+                *x_display, self.x_window, &mut out_root,
                 &mut x, &mut y, &mut w, &mut h, &mut border, &mut depth
             );
             if status == 0 {
@@ -627,8 +625,8 @@ impl X11SharedWindow {
         failed("This is not implemented yet")
     }
     pub fn set_title(&self, title: &str) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
-            let x_display = self.context.x_display;
             let c_title = match CString::new(title) {
                 Ok(s) => s,
                 Err(e) => return failed(format!("Could not convert title to UTF-8: {}", e)),
@@ -637,19 +635,26 @@ impl X11SharedWindow {
             let title_ptr = &mut [c_title_ptr];
             let mut prop: x::XTextProperty = mem::uninitialized();
             let status = x::Xutf8TextListToTextProperty(
-                x_display, title_ptr.as_mut_ptr(), title_ptr.len() as _, x::XUTF8StringStyle, &mut prop
+                *x_display, title_ptr.as_mut_ptr(), title_ptr.len() as _, x::XUTF8StringStyle, &mut prop
             );
             match status {
                 s if s == x::Success as c_int => {
-                    // Ignoring BadAlloc, BadWindow
-                    x::XSetWMName(x_display, self.x_window, &mut prop);
-                    x::XSetWMIconName(x_display, self.x_window, &mut prop);
-                    if let Ok(net_wm_name) = self.context.atoms._NET_WM_NAME() {
+                    // BadAlloc, BadWindow
+                    let status1 = xlib_error::sync_catch(*x_display, || x::XSetWMName(*x_display, self.x_window, &mut prop));
+                    let status2 = xlib_error::sync_catch(*x_display, || x::XSetWMIconName(*x_display, self.x_window, &mut prop));
+                    let status3 = match self.context.atoms._NET_WM_NAME() {
                         // BadAlloc, BadAtom, BadValue, BadWindow
-                        x::XSetTextProperty(x_display, self.x_window, &mut prop, net_wm_name);
-                    }
+                        Ok(net_wm_name) => xlib_error::sync_catch(*x_display, || {
+                            x::XSetTextProperty(*x_display, self.x_window, &mut prop, net_wm_name)
+                        }),
+                        Err(e) => Err(e),
+                    };
                     x::XFree(prop.value as _);
-                    self.context.x_flush();
+                    status1?;
+                    status2?;
+                    if let Err(e) = status3 {
+                        warn!("Could not set _NET_WM_NAME: {}", e);
+                    }
                     Ok(())
                 },
                 missing_bits::xutil::XNoMemory => failed("Xutf8TextListToTextProperty() returned XNoMemory"),
@@ -776,30 +781,34 @@ impl X11SharedWindow {
     }
 
     pub fn show(&self) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
-            x::XMapWindow(self.context.x_display, self.x_window);
+            xlib_error::sync_catch(*x_display, || x::XMapWindow(*x_display, self.x_window)).map(|_| ())
         }
-        // Sync, otherwise it would be possible
-        // to swap buffers before the window is shown, which would
-        // have no effect and be surprising.
-        self.context.x_sync();
-        Ok(())
     }
     pub fn hide(&self) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
-            x::XUnmapWindow(self.context.x_display, self.x_window);
+            xlib_error::sync_catch(*x_display, || x::XUnmapWindow(*x_display, self.x_window)).map(|_| ())
         }
-        // Sync so as not to be surprising
-        self.context.x_sync();
-        Ok(())
     }
     pub fn raise(&self) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
-            x::XRaiseWindow(self.context.x_display, self.x_window);
+            xlib_error::sync_catch(*x_display, || x::XRaiseWindow(*x_display, self.x_window)).map(|_| ())
         }
-        // Sync so as not to be surprising
-        self.context.x_sync();
-        Ok(())
+    }
+    pub fn clear(&self) -> Result<()> {
+        let x_display = self.context.lock_x_display();
+        unsafe {
+            xlib_error::sync_catch(*x_display, || x::XClearWindow(*x_display, self.x_window)).map(|_| ())
+        }
+    }
+    pub fn clear_rect(&self, r: Rect<i32, u32>) -> Result<()> {
+        let x_display = self.context.lock_x_display();
+        unsafe {
+            xlib_error::sync_catch(*x_display, || x::XClearArea(*x_display, self.x_window, r.x, r.y, r.w, r.h, x::False)).map(|_| ())
+        }
     }
 
     pub fn maximize_height(&self) -> Result<()> {
@@ -840,9 +849,10 @@ impl X11SharedWindow {
         )
     }
     pub fn minimize(&self) -> Result<()> {
-        let status = unsafe { xlib_error::sync_catch(self.context.x_display, || {
+        let x_display = self.context.lock_x_display();
+        let status = unsafe { xlib_error::sync_catch(*x_display, || {
             x::XIconifyWindow(
-                self.context.x_display, self.x_window,
+                *x_display, self.x_window,
                 self.context.x_default_screen_num()
             )
         })};
@@ -955,25 +965,22 @@ impl X11SharedWindow {
     }
 
     pub fn set_position(&self, pos: Vec2<i32>) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
-            x::XMoveWindow(self.context.x_display, self.x_window, pos.x, pos.y);
+            xlib_error::sync_catch(*x_display, || x::XMoveWindow(*x_display, self.x_window, pos.x, pos.y)).map(|_| ())
         }
-        self.context.x_sync();
-        Ok(())
     }
     pub fn set_size(&self, size: Extent2<u32>) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
-            x::XResizeWindow(self.context.x_display, self.x_window, size.w, size.h);
+            xlib_error::sync_catch(*x_display, || x::XResizeWindow(*x_display, self.x_window, size.w, size.h)).map(|_| ())
         }
-        self.context.x_sync();
-        Ok(())
     }
     pub fn set_position_and_size(&self, r: Rect<i32, u32>) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
-            x::XMoveResizeWindow(self.context.x_display, self.x_window, r.x, r.y, r.w, r.h);
+            xlib_error::sync_catch(*x_display, || x::XMoveResizeWindow(*x_display, self.x_window, r.x, r.y, r.w, r.h)).map(|_| ())
         }
-        self.context.x_sync();
-        Ok(())
     }
     pub fn set_desktop(&self, i: usize) -> Result<()> {
         if !self.is_visible().unwrap_or(true) {
@@ -994,14 +1001,10 @@ impl X11SharedWindow {
 
 
     pub fn set_mouse_position(&self, pos: Vec2<i32>) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         unsafe {
-            x::XWarpPointer(
-                self.context.x_display, 0, self.x_window,
-                0, 0, 0, 0, pos.x as _, pos.y as _
-            );
+            xlib_error::sync_catch(*x_display, || x::XWarpPointer(*x_display, 0, self.x_window, 0, 0, 0, 0, pos.x as _, pos.y as _)).map(|_| ())
         }
-        self.context.x_sync();
-        Ok(())
     }
     pub fn mouse_position(&self) -> Result<Vec2<i32>> {
         let mut root: x::Window = 0;
@@ -1014,7 +1017,7 @@ impl X11SharedWindow {
         self.context.x_sync();
         let _is_on_same_screen = unsafe {
             x::XQueryPointer(
-                self.context.x_display, self.x_window,
+                *self.context.lock_x_display(), self.x_window,
                 &mut root, &mut child, &mut root_x, &mut root_y,
                 &mut x, &mut y, &mut mask
             )
@@ -1031,7 +1034,7 @@ impl X11SharedWindow {
         let cursor = 0;
         let status = unsafe {
             x::XGrabPointer(
-                self.context.x_display, self.x_window, x::False,
+                *self.context.lock_x_display(), self.x_window, x::False,
                 mask as _, x::GrabModeAsync, x::GrabModeAsync,
                 confine_to, cursor, x::CurrentTime
             )

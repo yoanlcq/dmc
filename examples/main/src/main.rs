@@ -13,11 +13,13 @@ mod app_x11;
 use std::thread;
 use std::time::{Duration, Instant};
 use std::collections::{HashMap, HashSet};
-use dmc::Event;
+use dmc::{Event, hint::{Hint, set_hint}};
 use app::{App, test::WhatNow};
 
 fn main() {
     early::early();
+    set_hint(Hint::XlibXInitThreads).unwrap();
+    set_hint(Hint::XlibDefaultErrorHandlers(false)).unwrap();
     run_all_tests_and_report(app::App::default())
 }
 
@@ -62,10 +64,12 @@ fn run_all_tests_and_report(mut app: App) {
 
     drop(app);
 
-    println!();
-    println!("--- FAILED TESTS ---");
-    for (test, e) in failed.iter() {
-        println!("- {:?}: {}", *test, e)
+    if !failed.is_empty() {
+        println!();
+        println!("--- FAILED TESTS ---");
+        for (test, e) in failed.iter() {
+            println!("- {:?}: {}", *test, e)
+        }
     }
 
     println!();

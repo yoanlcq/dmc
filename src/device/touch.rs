@@ -2,13 +2,15 @@
 //!
 //! This module is very incomplete.
 
-use context::Context;
-use super::{DeviceID, AxisInfo, Result};
+use super::AxisInfo;
 
 /// Touch-device-specific information.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TouchInfo {
     /// The `AxisInfo` for the pressure axis.
-    pub pressure_axis: AxisInfo,
+    pub(crate) pressure_axis: AxisInfo,
 }
 
+impl TouchInfo {
+    pub fn pressure_axis(&self) -> &AxisInfo { &self.pressure_axis }
+}

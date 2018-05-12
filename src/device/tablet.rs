@@ -8,19 +8,21 @@
 
 use context::Context;
 use window::Window;
-use os::{OsTabletPadButtonsState, OsTabletStylusButtonsState};
+use os::{OsTabletPadButtonsState, OsTabletStylusButtonsState, OsTabletInfo};
 use super::{DeviceID, AxisInfo, ButtonState, Result};
 use Vec2;
 
 /// Tablet-specific information.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TabletInfo {
+pub struct TabletInfo(pub(crate) OsTabletInfo);
+
+impl TabletInfo {
     /// Information about the pressure axis.
-    pub pressure_axis: AxisInfo,
+    pub fn pressure_axis(&self) -> &AxisInfo { self.0.pressure_axis() }
     /// Information about the tilt axii.
-    pub tilt_axis: Vec2<AxisInfo>,
+    pub fn tilt_axis(&self) -> Vec2<&AxisInfo> { self.0.tilt_axis() }
     /// Information about the `physical_position` axis.
-    pub physical_position_axis: AxisInfo,
+    pub fn physical_position_axis(&self) -> &AxisInfo { self.0.physical_position_axis() }
 }
 
 /// Possible tool types for a tablet stylus.
@@ -73,27 +75,50 @@ pub struct TabletState {
     pub(crate) pad_buttons: TabletPadButtonsState,
     pub(crate) stylus_buttons: TabletStylusButtonsState,
     /// The root position of the cursor associated with this tablet.
-    pub root_position: Vec2<f64>,
+    pub(crate) root_position: Vec2<f64>,
     /// The physical position of the stylus, expressed in terms of
     /// `TabletInfo::physical_position_axis`.
-    pub physical_position: Vec2<f64>,
+    pub(crate) physical_position: Vec2<f64>,
     /// The pressure of the stylus, expressed in terms of `TabletInfo::pressure_axis`.
-    pub pressure: f64,
+    pub(crate) pressure: f64,
     /// The stylus's tilt, expressed in terms of `TabletInfo::tilt_axis`.
-    pub tilt: Vec2<f64>,
+    pub(crate) tilt: Vec2<f64>,
     /// The current tool type.
-    pub tool_type: TabletStylusToolType,
+    pub(crate) tool_type: TabletStylusToolType,
     /// The kind for the current stylus.
-    pub stylus_kind: TabletStylusKind,
+    pub(crate) stylus_kind: TabletStylusKind,
+}
+
+impl TabletState {
+    /// The root position of the cursor associated with this tablet.
+    pub fn root_position(&self) -> Vec2<f64> { self.root_position }
+    /// The physical position of the stylus, expressed in terms of
+    /// `TabletInfo::physical_position_axis`.
+    pub fn physical_position(&self) -> Vec2<f64> { self.physical_position }
+    /// The pressure of the stylus, expressed in terms of `TabletInfo::pressure_axis`.
+    pub fn pressure(&self) -> f64 { self.pressure }
+    /// The stylus's tilt, expressed in terms of `TabletInfo::tilt_axis`.
+    pub fn tilt(&self) -> Vec2<f64> { self.tilt }
+    /// The current tool type.
+    pub fn tool_type(&self) -> TabletStylusToolType { self.tool_type }
+    /// The kind for the current stylus.
+    pub fn stylus_kind(&self) -> TabletStylusKind { self.stylus_kind }
 }
 
 /// Snapshot of a tablet's state, relative to a window.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowTabletState {
     /// Other state not related to any window.
-    pub global: TabletState,
+    pub(crate) global: TabletState,
     /// The position in window-space coordinates.
-    pub position: Vec2<f64>,
+    pub(crate) position: Option<Vec2<f64>>,
+}
+
+impl WindowTabletState {
+    /// Other state not related to any window.
+    pub fn global(&self) -> &TabletState { &self.global }
+    /// The position in window-space coordinates, if the cursor is within the window.
+    pub fn position(&self) -> Option<Vec2<f64>> { self.position }
 }
 
 impl TabletPadButtonsState {

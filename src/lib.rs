@@ -58,11 +58,12 @@ macro_rules! os_mod {
                 OsCursor,
                 OsGLPixelFormat, OsGLContext, OsGLProc,
                 OsEventInstant,
-                OsDeviceID,
+                device_consts,
+                OsDeviceID, OsAxisInfo, OsDeviceInfo,
                 OsControllerState, OsControllerInfo,
                 OsKeyboardState, OsKeycode, OsKeysym,
                 OsMouseButtonsState,
-                OsTabletPadButtonsState, OsTabletStylusButtonsState,
+                OsTabletInfo, OsTabletPadButtonsState, OsTabletStylusButtonsState,
             };
         }
 

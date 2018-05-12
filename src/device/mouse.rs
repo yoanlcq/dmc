@@ -40,16 +40,16 @@ pub struct MouseInfo;
 pub struct MouseState {
     pub(crate) buttons: MouseButtonsState,
     /// The position relative to the "root window".
-    pub root_position: Vec2<f64>,
+    pub(crate) root_position: Vec2<f64>,
 }
 
 /// A snapshot of the mouse's state, relatively to a window.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowMouseState {
     /// The global part of the state.
-    pub global: MouseState,
+    pub(crate) global: MouseState,
     /// The position, in window coordinates.
-    pub position: Option<Vec2<f64>>,
+    pub(crate) position: Option<Vec2<f64>>,
 }
 
 impl MouseButtonsState {
@@ -63,8 +63,23 @@ impl MouseState {
     pub fn button(&self, button: MouseButton) -> Option<ButtonState> {
         self.buttons.button(button)
     }
+    /// Gets the position of the mouse in virtual desktop coordinates.
+    pub fn root_position(&self) -> Vec2<f64> {
+        self.root_position
+    }
 }
 
+impl WindowMouseState {
+    /// Gets the `MouseState`, i.e state that is not specific to a window.
+    pub fn global(&self) -> &MouseState {
+        &self.global
+    }
+    /// Gets the position of the mouse in window coordinates, or `None` if the mouse is not within
+    /// the window.
+    pub fn position(&self) -> Option<Vec2<f64>> {
+        self.position
+    }
+}
 
 impl Context {
     /// Gets the ID for the main mouse, if any.

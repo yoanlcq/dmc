@@ -5,20 +5,22 @@ extern crate libevdev_sys;
 extern crate libudev_sys;
 extern crate libc as c;
 
+use std::ops::Range;
 use std::fmt::{self, Display, Formatter};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::os::unix::ffi::OsStrExt;
 use std::ffi::{CStr, OsStr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::mem;
 use std::cell::{Cell, RefCell};
 use event::{Event, EventInstant};
 use os::{OsEventInstant, OsDeviceID};
-use device::{self, DeviceID, DeviceInfo, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState, Bus, VibrationState, AxisInfo};
+use device::{self, DeviceID, DeviceInfo, ControllerInfo, ControllerAxis, ControllerState, ControllerButton, ButtonState, Bus, VibrationState, AxisInfo, UsbIDs, MouseInfo, KeyboardInfo, TouchInfo, TabletInfo};
 
 use self::c::{c_int, c_uint, c_char};
 
+use uuid::Uuid as Guid;
 use nix::{self, errno::{self, Errno}};
 
 use self::libevdev_sys::evdev;
@@ -173,6 +175,48 @@ struct EvdevRepeat {
     period: c_int,
 }
 
+// Not a type alias to linux_input::input_absinfo, because it doesn't
+// derive the traits we want
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxdevAxisInfo {
+    minimum: i32,
+    maximum: i32,
+    fuzz: i32,
+    flat: i32,
+    resolution: i32,
+}
+
+impl From<linux_input::input_absinfo> for LinuxdevAxisInfo {
+    fn from(absinfo: linux_input::input_absinfo) -> Self {
+        let linux_input::input_absinfo {
+            value: _, minimum, maximum, fuzz, resolution, flat,
+        } = absinfo;
+
+        Self {
+            minimum, maximum, fuzz, resolution, flat,
+        }
+    }
+}
+
+fn axis_info_from_linux_absinfo(absinfo: &linux_input::input_absinfo) -> AxisInfo {
+    AxisInfo(LinuxdevAxisInfo::from(*absinfo).into())
+}
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinuxdevDeviceInfo {
+    device_node: Option<PathBuf>,
+    name: Option<String>,
+    serial: Option<String>,
+    usb_ids: Option<UsbIDs>,
+    vendor_name: Option<String>,
+    plug_instant: EventInstant,
+    bus: Option<Bus>,
+    driver_name: Option<String>,
+    driver_version: Option<String>,
+    controller: ControllerInfo,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OsControllerInfo {
     is_a_gamepad: bool,
@@ -305,6 +349,61 @@ impl Default for LinuxdevContext {
             }
         }
     }
+}
+
+impl LinuxdevAxisInfo {
+    pub fn range(&self) -> Range<f64> {
+        self.minimum as f64 .. self.maximum as _
+    }
+    pub fn driver_dead_zone(&self) -> Option<Range<f64>> {
+        let max = self.flat as f64;
+        let max = max.abs(); // Paranoid
+        Some(-max .. max)
+    }
+    pub fn advised_dead_zone(&self) -> Option<Range<f64>> {
+        None
+    }
+    pub fn resolution_hint(&self) -> Option<f64> {
+        Some(self.resolution as _)
+    }
+    pub fn driver_noise_filter(&self) -> Option<f64> {
+        Some(self.fuzz as _)
+    }
+}
+
+impl LinuxdevDeviceInfo {
+    pub fn master(&self) -> Option<DeviceID> { None }
+    pub fn parent(&self) -> Option<DeviceID> { None }
+    pub fn device_node(&self) -> Option<&Path> {
+        self.device_node.as_ref().map(PathBuf::as_path)
+    }
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_ref().map(String::as_str)
+    }
+    pub fn serial(&self) -> Option<&str> {
+        self.serial.as_ref().map(String::as_str)
+    }
+    pub fn usb_ids(&self) -> Option<UsbIDs> {
+        self.usb_ids
+    }
+    pub fn vendor_name(&self) -> Option<&str> {
+        self.vendor_name.as_ref().map(String::as_str)
+    }
+    pub fn guid(&self) -> Option<Guid> { None }
+    pub fn plug_instant(&self) -> Option<EventInstant> { Some(self.plug_instant) }
+    pub fn bus(&self) -> Option<Bus> { self.bus }
+    pub fn driver_name(&self) -> Option<&str> {
+        self.driver_name.as_ref().map(String::as_str)
+    }
+    pub fn driver_version(&self) -> Option<&str> {
+        self.driver_version.as_ref().map(String::as_str)
+    }
+    pub fn is_physical(&self) -> Option<bool> { None }
+    pub fn controller(&self) -> Option<&ControllerInfo> { Some(&self.controller) }
+    pub fn mouse(&self) -> Option<&MouseInfo> { None }
+    pub fn keyboard(&self) -> Option<&KeyboardInfo> { None }
+    pub fn touch(&self) -> Option<&TouchInfo> { None }
+    pub fn tablet(&self) -> Option<&TabletInfo> { None }
 }
 
 
@@ -547,8 +646,8 @@ impl OsControllerInfo {
     pub fn has_axis(&self, axis: ControllerAxis) -> bool {
         self.axes.contains_key(&axis)
     }
-    pub fn axis(&self, axis: ControllerAxis) -> Option<AxisInfo> {
-        self.axes.get(&axis).map(Clone::clone)
+    pub fn axis(&self, axis: ControllerAxis) -> Option<&AxisInfo> {
+        self.axes.get(&axis)
     }
 }
 impl OsControllerState {
@@ -683,42 +782,34 @@ impl Linuxdev {
     }
     pub fn device_info(&self) -> DeviceInfo {
         let evdev = self.evdev.as_ref().unwrap();
-        DeviceInfo {
-            master: None,
-            parent: None, // This is more complicated than it looks and I doubt people do care.
+        let info = LinuxdevDeviceInfo {
             device_node: unsafe {
                 Self::device_node_pathbuf_of_udev_device(self.udev_device)
 			},
             name: self.name().map(|s| s.to_owned()),
             serial: self.udev_props.id_serial.clone(),
-            usb_product_info: match (self.vendor_id(), self.product_id()) {
-                (Some(vendor_id), Some(product_id)) => Some(device::UsbProductInfo {
+            usb_ids: match (self.vendor_id(), self.product_id()) {
+                (Some(vendor_id), Some(product_id)) => Some(UsbIDs {
                     vendor_id,
                     product_id,
-                    vendor_name: self.udev_props.id_vendor.clone(),
-                    product_name: None,
                 }),
                 _ => None,
             },
-            guid: None,
-            plug_instant: Some(self.plug_instant()),
+            vendor_name: self.udev_props.id_vendor.clone(),
+            plug_instant: self.plug_instant(),
             bus: self.bus(),
             driver_name: self.driver_name(),
             driver_version: self.driver_version(),
-            is_physical: None, // WISH: I could actually investigate this
-            controller: Some(ControllerInfo(OsControllerInfo {
+            controller: ControllerInfo(OsControllerInfo {
                 is_a_gamepad: self.is_a_gamepad(),
                 is_a_joystick: self.is_a_joystick(),
                 is_a_steering_wheel: self.is_a_steering_wheel(),
                 supports_rumble: self.supports_rumble(),
                 buttons: evdev.buttons.clone(),
                 axes: evdev.axes.clone(),
-            })),
-            mouse: None,
-            keyboard: None,
-            touch: None,
-            tablet: None,
-        }
+            }),
+        };
+        DeviceInfo(info.into())
     }
 }
 
@@ -970,22 +1061,6 @@ impl LinuxdevEvdev {
     }
 }
 
-fn axis_info_from_linux_absinfo(absinfo: &linux_input::input_absinfo) -> AxisInfo {
-    let &linux_input::input_absinfo {
-        value: _, minimum, maximum, fuzz, resolution, flat,
-    } = absinfo;
-
-    AxisInfo {
-        range: minimum as f64 .. maximum as f64,
-        dead_zone: {
-            let max = flat.abs() as f64;
-            Some(-max .. max)
-        },
-        fuzz: fuzz as f64,
-        resolution: resolution as f64,
-    }
-}
-
 
 impl Linuxdev {
     pub fn translate_ev_key(&self, code: u16) -> ControllerButton {
@@ -1100,6 +1175,14 @@ impl Linuxdev {
             _ => Some(value as f64),
         }
     }
+}
+
+pub mod device_consts {
+    pub const MAX_THUMB_BUTTONS: Option<u32> = Some(2);
+    pub const MAX_TOP_BUTTONS: Option<u32> = Some(2);
+    pub const MAX_BASE_BUTTONS: Option<u32> = Some(6);
+    pub const MAX_NUM_BUTTONS: Option<u32> = Some(10);
+    pub const MAX_HAT_AXES: Option<u32> = Some(4);
 }
 
 static ALL_BTN_CODES: &[u16] = &[
@@ -1550,6 +1633,7 @@ impl Linuxdev {
     fn set_ff_gain(&self, gain: i32) -> device::Result<()> {
         assert!(gain >= 0);
         assert!(gain <= 0xffff);
+        info!("Controller {}: Setting FF_GAIN to {}%", self.display(), (gain * 100) / 0xffff);
         self.write_ff_event(ff::FF_GAIN as u16, gain)
     }
     fn register_ff_effect(&self, ff: &mut linux_input::ff_effect) -> device::Result<()> {

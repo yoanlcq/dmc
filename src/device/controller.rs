@@ -13,8 +13,8 @@
 //!
 //! On Linux, `udev` reports all of these with the `ID_INPUT_JOYSTICK` property set to `1`,
 //! (even though a gamepad is not a joystick so to speak), which is how we know we can
-//! attempt to open the device file in order to read events (or write froce-feedback effects)
-//! ourselves.
+//! attempt to open the device file in order to read events (or write force-feedback effects)
+//! ourselves (because other devices require super-user privileges to open their device file).
 //!
 //! In any case, most (if not all) OSes do not treat controllers in the same way as mice, keyboards, etc,
 //! because they are mostly specific to games, they (normally) don't control the desktop, etc.  
@@ -41,9 +41,52 @@
 //!
 //! - [`XINPUT_GAMEPAD` structure](https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinput_gamepad(v=vs.85).aspx):
 //!   "Negative values signify down or to the left. Positive values signify up or to the right".
+//!
+//!
+//! ## Why is the D-pad both 4 buttons and 2 axes?
+//!
+//! A given gamepad either supports:
+//!
+//! - `DpadDown`, `DpadLeft`, `DpadUp` and `DpadRight` **buttons**, OR
+//! - `DpadX` and `DpadY` **axes**, OR
+//! - Both of them, OR
+//! - None of them.
+//!
+//! Your application should handle all of these cases properly; However, this looks annoying
+//! to deal with. Couldn't this crate deal with these details by itself and provide
+//! a single, unified way to deal with D-pads?   
+//! No, and here's why :
+//!
+//! Quoting the [Linux Gamepad Specification](https://www.kernel.org/doc/html/v4.16/input/gamepad.html):
+//! 
+//! > Every gamepad provides a D-Pad with four directions: Up, Down, Left, Right.  
+//! > Some of these are available as digital buttons, some as analog buttons. Some may even report both.  
+//! > The kernel does not convert between these so applications should support both and choose what 
+//! > is more appropriate if both are reported.
+//! >
+//! > - Digital buttons are reported as: `BTN_DPAD_*`
+//! > - Analog buttons are reported as: `ABS_HAT0X and ABS_HAT0Y`
+//!
+//! Trying to cope with this would be lying, unreliable, and annoying to do anyway.  
+//!
+//! As usual, you may write your own facilities for converting D-pad-related events into the
+//! representation that is most convenient for you.
+//!
+//!
+//! ## How can I reliably identify a controller model? Why doesn't this crate do this for me?
+//!
+//! Identifying controller models may be important to some gameplay elements, such as displaying
+//! butons on-screen as they look on the controller.
+//!
+//! Use the USB vendor ID and product ID. In all cases, **avoid** using the device's name (even
+//! though it may just do the job).
+//! 
+//! The task of identifying devices from USB IDs is best left to another library, but if you know
+//! in advance the subset of devices you want to support, just look up their USB IDs in some public
+//! online database, and write a function that uses these.
 
 use context::Context;
-use os::{OsControllerState, OsControllerInfo};
+use os::{self, OsControllerState, OsControllerInfo};
 use super::{DeviceID, ButtonState, AxisInfo, Result};
 
 /// Opaque container for a snapshot of a controller's full state.
@@ -66,7 +109,8 @@ pub struct VibrationState {
 }
 
 impl VibrationState {
-    /// The maximum value for a vibration state.
+    /// The maximum value for a vibration state. This is a convenience for not writing
+    /// `::std::u16::MAX`.
     pub const MAX: Self = Self {
         strong_magnitude: ::std::u16::MAX,
         weak_magnitude: ::std::u16::MAX,
@@ -150,6 +194,25 @@ pub enum ControllerButton {
     Other(i32),
 }
 
+impl ControllerButton {
+    /// Convenience alias for the up-most button in a gamepad's right cluster. This is always `Y`.
+    pub const NORTH: Self = ControllerButton::Y;
+    /// Convenience alias for the down-most button in a gamepad's right cluster. This is always `A`.
+    pub const SOUTH: Self = ControllerButton::A;
+    /// Convenience alias for the left-most button in a gamepad's right cluster. This is always `X`.
+    pub const WEST: Self = ControllerButton::X;
+    /// Convenience alias for the right-most button in a gamepad's right cluster. This is always `B`.
+    pub const EAST: Self = ControllerButton::B;
+    /// Platform-specific hard limit on the number of `Thumb` buttons. `None` means that no limit is known.
+    pub const MAX_THUMB: Option<u32> = os::device_consts::MAX_THUMB_BUTTONS;
+    /// Platform-specific hard limit on the number of `Top` buttons. `None` means that no limit is known.
+    pub const MAX_TOP: Option<u32> = os::device_consts::MAX_TOP_BUTTONS;
+    /// Platform-specific hard limit on the number of `Base` buttons. `None` means that no limit is known.
+    pub const MAX_BASE: Option<u32> = os::device_consts::MAX_BASE_BUTTONS;
+    /// Platform-specific hard limit on the number of `Num` buttons. `None` means that no limit is known.
+    pub const MAX_NUM: Option<u32> = os::device_consts::MAX_NUM_BUTTONS;
+}
+
 /// A known controller axis.
 ///
 /// All of these axies are absolute; Relative axes are normally only relevant for e.g mice or
@@ -183,9 +246,9 @@ pub enum ControllerAxis {
     JoystickRotationZ,
 
     /// (Joysticks) A hat's X position, increasing rightwards. Hats are numbered from 0 to (usually) 3, inclusive.
-    HatX(i32),
+    HatX(u32),
     /// (Joysticks) A hat's Y position, increasing downwards. Hats are numbered from 0 to (usually) 3, inclusive.
-    HatY(i32),
+    HatY(u32),
 
     /// (Gamepads) The left trigger axis, as for Xbox controllers.
     LTrigger,
@@ -205,6 +268,11 @@ pub enum ControllerAxis {
 
     /// An other, unknown, backend-specific button.
     Other(i32),
+}
+
+impl ControllerAxis {
+    /// Platform-specific hard limit on the number of hats (each hat offers a `HatX` and `HatY` axis). `None` means that no limit is known.
+    pub const MAX_HAT: Option<u32> = os::device_consts::MAX_HAT_AXES;
 }
 
 
@@ -234,7 +302,7 @@ impl ControllerInfo {
         self.0.has_axis(axis)
     }
     /// Gets the `AxisInfo` for the given controller axis if the controller has it.
-    pub fn axis(&self, axis: ControllerAxis) -> Option<AxisInfo> {
+    pub fn axis(&self, axis: ControllerAxis) -> Option<&AxisInfo> {
         self.0.axis(axis)
     }
 }
@@ -267,9 +335,9 @@ impl Context {
     ///
     /// To stop vibrations, just set relevant members of `VibrationState` to zero.
     ///
-    /// **N.B**: The vibration state may or may not be reset as the device is dropped (this is
-    /// because of implementation details. For instance on Linux, other processes may be playing an
-    /// effect on the device, with an effect ID we don't have access to).  
+    /// **N.B**: The vibration state **may or may not** be reset as the device is dropped. For
+    /// instance, it may be the case that you want to write a utility application that sets the
+    /// vibration state for a controller and then exits.  
     /// If you want to be extra sure, reset it yourself when your application exits.
     pub fn controller_set_vibration(&self, controller: DeviceID, vibration: &VibrationState) -> Result<()> {
         self.0.controller_set_vibration(controller, vibration)

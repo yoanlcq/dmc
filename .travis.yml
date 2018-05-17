@@ -122,7 +122,8 @@ addons:
       - xorg-dev
 
 before_install:
-  - set -e
+  # "Fix" dumb issue with shell_session_update, RVM, OS X (https://github.com/travis-ci/travis-ci/issues/6307)
+    - trap 'exit' ERR
 
 install:
   - source ~/.cargo/env || true
@@ -132,16 +133,10 @@ install:
 script:
   - cargo build --target $TARGET
   - cargo build --target $TARGET --release
-  # "Fix" dumb issue with shell_session_update, RVM, OS X (https://github.com/travis-ci/travis-ci/issues/6307)
-  - if [ $TRAVIS_OS_NAME = "osx" ]; then rvm get stable; fi
   - pushd examples/main
   - cargo build --target $TARGET --features headless 
   - cargo build --target $TARGET --features headless --release
   - popd
-
-after_script: set +e
-
-# before_deploy:
 
 cache: cargo
 before_cache:

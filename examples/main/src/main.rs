@@ -18,8 +18,8 @@ use app::{App, test::WhatNow};
 
 fn main() {
     early::early();
-    set_hint(Hint::XlibXInitThreads).unwrap();
-    set_hint(Hint::XlibDefaultErrorHandlers(false)).unwrap();
+    #[cfg(x11)] set_hint(Hint::XlibXInitThreads).unwrap();
+    #[cfg(x11)] set_hint(Hint::XlibDefaultErrorHandlers(false)).unwrap();
     run_all_tests_and_report(app::App::default())
 }
 

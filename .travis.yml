@@ -102,6 +102,7 @@ matrix:
 
 addons:
   apt:
+    update: true
     packages:
       - mesa-common-dev
       - mesa-utils
@@ -136,6 +137,8 @@ script:
   - pushd examples/main
   - cargo build --target $TARGET --features headless 
   - cargo build --target $TARGET --features headless --release
+  - cargo run --target $TARGET --features headless 
+  - cargo run --target $TARGET --features headless --release
   - popd
 
 cache: cargo

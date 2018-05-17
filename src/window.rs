@@ -277,7 +277,7 @@ impl Window {
     pub fn show(&self) -> Result<()> {
         self.0.show()
     }
-    /// Devicees the window.
+    /// Hides the window.
     ///
     /// This is not to be confused with _minimizing_ the window.  
     /// A hidden window isn't supposed to appear on the user's task bar.  

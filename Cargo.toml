@@ -29,6 +29,9 @@ log = "0.4.1"
 vek = "0.9"
 uuid = "0.6"
 
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "~0.3.4", features = ["winuser"] }
+
 [target.'cfg(unix)'.dependencies]
 nix = "~0.10"
 

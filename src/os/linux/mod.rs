@@ -95,7 +95,7 @@ impl From<LinuxdevDeviceInfo> for OsDeviceInfo {
 impl OsAxisInfo {
     pub fn range(&self) -> Range<f64> { self.linuxdev.range() }
     pub fn driver_dead_zone(&self) -> Option<Range<f64>> { self.linuxdev.driver_dead_zone() }
-    pub fn advised_dead_zone(&self) -> Option<Range<f64>> { self.linuxdev.driver_dead_zone() }
+    pub fn advised_dead_zone(&self) -> Option<Range<f64>> { self.linuxdev.advised_dead_zone() }
     pub fn resolution_hint(&self) -> Option<f64> { self.linuxdev.resolution_hint() }
     pub fn driver_noise_filter(&self) -> Option<f64> { self.linuxdev.driver_noise_filter() }
 }

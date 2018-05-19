@@ -129,6 +129,16 @@ impl App {
         run_next_test()
     }
 
+    pub fn init_simple_app(&mut self) -> test::Result {
+        self.init_context()?;
+        self.init_window()?;
+        self.window_set_type_hint()?;
+        self.window_set_title()?;
+        self.window_raise()?;
+        self.window_show()?;
+        run_next_test()
+    }
+
     #[cfg(x11)]
     fn test_create_context_with_x11_display_name_none(&mut self) -> test::Result {
         Context::with_x11_display_name(None)?;

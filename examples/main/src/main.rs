@@ -11,6 +11,7 @@ mod app;
 mod app_x11;
 
 use std::thread;
+use std::env;
 use std::time::{Duration, Instant};
 use std::collections::{HashMap, HashSet};
 use dmc::{Event, hint::{Hint, set_hint}};
@@ -20,7 +21,32 @@ fn main() {
     early::early();
     #[cfg(x11)] set_hint(Hint::XlibXInitThreads).unwrap();
     #[cfg(x11)] set_hint(Hint::XlibDefaultErrorHandlers(false)).unwrap();
-    run_all_tests_and_report(app::App::default())
+    let app = app::App::default();
+    let args: Vec<_> = env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("simple") => run_simple_app(app),
+        Some(_) => unimplemented!{},
+        None => run_all_tests_and_report(app),
+    }
+}
+
+#[cfg(feature="headless")]
+fn run_simple_app(mut app: App) {}
+#[cfg(not(feature="headless"))]
+fn run_simple_app(mut app: App) {
+    app.init_simple_app().unwrap();
+    use ::dmc::device::{Key, Keysym};
+
+    'main_loop: loop {
+        for ev in app.pump_events() {
+            match ev {
+                Event::Quit | Event::WindowCloseRequested { .. } |
+                Event::KeyboardKeyPressed { key: Key { sym: Some(Keysym::Esc), .. }, .. } 
+                    => break 'main_loop,
+                _ => (),
+            }
+        }
+    }
 }
 
 fn wait_for_approval(app: &mut App) {

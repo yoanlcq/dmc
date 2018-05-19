@@ -2,7 +2,9 @@ extern crate rustc_version;
 use rustc_version::{version, version_meta, Channel};
 
 fn main() {
-    assert!(version().unwrap().major >= 1);
+    let version = version().unwrap();
+    assert!(version.major >= 1);
+    assert!(version.minor >= 26);
 
     match version_meta().unwrap().channel {
         Channel::Stable => {

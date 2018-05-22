@@ -1,98 +1,61 @@
-use std::mem;
 use std::ptr;
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
-use error::Result;
-use window::{Window, WindowSettings, WindowHandle, WindowStyleHint, WindowTypeHint};
+use error::{Result, failed};
+use window::{Window, WindowSettings, WindowHandle, WindowStyleHint, WindowTypeHint, TitleBarFeatures, Borders};
 use super::OsContext;
-use super::winapi::{
-    shared::{windef::*, minwindef::*,},
-    um::{winuser::*, libloaderapi::*,},
-};
+use super::winapi_utils::*;
 use {Vec2, Extent2, Rect, Rgba};
 
 #[derive(Debug)]
-pub struct OsWindow;
-
-extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    unimplemented!()
+pub struct OsWindow {
+    pub class_atom: ATOM,
+    pub hwnd: HWND,
 }
 
-fn winapi_errorcode_string(err: DWORD) -> String
-{
-    unimplemented!()
-/*
-    let messageBuffer: *mut u16 = ptr::null();
-    let size = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                                 NULL, errorMessageID, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, NULL);
-
-    std::string message(messageBuffer, size);
-
-    //Free the buffer.
-    LocalFree(messageBuffer);
-
-    return message;
-*/
+impl Drop for OsWindow {
+    fn drop(&mut self) {
+        let &mut Self {
+            class_atom, hwnd,
+        } = self;
+        unsafe {
+            let is_ok = DestroyWindow(hwnd);
+            let is_ok = UnregisterClassW(class_atom as _, ptr::null_mut());
+        }
+    }
 }
 
 impl OsContext {
     pub fn create_window(&self, settings: &WindowSettings) -> Result<OsWindow> {
-        // TODO: CS_NOCLOSE
-        // FIXME: CS_OWNDC only for OpenGL-enabled windows
-        // FIXME: UnregisterClass, in case we're a DLL
+        let &WindowSettings {
+            position: Vec2 { x, y }, size: Extent2 { w, h }, ref opengl, high_dpi,
+        } = settings;
         unsafe {
-            let classname = {
-                let mut classname: Vec<u16> = OsStr::new("Main DMC WNDCLASS").encode_wide().collect();
-                classname.push(0);
-                classname
-            };
-            assert!(classname.len() < 256);
-            let hinstance = GetModuleHandleW(ptr::null());
-            let wclass = WNDCLASSEXW {
-                cbSize: mem::size_of::<WNDCLASSEXW>() as _,
-                style: CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
-                lpfnWndProc: Some(wndproc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: hinstance,
-                hIcon: ptr::null_mut(),
-                hIconSm: ptr::null_mut(),
-                hCursor: ptr::null_mut(),
-                hbrBackground: ptr::null_mut(),
-                lpszMenuName: ptr::null(),
-                lpszClassName: classname.as_ptr(),
-            };
-            let atom = RegisterClassExW(&wclass);
-            assert_ne!(0, atom, "TODO GetLastError()");
-
-            let Vec2 { x, y } = settings.position;
-            let Extent2 { w, h } = settings.size;
-
-            // Other nice style consts:
-            // - WS_BORDER
-            // - WS_CAPTION (title bar)
-            // - WS_MAXIMIZEBOX (maximize button)
-            // - WS_MINIMIZEBOX (minimize button)
-            // - WS_SIZEBOX (same as WS_THICKFRAME) (sizing border)
-            // - WS_SYSMENU (window menu on its title bar (WS_CAPTION must be specified))
             let ex_style = WS_EX_ACCEPTFILES | WS_EX_OVERLAPPEDWINDOW;
             let style = WS_OVERLAPPEDWINDOW;
+            let class_settings = super::context::ClassSettings {
+                owndc: true, noclose: false,
+            };
+            let class_atom = self.get_or_register_class(&class_settings)?;
             let hwnd = CreateWindowExW(
                 ex_style,
-                classname.as_ptr(),
+                MAKEINTATOM(class_atom),
                 ptr::null(), // No title (yet)
                 style,
                 x, y, w as _, h as _,
                 ptr::null_mut(), // No parent
                 ptr::null_mut(), // No menu
-                hinstance,
+                self.hinstance(),
                 ptr::null_mut(), // No custom data pointer
             );
             if hwnd.is_null() {
-                // GetLastError(); // FIXME
+                return winapi_fail("CreateWindowExW");
             }
+            // GWL_STYLE
+            // GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+            let os_window = OsWindow {
+                class_atom, hwnd
+            };
+            Ok(os_window)
         }
-        unimplemented!()
     }
     pub unsafe fn window_from_handle(&self, handle: OsWindowHandle, params: Option<&OsWindowFromHandleParams>) -> Result<OsWindow> {
         unimplemented!()
@@ -122,7 +85,53 @@ impl OsWindow {
         unimplemented!()
     }
     pub fn set_style_hint(&self, style_hint: &WindowStyleHint) -> Result<()> {
-        unimplemented!()
+        let &WindowStyleHint {
+            borders,
+            title_bar_features,
+        } = style_hint;
+        unsafe {
+            let mut style = GetWindowLongW(self.hwnd, GWL_STYLE) as u32;
+            debug_assert_ne!(0, style); // This can't fail, it has no reason to
+            if let Some(_) = borders {
+                style |= WS_BORDER | WS_SIZEBOX;
+            } else {
+                style &= !(WS_BORDER | WS_SIZEBOX);
+            };
+            if let Some(TitleBarFeatures { minimize, maximize, close, }) = title_bar_features {
+                if minimize {
+                    style |= WS_MINIMIZEBOX;
+                } else {
+                    style &= !WS_MINIMIZEBOX;
+                }
+                if maximize {
+                    style |= WS_MAXIMIZEBOX;
+                } else {
+                    style &= !WS_MAXIMIZEBOX;
+                }
+                self.set_close_button_enabled(close);
+            } else {
+                style &= !WS_CAPTION;
+            }
+            SetLastError(0); // See doc for SetWindowLongW()
+            let previous = SetWindowLongW(self.hwnd, GWL_STYLE, style as _);
+            let err = GetLastError();
+            if previous == 0 && err != 0 {
+                return winapi_fail_with_error_code("SetWindowLongW", err);
+            }
+        }
+        Ok(())
+    }
+    // "How do I enable and disable the minimize, maximize, and close buttons in my caption bar?""
+    // https://blogs.msdn.microsoft.com/oldnewthing/20100604-00/?p=13803
+    fn set_close_button_enabled(&self, enabled: bool) {
+        let flags = if enabled {
+            MF_ENABLED
+        } else {
+            MF_DISABLED | MF_GRAYED
+        };
+        unsafe {
+            EnableMenuItem(GetSystemMenu(self.hwnd, FALSE), SC_CLOSE as _, flags | MF_BYCOMMAND);
+        }
     }
     pub fn raise(&self) -> Result<()> {
         unimplemented!()

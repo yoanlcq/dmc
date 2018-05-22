@@ -481,19 +481,44 @@ impl X11SharedContext {
         } = e;
         cannot_handle_event_yet(format!("Unhandled XIPropertyEvent event: {:?}", e))
     }
+
     fn translate_xi_device_event(&self, e: &mut xi2::XIDeviceEvent) -> TranslateEventResult {
         let &mut xi2::XIDeviceEvent {
-            _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
-            time, deviceid, sourceid, detail, root,
-            event: x_window, child, root_x, root_y,
-            event_x, event_y, flags, buttons, valuators, mods, group,
+            _type: _, serial: _, send_event: _, display: _, extension: _, evtype,
+            time, deviceid, sourceid, detail, // detail: The button number, key code, touch ID, or 0.
+            root, event: x_window, child, // windows
+            root_x, root_y, event_x, event_y,
+            flags, // KeyRepeat, PointerEmulated, TouchPendingEnd, TouchEmulatingPointer
+            buttons, valuators,
+            mods, group, // XKB group and modifiers state
         } = e;
-        cannot_handle_event_yet(format!("Unhandled XIDeviceEvent event: {:?}", e))
+
+        let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
+
+        let nooo = |e| cannot_handle_event_yet(format!("Unhandled XIDeviceEvent event: {:?}", e));
+
+        match evtype {
+            xi2::XI_KeyPress | xi2::XI_KeyRelease => nooo(e),
+            xi2::XI_ButtonPress | xi2::XI_ButtonRelease => nooo(e),
+            xi2::XI_Motion => Ok(Event::MouseMotion {
+                mouse: DeviceID(OsDeviceID::XISlave(sourceid)),
+                instant,
+                window: WindowHandle(x_window),
+                position: Vec2::new(event_x, event_y),
+                root_position: Vec2::new(root_x, root_y),
+            }),
+            xi2::XI_TouchBegin => nooo(e),
+            xi2::XI_TouchUpdate => nooo(e),
+            xi2::XI_TouchEnd => nooo(e),
+            _ => unreachable!(),
+        }
     }
     fn translate_xi_raw_event(&self, e: &mut xi2::XIRawEvent) -> TranslateEventResult {
         let &mut xi2::XIRawEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
-            time, deviceid, sourceid, detail, flags, valuators, raw_values,
+            time, deviceid, sourceid, detail,
+            flags,
+            valuators, raw_values,
         } = e;
         cannot_handle_event_yet(format!("Unhandled XIRawEvent event: {:?}", e))
     }

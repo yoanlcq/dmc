@@ -1,13 +1,97 @@
+use std::mem;
+use std::ptr;
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
 use error::Result;
 use window::{Window, WindowSettings, WindowHandle, WindowStyleHint, WindowTypeHint};
 use super::OsContext;
+use super::winapi::{
+    shared::{windef::*, minwindef::*,},
+    um::{winuser::*, libloaderapi::*,},
+};
 use {Vec2, Extent2, Rect, Rgba};
 
 #[derive(Debug)]
 pub struct OsWindow;
 
+extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unimplemented!()
+}
+
+fn winapi_errorcode_string(err: DWORD) -> String
+{
+    unimplemented!()
+/*
+    let messageBuffer: *mut u16 = ptr::null();
+    let size = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                 NULL, errorMessageID, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, NULL);
+
+    std::string message(messageBuffer, size);
+
+    //Free the buffer.
+    LocalFree(messageBuffer);
+
+    return message;
+*/
+}
+
 impl OsContext {
     pub fn create_window(&self, settings: &WindowSettings) -> Result<OsWindow> {
+        // TODO: CS_NOCLOSE
+        // FIXME: CS_OWNDC only for OpenGL-enabled windows
+        // FIXME: UnregisterClass, in case we're a DLL
+        unsafe {
+            let classname = {
+                let mut classname: Vec<u16> = OsStr::new("Main DMC WNDCLASS").encode_wide().collect();
+                classname.push(0);
+                classname
+            };
+            assert!(classname.len() < 256);
+            let hinstance = GetModuleHandleW(ptr::null());
+            let wclass = WNDCLASSEXW {
+                cbSize: mem::size_of::<WNDCLASSEXW>() as _,
+                style: CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
+                lpfnWndProc: Some(wndproc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: hinstance,
+                hIcon: ptr::null_mut(),
+                hIconSm: ptr::null_mut(),
+                hCursor: ptr::null_mut(),
+                hbrBackground: ptr::null_mut(),
+                lpszMenuName: ptr::null(),
+                lpszClassName: classname.as_ptr(),
+            };
+            let atom = RegisterClassExW(&wclass);
+            assert_ne!(0, atom, "TODO GetLastError()");
+
+            let Vec2 { x, y } = settings.position;
+            let Extent2 { w, h } = settings.size;
+
+            // Other nice style consts:
+            // - WS_BORDER
+            // - WS_CAPTION (title bar)
+            // - WS_MAXIMIZEBOX (maximize button)
+            // - WS_MINIMIZEBOX (minimize button)
+            // - WS_SIZEBOX (same as WS_THICKFRAME) (sizing border)
+            // - WS_SYSMENU (window menu on its title bar (WS_CAPTION must be specified))
+            let ex_style = WS_EX_ACCEPTFILES | WS_EX_OVERLAPPEDWINDOW;
+            let style = WS_OVERLAPPEDWINDOW;
+            let hwnd = CreateWindowExW(
+                ex_style,
+                classname.as_ptr(),
+                ptr::null(), // No title (yet)
+                style,
+                x, y, w as _, h as _,
+                ptr::null_mut(), // No parent
+                ptr::null_mut(), // No menu
+                hinstance,
+                ptr::null_mut(), // No custom data pointer
+            );
+            if hwnd.is_null() {
+                // GetLastError(); // FIXME
+            }
+        }
         unimplemented!()
     }
     pub unsafe fn window_from_handle(&self, handle: OsWindowHandle, params: Option<&OsWindowFromHandleParams>) -> Result<OsWindow> {

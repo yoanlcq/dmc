@@ -1,3 +1,5 @@
+extern crate winapi;
+
 pub mod hint;
 pub use self::hint::set_hint;
 pub mod context;

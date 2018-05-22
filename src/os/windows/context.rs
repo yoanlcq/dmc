@@ -5,7 +5,7 @@ pub struct OsContext;
 
 impl OsContext {
     pub fn new() -> Result<Self> {
-        unimplemented!()
+        Ok(OsContext)
     }
     pub fn untrap_mouse(&self) -> Result<()> {
         unimplemented!()

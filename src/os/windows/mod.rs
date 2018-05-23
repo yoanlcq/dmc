@@ -5,7 +5,7 @@ pub use self::hint::set_hint;
 pub mod context;
 pub use self::context::{OsContext, OsSharedContext};
 pub mod window;
-pub use self::window::{OsWindow, OsWindowHandle, OsWindowFromHandleParams};
+pub use self::window::{OsWindow, OsSharedWindow, OsWindowHandle, OsWindowFromHandleParams};
 pub mod desktop;
 pub mod cursor;
 pub use self::cursor::OsCursor;
@@ -27,8 +27,8 @@ pub use self::device::{
 
 pub mod winapi_utils {
     pub use super::winapi::{
-        shared::{windef::*, minwindef::*, ntdef::*},
-        um::{winuser::*, libloaderapi::*, winbase::*, errhandlingapi::*},
+        shared::{windef::*, minwindef::*, ntdef::*, winerror::SUCCEEDED,},
+        um::{winuser::*, libloaderapi::*, winbase::*, errhandlingapi::*, shellscalingapi::*,},
     };
     pub use std::os::windows::ffi::{OsStringExt, OsStrExt};
 
@@ -47,7 +47,14 @@ pub mod winapi_utils {
         s
     }
 
+    // https://stackoverflow.com/a/455533
+    pub fn hresult_string(hresult: HRESULT) -> String {
+        format_message_helper(hresult as _)
+    }
     pub fn winapi_errorcode_string(err: DWORD) -> String {
+        format_message_helper(err)
+    }
+    fn format_message_helper(err: DWORD) -> String {
         unsafe {
             let mut msg: *mut u16 = ptr::null_mut();
             let nb_chars_without_nul = FormatMessageW(
@@ -56,12 +63,17 @@ pub mod winapi_utils {
                 &mut msg as *mut *mut u16 as _, 0, ptr::null_mut()
             );
 
-            let os_string = OsString::from_wide(slice::from_raw_parts(msg, nb_chars_without_nul as _));
-
+            let string = wide_string(slice::from_raw_parts(msg, nb_chars_without_nul as _));
             LocalFree(msg as _);
-
-            os_string.to_string_lossy().into_owned().into()
+            string
         }
+    }
+    pub fn wide_string(wide: &[u16]) -> String {
+        let mut len = wide.len();
+        if let Some(0) = wide.last() {
+            len -= 1;
+        }
+        OsString::from_wide(&wide[..len]).to_string_lossy().into_owned().into()
     }
 
     pub fn winapi_fail_with_error_code<T>(name: &str, err: DWORD) -> Result<T> {
@@ -70,6 +82,13 @@ pub mod winapi_utils {
     pub fn winapi_fail<T>(name: &str) -> Result<T> {
         let err = unsafe { GetLastError() };
         winapi_fail_with_error_code(name, err)
+    }
+
+    pub fn hresult_to_result(name: &str, hresult: HRESULT) -> Result<()> {
+        if SUCCEEDED(hresult) {
+            return Ok(());
+        }
+        failed(format!("{}() failed with HRESULT 0x{:x}: {}", name, hresult, hresult_string(hresult)))
     }
 
     #[allow(non_snake_case)]

@@ -2,9 +2,9 @@ use std::cell::RefCell;
 use std::mem;
 use std::ptr;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::ops::Deref;
-use super::winapi_utils::*;
+use super::{winapi_utils::*, OsSharedWindow};
 use error::Result;
 
 extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -22,6 +22,7 @@ pub struct ClassSettings {
 pub struct OsSharedContext {
     hinstance: HINSTANCE,
     class_atoms: RefCell<HashMap<ClassSettings, ATOM>>,
+    pub weak_windows: RefCell<HashMap<HWND, Weak<OsSharedWindow>>>,
 }
 #[derive(Debug)]
 pub struct OsContext(pub(crate) Rc<OsSharedContext>);
@@ -36,7 +37,7 @@ impl Deref for OsContext {
 impl Drop for OsSharedContext {
     fn drop(&mut self) {
         let &mut Self {
-            hinstance, ref class_atoms,
+            hinstance, ref class_atoms, ref weak_windows,
         } = self;
         unsafe {
             for class_atom in class_atoms.borrow().values() {
@@ -103,12 +104,32 @@ impl OsSharedContext {
     }
 }
 
+mod dpi_awareness {
+    use super::*;
+
+    static mut IS_SET: Option<Result<()>> = None;
+
+    pub fn init_once() {
+        unsafe {
+            // FIXME: This is all wrong! This should involve dynamic loading of DLLs so it works on
+            // any Windows version, and it's a bit more complicated than that.
+            if IS_SET.is_some() {
+                return;
+            }
+            let hresult = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+            IS_SET = Some(hresult_to_result("SetProcessDpiAwareness", hresult));
+        }
+    }
+}
+
 impl OsSharedContext {
     fn new() -> Result<Self> {
+        dpi_awareness::init_once();
         let c = unsafe {
             Self {
                 hinstance: GetModuleHandleW(ptr::null()),
                 class_atoms: RefCell::new(HashMap::new()),
+                weak_windows: RefCell::new(HashMap::new()),
             }
         };
         Ok(c)

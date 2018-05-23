@@ -1,18 +1,37 @@
 use std::ptr;
 use std::rc::Rc;
+use std::ops::Deref;
 use error::{Result, failed};
 use window::{Window, WindowSettings, WindowHandle, WindowStyleHint, WindowTypeHint, TitleBarFeatures, Borders};
 use super::{OsContext, OsSharedContext, winapi_utils::*};
 use {Vec2, Extent2, Rect, Rgba};
 
+
+pub type OsWindowHandle = HWND;
+
 #[derive(Debug)]
-pub struct OsWindow {
+pub struct OsWindowFromHandleParams {
+    pub class_atom: ATOM,
+}
+
+#[derive(Debug)]
+pub struct OsSharedWindow {
     pub context: Rc<OsSharedContext>,
     pub class_atom: ATOM,
     pub hwnd: HWND,
 }
 
-impl Drop for OsWindow {
+#[derive(Debug)]
+pub struct OsWindow(pub(crate) Rc<OsSharedWindow>);
+
+impl Deref for OsWindow {
+    type Target = OsSharedWindow;
+    fn deref(&self) -> &OsSharedWindow {
+        &self.0
+    }
+}
+
+impl Drop for OsSharedWindow {
     fn drop(&mut self) {
         let &mut Self {
             ref context, class_atom, hwnd,
@@ -50,17 +69,34 @@ impl OsContext {
             if hwnd.is_null() {
                 return winapi_fail("CreateWindowExW");
             }
-            // GWL_STYLE
-            // GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-            let os_window = OsWindow {
+            let os_window = OsSharedWindow {
                 context: Rc::clone(&self.0),
                 class_atom, hwnd
             };
-            Ok(os_window)
+            let os_window = Rc::new(os_window);
+            self.weak_windows.borrow_mut().insert(hwnd, Rc::downgrade(&os_window));
+            Ok(OsWindow(os_window))
         }
     }
-    pub unsafe fn window_from_handle(&self, handle: OsWindowHandle, params: Option<&OsWindowFromHandleParams>) -> Result<OsWindow> {
-        unimplemented!()
+    pub unsafe fn window_from_handle(&self, hwnd: OsWindowHandle, params: Option<&OsWindowFromHandleParams>) -> Result<OsWindow> {
+        match params {
+            None => match self.weak_windows.borrow().get(&hwnd) {
+                None => failed("Handle refers to a foreign window, but params is None"),
+                Some(weak) => match weak.upgrade() {
+                    None => failed("Handle refers to a destroyed window"),
+                    Some(strong) => Ok(OsWindow(strong)),
+                },
+            },
+            Some(&OsWindowFromHandleParams {
+                class_atom,
+            }) => {
+                let context = Rc::clone(&self.0);
+                let os_window = OsSharedWindow {
+                    context, hwnd, class_atom,
+                };
+                Ok(OsWindow(Rc::new(os_window)))
+            },
+        }
     }
 }
 
@@ -69,10 +105,24 @@ impl OsWindow {
         WindowHandle(self.hwnd)
     }
     pub fn set_title(&self, title: &str) -> Result<()> {
-        unimplemented!()
+        let is_ok = unsafe {
+            SetWindowTextW(self.hwnd, to_wide_with_nul(title).as_ptr())
+        };
+        if is_ok == FALSE {
+            return winapi_fail("SetWindowTextW");
+        }
+        Ok(())
     }
     pub fn title(&self) -> Result<String> {
-        unimplemented!()
+        let mut wide = [0; 1024];
+        let nb_chars_without_nul = unsafe {
+            GetWindowTextW(self.hwnd, wide.as_mut_ptr(), wide.len() as _)
+        };
+        if nb_chars_without_nul == 0 {
+            return winapi_fail("GetWindowTextW");
+        }
+        assert!(nb_chars_without_nul < wide.len() as _);
+        Ok(wide_string(&wide[..nb_chars_without_nul as usize]))
     }
     pub fn set_icon(&self, size: Extent2<u32>, data: &[Rgba<u8>]) -> Result<()> {
         unimplemented!()
@@ -283,6 +333,3 @@ impl OsWindow {
         unimplemented!()
     }
 }
-
-pub type OsWindowHandle = HWND;
-pub type OsWindowFromHandleParams = ();

@@ -8,6 +8,8 @@ use super::{winapi_utils::*, OsSharedWindow};
 use error::Result;
 
 extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // TODO: Reply to WM_GETMINMAXINFO: https://stackoverflow.com/a/22261818
+    // TODO: Handle WM_MOVING. if !self.is_movable, restore window to initial position.
     unimplemented!()
 }
 
@@ -88,8 +90,8 @@ impl OsSharedContext {
             cbWndExtra: 0,
             hIcon: ptr::null_mut(),
             hIconSm: ptr::null_mut(),
-            hCursor: ptr::null_mut(),
-            hbrBackground: ptr::null_mut(),
+            hCursor: unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) },
+            hbrBackground: unsafe { GetStockObject(WHITE_BRUSH as _) as _ }, // XXX might cause trouble??
             lpszMenuName: ptr::null(),
         };
         let class_atom = unsafe {

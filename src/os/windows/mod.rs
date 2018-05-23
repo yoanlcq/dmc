@@ -28,7 +28,7 @@ pub use self::device::{
 pub mod winapi_utils {
     pub use super::winapi::{
         shared::{windef::*, minwindef::*, ntdef::*, winerror::SUCCEEDED,},
-        um::{winuser::*, libloaderapi::*, winbase::*, errhandlingapi::*, shellscalingapi::*,},
+        um::{winuser::*, libloaderapi::*, winbase::*, errhandlingapi::*, shellscalingapi::*, wingdi::*,},
     };
     pub use std::os::windows::ffi::{OsStringExt, OsStrExt};
 

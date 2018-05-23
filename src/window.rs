@@ -251,9 +251,13 @@ impl Window {
         self.0.set_max_size(size)
     }
     /// Allow or disallow resizing this window.
-    ///
+    /// 
     /// The same effect can be achieved by calling both `set_min_size()` and `set_max_size()`
     /// with a same value, but "resizability" is yet a separate state.
+    /// 
+    /// This method follows a "best-effort" policy; If it succeeds, the user shouldn't
+    /// be able to resize the window anymore; However, your own code still might, but this is
+    /// implementation-dependant. See also `is_resizable()`.
     pub fn set_resizable(&self, resizable: bool) -> Result<()> {
         self.0.set_resizable(resizable)
     }

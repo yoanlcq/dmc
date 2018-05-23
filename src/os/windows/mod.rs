@@ -3,7 +3,7 @@ extern crate winapi;
 pub mod hint;
 pub use self::hint::set_hint;
 pub mod context;
-pub use self::context::OsContext;
+pub use self::context::{OsContext, OsSharedContext};
 pub mod window;
 pub use self::window::{OsWindow, OsWindowHandle, OsWindowFromHandleParams};
 pub mod desktop;

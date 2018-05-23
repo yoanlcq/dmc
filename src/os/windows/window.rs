@@ -1,12 +1,13 @@
 use std::ptr;
+use std::rc::Rc;
 use error::{Result, failed};
 use window::{Window, WindowSettings, WindowHandle, WindowStyleHint, WindowTypeHint, TitleBarFeatures, Borders};
-use super::OsContext;
-use super::winapi_utils::*;
+use super::{OsContext, OsSharedContext, winapi_utils::*};
 use {Vec2, Extent2, Rect, Rgba};
 
 #[derive(Debug)]
 pub struct OsWindow {
+    pub context: Rc<OsSharedContext>,
     pub class_atom: ATOM,
     pub hwnd: HWND,
 }
@@ -14,11 +15,11 @@ pub struct OsWindow {
 impl Drop for OsWindow {
     fn drop(&mut self) {
         let &mut Self {
-            class_atom, hwnd,
+            ref context, class_atom, hwnd,
         } = self;
         unsafe {
             let is_ok = DestroyWindow(hwnd);
-            let is_ok = UnregisterClassW(class_atom as _, ptr::null_mut());
+            let is_ok = UnregisterClassW(class_atom as _, context.hinstance());
         }
     }
 }
@@ -52,6 +53,7 @@ impl OsContext {
             // GWL_STYLE
             // GetWindowLongPtr(hwnd, GWL_EXSTYLE);
             let os_window = OsWindow {
+                context: Rc::clone(&self.0),
                 class_atom, hwnd
             };
             Ok(os_window)
@@ -64,7 +66,7 @@ impl OsContext {
 
 impl OsWindow {
     pub fn handle(&self) -> WindowHandle {
-        unimplemented!()
+        WindowHandle(self.hwnd)
     }
     pub fn set_title(&self, title: &str) -> Result<()> {
         unimplemented!()
@@ -282,5 +284,5 @@ impl OsWindow {
     }
 }
 
-pub type OsWindowHandle = ();
+pub type OsWindowHandle = HWND;
 pub type OsWindowFromHandleParams = ();

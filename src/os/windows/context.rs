@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::mem;
 use std::ptr;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::ops::Deref;
 use super::winapi_utils::*;
 use error::Result;
 
@@ -17,12 +19,21 @@ pub struct ClassSettings {
 }
 
 #[derive(Debug)]
-pub struct OsContext {
+pub struct OsSharedContext {
     hinstance: HINSTANCE,
     class_atoms: RefCell<HashMap<ClassSettings, ATOM>>,
 }
+#[derive(Debug)]
+pub struct OsContext(pub(crate) Rc<OsSharedContext>);
 
-impl Drop for OsContext {
+impl Deref for OsContext {
+    type Target = OsSharedContext;
+    fn deref(&self) -> &OsSharedContext {
+        &self.0
+    }
+}
+
+impl Drop for OsSharedContext {
     fn drop(&mut self) {
         let &mut Self {
             hinstance, ref class_atoms,
@@ -50,7 +61,7 @@ mod classname_token {
     }
 }
 
-impl OsContext {
+impl OsSharedContext {
     pub fn hinstance(&self) -> HINSTANCE {
         self.hinstance
     }
@@ -86,19 +97,27 @@ impl OsContext {
         if class_atom == 0 {
             return winapi_fail("RegisterClassExW");
         }
+        let previous = self.class_atoms.borrow_mut().insert(*settings, class_atom);
+        assert!(previous.is_none()); // Must have been checked in early return
         Ok(class_atom)
     }
 }
 
-impl OsContext {
-    pub fn new() -> Result<Self> {
+impl OsSharedContext {
+    fn new() -> Result<Self> {
         let c = unsafe {
-            OsContext {
+            Self {
                 hinstance: GetModuleHandleW(ptr::null()),
                 class_atoms: RefCell::new(HashMap::new()),
             }
         };
         Ok(c)
+    }
+}
+
+impl OsContext {
+    pub fn new() -> Result<Self> {
+        Ok(OsContext(Rc::new(OsSharedContext::new()?)))
     }
     pub fn untrap_mouse(&self) -> Result<()> {
         unimplemented!()

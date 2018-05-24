@@ -259,7 +259,7 @@ impl OsWindow {
     fn set_window_long_ptr(&self, gwl: i32, val: isize) -> Result<()> {
         unsafe {
             SetLastError(0); // See doc for SetWindowLongW()
-            let previous = SetWindowLongPtrW(self.hwnd, gwl, val);
+            let previous = SetWindowLongPtrW(self.hwnd, gwl, val as _); // val is i32, not isize, on 32-bit windows. Urgh.
             let err = GetLastError();
             if previous == 0 && err != 0 {
                 return winapi_fail_with_error_code("SetWindowLongPtrW", err);

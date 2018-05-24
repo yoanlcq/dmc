@@ -4,9 +4,9 @@ use error::Result;
 use event::Event;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct OsSystemEvent;
+pub struct OsUnprocessedEvent;
 
-impl SystemEvent {
+impl UnprocessedEvent {
     // TODO: Add Emscripten-specific getters here
 }
 

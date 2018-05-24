@@ -12,7 +12,7 @@ pub use self::gl::{OsGLContext, OsGLPixelFormat, OsGLProc};
 pub mod event_instant;
 pub use self::event_instant::OsEventInstant;
 pub mod event;
-pub use self::event::OsSystemEvent;
+pub use self::event::OsUnprocessedEvent;
 pub mod device;
 pub use self::device::{
     consts as device_consts,

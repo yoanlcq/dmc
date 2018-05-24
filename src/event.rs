@@ -72,7 +72,7 @@ use super::{Vec2, Extent2, Rect};
 use context::Context;
 use error;
 use window::WindowHandle;
-use os::{OsEventInstant, OsSystemEvent};
+use os::{OsEventInstant, OsUnprocessedEvent};
 use device::*;
 
 /// A platform-specific timestamp for an event, starting from an unspecified instant.
@@ -180,8 +180,30 @@ impl<'c> Iterator for Iter<'c> {
 
 /// Opaque wrapper around a platform-specific event, providing methods for
 /// retrieving platform-specific associated data.
+///
+/// See the documentation of `Event::UnprocessedEvent`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SystemEvent(pub(crate) OsSystemEvent);
+pub struct UnprocessedEvent(pub(crate) OsUnprocessedEvent);
+
+impl UnprocessedEvent {
+    /// Returns the number of "higher-level" `Event`s that were caused by this
+    /// platform-specific event; these events will come next.
+    ///
+    /// Note that it is legal for this to return zero, which doesn't necessarily mean
+    /// that the implementation ignored the event; it only means that it didn't cause
+    /// other events to be generated and pushed in the queue.  
+    pub fn following(&self) -> usize {
+        self.0.following()
+    }
+    /// Was this event ignored by the implementation?  
+    /// 
+    /// "Ignored" here is understood as "the implementation didn't do anything with it",
+    /// which is a bit vague. Sometimes the platform expects some action to be done
+    /// immediately, in which case "doing whatever is the minimal/default thing" also counts as "ignoring".
+    pub fn was_ignored(&self) -> bool {
+        self.0.was_ignored()
+    }
+}
 
 // TODO Missing event types:
 // - Drag'n drop
@@ -206,16 +228,24 @@ pub struct SystemEvent(pub(crate) OsSystemEvent);
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    /// A system event, which was not handled by this crate.
+    /// A platform-specific event, which was or was not handled by this crate.
     /// 
+    /// When the platform reports an event to a `Context`, the `Context` first pushes
+    /// the event's data into its internal queue, as an `UnprocessedEvent`.  
+    /// Then, that platform-specific event may cause `N` more "higher-level" `Event`s
+    /// to be generated and reported to you (where `N` may be zero or more, and can
+    /// be obtained via `UnprocessedEvent::following()`).
+    ///
+    /// For instance, on X11, when the server reports an `XKeyEvent`, your `Context`
+    /// will report the following events, in order:
+    ///
+    /// 1. `Event::UnprocessedEvent(UnprocessedEvent::from(x_key_event))`;
+    /// 2. `Event::MouseMotion { .. }`;
+    /// 3. `Event::KeyboardKeyPressed { .. }` (or `Event::KeyboardKeyReleased { .. }`).
+    ///
     /// This variant is provided so that your application can implement extended platform-specific functionality.  
     /// If the functionality proves to be useful, consider suggesting to add it to this crate's API! :)
-    UnhandledSystemEvent(SystemEvent),
-    /// A system event, which **was** handled by this crate (meaning, it resulted in one or more "normal" `Event`s being pushed on the queue).
-    /// You receive TranslatedSystemEvents before the associated, translated `Event`s.
-    /// 
-    /// Normal applications should just ignore this event variant.
-    HandledSystemEvent(SystemEvent),
+    UnprocessedEvent(UnprocessedEvent),
 
     /// Quit requested. See https://wiki.libsdl.org/SDL_EventType#SDL_QUIT
     Quit,

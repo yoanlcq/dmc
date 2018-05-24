@@ -6,9 +6,9 @@ use super::context::X11SharedContext;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
 use super::X11SharedWindow;
-use os::{OsEventInstant, OsDeviceID, OsSystemEvent};
+use os::{OsEventInstant, OsDeviceID};
 use error::{self, Result, failed};
-use event::{Event, EventInstant};
+use event::{Event, EventInstant, UnprocessedEvent};
 use device::{self, DeviceID, DeviceInfo, MouseButton, Key, Keysym, Keycode};
 use window::WindowHandle;
 use {Vec2, Extent2, Rect};
@@ -35,14 +35,20 @@ impl X11SharedContext {
             x::XNextEvent(*x_display, &mut x_event);
             x_event
         };
-        self.pump_x_event(&mut xevent);
+        self.pump_x_event(&mut x_event);
     }
 
     fn push_unhandled_x_event(&self, e: &x::XEvent) {
-        self.push_event(Event::UnhandledSystemEvent(SystemEvent(e.clone().into())))
+        self.push_event(Event::UnprocessedEvent(UnprocessedEvent(e.clone().into())))
     }
-    fn push_handled_x_event(&self, e: &x::XEvent) {
-        self.push_event(Event::HandledSystemEvent(SystemEvent(e.clone().into())))
+    fn push_handled_x_event(&self, e: &x::XEvent, following: usize) {
+        self.push_event(Event::UnprocessedEvent(UnprocessedEvent(e.clone().into())))
+    }
+    fn push_unhandled_xi2_event(&self, e: &xi2::XIEvent) {
+        self.push_event(Event::UnprocessedEvent(UnprocessedEvent(e.clone().into())))
+    }
+    fn push_handled_xi2_event(&self, e: &xi2::XIEvent, following: usize) {
+        self.push_event(Event::UnprocessedEvent(UnprocessedEvent(e.clone().into())))
     }
     fn push_event(&self, e: Event) {
         self.pending_translated_events.borrow_mut().push_back(e);
@@ -142,7 +148,7 @@ impl X11SharedContext {
             | xi2::XI_RawTouchUpdate  
             | xi2::XI_RawTouchEnd 
                 => self.pump_xi_raw_event(unsafe { mem::transmute(e) }),
-            _   => self.pending_translated_events.borrow_mut().push_back(Event::UnhandledSystemEvent(e.clone().into())),
+            _   => self.push_unhandled_xi2_event(e),
         }
     }
 
@@ -151,6 +157,7 @@ impl X11SharedContext {
             type_: _, serial: _, send_event: _, display: _, event: _, window,
             override_redirect: _,
         } = e;
+        self.push_handled_x_event(&(&*e).into(), 1);
         self.push_event(Event::WindowShown { window: WindowHandle(window) })
     }
     fn pump_x_unmap_event(&self, e: &mut x::XUnmapEvent) {
@@ -158,6 +165,7 @@ impl X11SharedContext {
             type_: _, serial: _, send_event: _, display: _, event: _, window,
             from_configure: _,
         } = e;
+        self.push_handled_x_event(&(&*e).into(), 1);
         self.push_event(Event::WindowHidden { window: WindowHandle(window) })
     }
     fn pump_x_visibility_event(&self, e: &mut x::XVisibilityEvent) {
@@ -166,10 +174,10 @@ impl X11SharedContext {
         } = e;
         let _window = WindowHandle(window);
         match state {
-            x::VisibilityUnobscured => self.push_unhandled_x_event(e),
-            x::VisibilityPartiallyObscured => self.push_unhandled_x_event(e),
-            x::VisibilityFullyObscured => self.push_unhandled_x_event(e),
-            _ => self.push_unhandled_x_event(e),
+            x::VisibilityUnobscured => self.push_unhandled_x_event(&(&*e).into()),
+            x::VisibilityPartiallyObscured => self.push_unhandled_x_event(&(&*e).into()),
+            x::VisibilityFullyObscured => self.push_unhandled_x_event(&(&*e).into()),
+            _ => self.push_unhandled_x_event(&(&*e).into()),
         }
     }
 
@@ -178,14 +186,15 @@ impl X11SharedContext {
             type_: _, serial: _, send_event: _, display: _, window, root: _, subwindow: _,
             time, x, y, x_root, y_root, state: _, is_hint: _, same_screen: _,
         } = e;
-        let e = Event::MouseMotion {
+        let ev = Event::MouseMotion {
             mouse: self.core_x_mouse(),
             instant: EventInstant(OsEventInstant::X11EventTimeMillis(time)),
             window: WindowHandle(window),
             position: Vec2::new(x as _, y as _),
             root_position: Vec2::new(x_root as _, y_root as _),
         };
-        self.push_event(e)
+        self.push_handled_x_event(&(&*e).into(), 1);
+        self.push_event(ev)
     }
     fn pump_x_crossing_event(&self, e: &mut x::XCrossingEvent) {
         let &mut x::XCrossingEvent {
@@ -205,7 +214,7 @@ impl X11SharedContext {
             x::NotifyUngrab => (false, true),
             _ => unreachable!{},
         };
-        let e = match type_ {
+        let ev = match type_ {
             x::EnterNotify => Event::MouseEnter {
                 mouse, window, instant, position, root_position, is_grabbed, is_focused,
             },
@@ -214,7 +223,8 @@ impl X11SharedContext {
             },
             _ => unreachable!{},
         };
-        self.push_event(e)
+        self.push_handled_x_event(&(&*e).into(), 1);
+        self.push_event(ev)
     }
     fn pump_x_focus_change_event(&self, e: &mut x::XFocusChangeEvent) {
         let &mut x::XFocusChangeEvent {
@@ -222,7 +232,7 @@ impl X11SharedContext {
         } = e;
         let keyboard = self.core_x_keyboard();
         let window = WindowHandle(window);
-        let e = match type_ {
+        let ev = match type_ {
             x::FocusIn => Event::KeyboardFocusGained {
                 keyboard, window,
             },
@@ -231,14 +241,15 @@ impl X11SharedContext {
             },
             _ => unreachable!{},
         };
-        self.push_event(e)
+        self.push_handled_x_event(&(&*e).into(), 1);
+        self.push_event(ev)
     }
     fn pump_x_expose_event(&self, e: &mut x::XExposeEvent) {
         let &mut x::XExposeEvent {
             type_: _, serial: _, send_event: _, display: _, window,
             x, y, width, height, count,
         } = e;
-        let e = Event::WindowNeedsRedraw {
+        let ev = Event::WindowNeedsRedraw {
             window: WindowHandle(window),
             zone: Rect {
                 x: x as _,
@@ -248,7 +259,8 @@ impl X11SharedContext {
             },
             more_to_follow: count as _,
         };
-        self.push_event(e)
+        self.push_handled_x_event(&(&*e).into(), 1);
+        self.push_event(ev)
     }
     fn pump_x_gravity_event(&self, e: &mut x::XGravityEvent) {
         // Window moved because its parent's position or size changed.
@@ -257,12 +269,13 @@ impl X11SharedContext {
             type_: _, serial: _, send_event, display: _, event: _, window, x, y,
         } = e;
         // NOTE: This is only valid as long as the only parent of this window is the root.
-        let e = Event::WindowMoved {
+        let ev = Event::WindowMoved {
             window: WindowHandle(window),
             position: Vec2::new(x as _, y as _),
             by_user: send_event == x::False,
         };
-        self.push_event(e)
+        self.push_handled_x_event(&(&*e).into(), 1);
+        self.push_event(ev)
     }
     fn pump_x_configure_event(&self, e: &mut x::XConfigureEvent) {
         let &mut x::XConfigureEvent {
@@ -273,6 +286,7 @@ impl X11SharedContext {
         let by_user = send_event == x::False;
         let position = Vec2::new(x as _, y as _);
         let size = Extent2::new(width as _, height as _);
+        self.push_handled_x_event(&(&*e).into(), 2);
         self.push_event(Event::WindowMoved { window, position, by_user, });
         self.push_event(Event::WindowResized { window, size, by_user, })
     }
@@ -280,7 +294,7 @@ impl X11SharedContext {
         unsafe {
             x::XRefreshKeyboardMapping(e);
         }
-        self.push_unhandled_x_event(e) // unhandled = just saying that no Event is generated because of this
+        self.push_handled_x_event(&(&*e).into(), 0);
     }
     fn pump_x_client_message_event(&self, e: &mut x::XClientMessageEvent) {
         let x_display = self.lock_x_display();
@@ -289,13 +303,14 @@ impl X11SharedContext {
             message_type, format, data,
         } = e;
         if message_type != self.atoms.WM_PROTOCOLS().unwrap() {
-            return self.push_unhandled_x_event(e);
+            return self.push_unhandled_x_event(&(&*e).into());
         }
         if format != 32 {
-            return self.push_unhandled_x_event(e);
+            return self.push_unhandled_x_event(&(&*e).into());
         }
         if data.get_long(0) == self.atoms.WM_DELETE_WINDOW().unwrap() as _ {
             let window = WindowHandle(window);
+            self.push_handled_x_event(&(&*e).into(), 1);
             return self.push_event(Event::WindowCloseRequested { window });
         }
         if let Ok(net_wm_ping) = self.atoms._NET_WM_PING() {
@@ -313,10 +328,10 @@ impl X11SharedContext {
                         reply as *mut _ as _
                     );
                 }
-                return self.push_unhandled_x_event(e); // We handled it but we have no equivalent in our API.
+                return self.push_handled_x_event(&(&*e).into(), 0);
             }
         }
-        self.push_unhandled_x_event(e)
+        self.push_unhandled_x_event(&(&*e).into())
     }
 
     fn pump_x_key_event(&self, e: &mut x::XKeyEvent) {

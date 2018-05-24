@@ -210,7 +210,7 @@ impl Window {
     /// FIXME: Use the `imgref` crate instead!
     /// Sets the window's icon via RGBA data.
     pub fn set_icon(&self, size: Extent2<u32>, data: &[Rgba<u8>]) -> Result<()> {
-        assert_eq!(data.len(), size.w * size.h);
+        assert_eq!(data.len(), (size.w * size.h) as usize);
         self.0.set_icon(size, data)
     }
     /// FIXME: Use the `imgref` crate instead!

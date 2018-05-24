@@ -141,6 +141,7 @@ impl OsWindow {
         Ok(())
     }
     pub fn title(&self) -> Result<String> {
+        // FIXME: use smallvec instead!
         let mut wide = [0; 1024];
         let nb_chars_without_nul = unsafe {
             GetWindowTextW(self.hwnd, wide.as_mut_ptr(), wide.len() as _)
@@ -491,6 +492,7 @@ impl OsWindow {
     pub fn set_position_and_size(&self, r: Rect<i32, u32>) -> Result<()> {
         self.set_window_pos(r, SWP_NOZORDER | SWP_FRAMECHANGED)
     }
+    // See WS_EX_LAYERED and UpdateLayeredWindow ()
     pub fn set_opacity(&self, alpha: f64) -> Result<()> {
         unimplemented!()
     }
@@ -503,15 +505,18 @@ impl OsWindow {
     pub fn recenter_in_work_area(&self) -> Result<()> {
         unimplemented!()
     }
+    // SetCursorPos
     pub fn set_mouse_position(&self, pos: Vec2<i32>) -> Result<()> {
         unimplemented!()
     }
+    // GetCursorPos
     pub fn mouse_position(&self) -> Result<Vec2<i32>> {
         unimplemented!()
     }
     pub fn trap_mouse(&self) -> Result<()> {
         unimplemented!()
     }
+    // TODO: Use RedrawWindow()
     pub fn clear(&self) -> Result<()> {
         unimplemented!()
     }

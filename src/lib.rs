@@ -59,7 +59,7 @@ macro_rules! os_mod {
                 OsContext, OsWindow, OsWindowHandle, OsWindowFromHandleParams,
                 OsCursor,
                 OsGLPixelFormat, OsGLContext, OsGLProc,
-                OsEventInstant,
+                OsEventInstant, OsSystemEvent,
                 device_consts,
                 OsDeviceID, OsAxisInfo, OsDeviceInfo,
                 OsControllerState, OsControllerInfo,

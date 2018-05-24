@@ -61,6 +61,26 @@ pub type OsKeysym = X11Keysym;
 pub mod event_instant;
 pub use self::event_instant::OsEventInstant;
 
+// FIXME: This should be an enum to cope with events originating from udev/evdev.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OsSystemEvent {
+    xevent: x::XEvent,
+}
+
+impl From<x::XEvent> for OsSystemEvent {
+    fn from(xevent: x::XEvent) -> Self {
+        Self { xevent }
+    }
+}
+
+impl SystemEvent {
+    /// (Linux, X11-specific) Gets the XEvent that caused this `SystemEvent`, if any.
+    /// This returns an Option because on Linux, events may originate from other APIs than X11.
+    pub fn xlib_xevent(&self) -> Option<&x::XEvent> {
+        Some(&self.xevent)
+    }
+}
+
 pub mod device_consts;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]

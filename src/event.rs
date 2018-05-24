@@ -72,7 +72,7 @@ use super::{Vec2, Extent2, Rect};
 use context::Context;
 use error;
 use window::WindowHandle;
-use os::OsEventInstant;
+use os::{OsEventInstant, OsSystemEvent};
 use device::*;
 
 /// A platform-specific timestamp for an event, starting from an unspecified instant.
@@ -178,6 +178,11 @@ impl<'c> Iterator for Iter<'c> {
     }
 }
 
+/// Opaque wrapper around a platform-specific event, providing methods for
+/// retrieving platform-specific associated data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SystemEvent(pub(crate) OsSystemEvent);
+
 // TODO Missing event types:
 // - Drag'n drop
 // - OpenGL context loss
@@ -201,6 +206,17 @@ impl<'c> Iterator for Iter<'c> {
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
+    /// A system event, which was not handled by this crate.
+    /// 
+    /// This variant is provided so that your application can implement extended platform-specific functionality.  
+    /// If the functionality proves to be useful, consider suggesting to add it to this crate's API! :)
+    UnhandledSystemEvent(SystemEvent),
+    /// A system event, which **was** handled by this crate (meaning, it resulted in one or more "normal" `Event`s being pushed on the queue).
+    /// You receive TranslatedSystemEvents before the associated, translated `Event`s.
+    /// 
+    /// Normal applications should just ignore this event variant.
+    HandledSystemEvent(SystemEvent),
+
     /// Quit requested. See https://wiki.libsdl.org/SDL_EventType#SDL_QUIT
     Quit,
     // Mobile events: See SDL_APP_* events

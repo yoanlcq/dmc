@@ -11,6 +11,9 @@ use std::collections::HashMap;
 
 use uuid::Uuid as Guid;
 
+use self::x11::xlib as x;
+use self::x11::xinput2 as xi2;
+
 use self::linuxdev::{LinuxdevContext, LinuxdevToken, LinuxdevAxisInfo, LinuxdevDeviceInfo};
 pub use self::linuxdev::{OsControllerInfo, OsControllerState};
 use x11::{
@@ -61,23 +64,45 @@ pub type OsKeysym = X11Keysym;
 pub mod event_instant;
 pub use self::event_instant::OsEventInstant;
 
-// FIXME: This should be an enum to cope with events originating from udev/evdev.
+
+// FIXME: Make a union instead, or a PR to x11-rs.
+// This would allow not having to do this, and not to Box values.
+unsafe pub(crate) trait XIEventVariantHack {
+    fn as_xi_event(&self) -> &xi2::XIEvent {
+        unsafe { &*(self as *const _ as _) }
+    }
+}
+
+// FIXME: This should have a variant to cope with events originating from udev/evdev.
 #[derive(Debug, Clone, PartialEq)]
-pub struct OsUnprocessedEvent {
-    xevent: x::XEvent,
+pub enum OsUnprocessedEvent {
+    XEvent(x::XEvent),
+    XIEvent(Box<XIEventVariantHack>),
 }
 
 impl From<x::XEvent> for OsUnprocessedEvent {
     fn from(xevent: x::XEvent) -> Self {
-        Self { xevent }
+        OsUnprocessedEvent::XEvent(xevent)
+    }
+}
+impl From<xi2::XIEvent> for OsUnprocessedEvent {
+    fn from(xievent: xi2::XIEvent) -> Self {
+        OsUnprocessedEvent::XEvent(xievent)
     }
 }
 
 impl UnprocessedEvent {
-    /// (Linux, X11-specific) Gets the XEvent that caused this `UnprocessedEvent`, if any.
-    /// This returns an Option because on Linux, events may originate from other APIs than X11.
-    pub fn xlib_xevent(&self) -> Option<&x::XEvent> {
-        Some(&self.xevent)
+    /// (Linux, X11-specific) Gets the `XEvent` that caused this `UnprocessedEvent`, if any.
+    /// This returns an `Option` because on Linux, events may originate from other APIs than X11.
+    pub fn xlib_x_event(&self) -> Option<&x::XEvent> {
+        if let UnprocessedEvent::XEvent(ref e) = *self { Some(e) } else { None }
+    }
+    /// (Linux, X11-specific) Gets the `XIEvent` that caused this `UnprocessedEvent`, if any.
+    /// This returns an `Option` because on Linux, events may originate from other APIs than X11.
+    /// 
+    /// You may treat the returned pointer as the appropriate `XIEvent` variant.
+    pub fn xlib_xi_event(&self) -> Option<&xi2::XIEvent> {
+        if let UnprocessedEvent::XIEvent(ref e) = *self { Some(e.as_xi_event()) } else { None }
     }
 }
 

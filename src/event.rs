@@ -183,7 +183,11 @@ impl<'c> Iterator for Iter<'c> {
 ///
 /// See the documentation of `Event::UnprocessedEvent`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct UnprocessedEvent(pub(crate) OsUnprocessedEvent);
+pub struct UnprocessedEvent {
+    pub(crate) os_event: OsUnprocessedEvent,
+    pub(crate) following: usize,
+    pub(crate) was_ignored: bool,
+}
 
 impl UnprocessedEvent {
     /// Returns the number of "higher-level" `Event`s that were caused by this
@@ -193,15 +197,18 @@ impl UnprocessedEvent {
     /// that the implementation ignored the event; it only means that it didn't cause
     /// other events to be generated and pushed in the queue.  
     pub fn following(&self) -> usize {
-        self.0.following()
+        self.following
     }
     /// Was this event ignored by the implementation?  
     /// 
     /// "Ignored" here is understood as "the implementation didn't do anything with it",
     /// which is a bit vague. Sometimes the platform expects some action to be done
     /// immediately, in which case "doing whatever is the minimal/default thing" also counts as "ignoring".
+    /// 
+    /// This is intended as a soft hint to help you decide whether or not you should handle
+    /// this event yourself.
     pub fn was_ignored(&self) -> bool {
-        self.0.was_ignored()
+        self.was_ignored
     }
 }
 

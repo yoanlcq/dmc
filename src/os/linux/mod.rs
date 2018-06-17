@@ -14,7 +14,7 @@ use uuid::Uuid as Guid;
 use self::x11::xlib as x;
 use self::x11::xinput2 as xi2;
 
-use self::linuxdev::{LinuxdevContext, LinuxdevToken, LinuxdevAxisInfo, LinuxdevDeviceInfo};
+use self::linuxdev::{LinuxdevContext, LinuxdevToken, LinuxdevAxisInfo, LinuxdevDeviceInfo, LinuxdevUnprocessedEvent};
 pub use self::linuxdev::{OsControllerInfo, OsControllerState};
 use x11::{
     set_hint as set_hint_x11,
@@ -67,10 +67,10 @@ pub use self::event_instant::OsEventInstant;
 
 
 
-// FIXME: This should have a variant to cope with events originating from udev/evdev.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OsUnprocessedEvent {
     X11UnprocessedEvent(X11UnprocessedEvent),
+    LinuxdevUnprocessedEvent(LinuxdevUnprocessedEvent),
 }
 
 impl From<X11UnprocessedEvent> for OsUnprocessedEvent {
@@ -78,6 +78,13 @@ impl From<X11UnprocessedEvent> for OsUnprocessedEvent {
         OsUnprocessedEvent::X11UnprocessedEvent(e)
     }
 }
+
+impl From<LinuxdevUnprocessedEvent> for OsUnprocessedEvent {
+    fn from(e: LinuxdevUnprocessedEvent) -> Self {
+        OsUnprocessedEvent::LinuxdevUnprocessedEvent(e)
+    }
+}
+
 
 impl UnprocessedEvent {
     /// (Linux, X11-specific) Gets the `XEvent` that caused this `UnprocessedEvent`, if any.
@@ -92,6 +99,7 @@ impl UnprocessedEvent {
     /// You may treat the returned pointer as the appropriate `XIEvent` variant.
     pub fn xlib_xi_event(&self) -> Option<&xi2::XIEvent> {
         match self.os_event {
+            OsUnprocessedEvent::LinuxdevUnprocessedEvent(_) => None,
             OsUnprocessedEvent::X11UnprocessedEvent(ref e) => match e {
                 X11UnprocessedEvent::XEvent(_) => None,
                 X11UnprocessedEvent::XIBarrierEvent       (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),

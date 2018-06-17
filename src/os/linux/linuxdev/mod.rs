@@ -45,6 +45,11 @@ fn remove_quotes_if_any(mut s: String) -> String {
     s
 }
 
+// This struct is incomplete. Fill it in when reporting unprocessed events from this
+// module looks useful.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinuxdevUnprocessedEvent;
+
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct LinuxdevToken(u32);

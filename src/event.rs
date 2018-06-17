@@ -353,6 +353,7 @@ impl Event {
     /// Gets the `EventInstant` for this event, if any.
     pub fn instant(&self) -> Option<EventInstant> {
         match *self {
+            Event::UnprocessedEvent(_) => None,
             Event::Quit => None,
             Event::AppBeingTerminatedByOS => None,
             Event::AppLowMemory => None,

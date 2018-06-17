@@ -1,4 +1,5 @@
 use std::mem;
+use std::slice;
 use std::rc::Rc;
 use std::os::raw::c_int;
 use std::collections::HashMap;
@@ -7,23 +8,49 @@ use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
 use super::X11SharedWindow;
 use os::{OsEventInstant, OsDeviceID};
-use error::{self, Result, failed};
+use error::{Result, failed};
 use event::{Event, EventInstant, UnprocessedEvent};
 use device::{self, DeviceID, DeviceInfo, MouseButton, Key, Keysym, Keycode};
 use window::WindowHandle;
 use {Vec2, Extent2, Rect};
 
+macro_rules! define_x11_unprocessed_event_enum {
+    ($($Variant:ident ($Ty:ty),)+) => {
+        #[derive(Debug, Clone)]
+        pub enum X11UnprocessedEvent {
+            $($Variant($Ty),)+
+        }
 
-unsafe impl XIEventVariantHack for xi2::XIBarrierEvent	{}
-unsafe impl XIEventVariantHack for xi2::XIDeviceChangedEvent	{}
-unsafe impl XIEventVariantHack for xi2::XIDeviceEvent	{}
-unsafe impl XIEventVariantHack for xi2::XIEnterEvent	{}
-unsafe impl XIEventVariantHack for xi2::XIEvent	{}
-unsafe impl XIEventVariantHack for xi2::XIHierarchyEvent	{}
-unsafe impl XIEventVariantHack for xi2::XIPropertyEvent	{}
-unsafe impl XIEventVariantHack for xi2::XIRawEvent	{}
-unsafe impl XIEventVariantHack for xi2::XITouchOwnershipEvent	{}
+        $(impl From<$Ty> for X11UnprocessedEvent {
+            fn from(e: $Ty) -> Self {
+                X11UnprocessedEvent::$Variant(e)
+            }
+        })+
 
+        impl PartialEq for X11UnprocessedEvent {
+            fn eq(&self, other: &Self) -> bool {
+                unsafe {
+                    let a = slice::from_raw_parts(self  as *const _ as *const u8, mem::size_of_val(self ));
+                    let b = slice::from_raw_parts(other as *const _ as *const u8, mem::size_of_val(other));
+                    a == b
+                }
+            }
+        }
+    };
+}
+
+define_x11_unprocessed_event_enum!{
+    XEvent                (x::XEvent),
+    XIBarrierEvent        (xi2::XIBarrierEvent),
+    XIDeviceChangedEvent  (xi2::XIDeviceChangedEvent),
+    XIDeviceEvent         (xi2::XIDeviceEvent),
+    XIEnterEvent          (xi2::XIEnterEvent),
+    XIEvent               (xi2::XIEvent),
+    XIHierarchyEvent      (xi2::XIHierarchyEvent),
+    XIPropertyEvent       (xi2::XIPropertyEvent),
+    XIRawEvent            (xi2::XIRawEvent),
+    XITouchOwnershipEvent (xi2::XITouchOwnershipEvent),
+}
 
 impl X11SharedContext {
     pub fn supports_raw_device_events(&self) -> Result<bool> {
@@ -54,16 +81,16 @@ impl X11SharedContext {
         self.pending_translated_events.borrow_mut().push_back(e);
     }
     fn push_unhandled_x_event<T: Into<x::XEvent>>(&self, e: T) {
-        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following: 0, was_handled: false, }))
+        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: X11UnprocessedEvent::from(e.into()).into(), following: 0, was_ignored: true, }))
     }
     fn push_handled_x_event<T: Into<x::XEvent>>(&self, e: T, following: usize) {
-        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following, was_handled: true, }))
+        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: X11UnprocessedEvent::from(e.into()).into(), following, was_ignored: false, }))
     }
-    fn push_unhandled_xi2_event<T: Into<xi2::XIEvent>>(&self, e: T) {
-        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following: 0, was_handled: false, }))
+    fn push_unhandled_xi2_event<T: Into<X11UnprocessedEvent>>(&self, e: T) {
+        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following: 0, was_ignored: true, }))
     }
-    fn push_handled_xi2_event<T: Into<xi2::XIEvent>>(&self, e: T, following: usize) {
-        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following, was_handled: true, }))
+    fn push_handled_xi2_event<T: Into<X11UnprocessedEvent>>(&self, e: T, following: usize) {
+        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following, was_ignored: false, }))
     }
 
 
@@ -170,7 +197,7 @@ impl X11SharedContext {
             type_: _, serial: _, send_event: _, display: _, event: _, window,
             override_redirect: _,
         } = e;
-        self.push_handled_x_event(e, 1);
+        self.push_handled_x_event(*e, 1);
         self.push_event(Event::WindowShown { window: WindowHandle(window) })
     }
     fn pump_x_unmap_event(&self, e: &mut x::XUnmapEvent) {
@@ -178,7 +205,7 @@ impl X11SharedContext {
             type_: _, serial: _, send_event: _, display: _, event: _, window,
             from_configure: _,
         } = e;
-        self.push_handled_x_event(e, 1);
+        self.push_handled_x_event(*e, 1);
         self.push_event(Event::WindowHidden { window: WindowHandle(window) })
     }
     fn pump_x_visibility_event(&self, e: &mut x::XVisibilityEvent) {
@@ -187,10 +214,10 @@ impl X11SharedContext {
         } = e;
         let _window = WindowHandle(window);
         match state {
-            x::VisibilityUnobscured => self.push_unhandled_x_event(e),
-            x::VisibilityPartiallyObscured => self.push_unhandled_x_event(e),
-            x::VisibilityFullyObscured => self.push_unhandled_x_event(e),
-            _ => self.push_unhandled_x_event(e),
+            x::VisibilityUnobscured => self.push_unhandled_x_event(*e),
+            x::VisibilityPartiallyObscured => self.push_unhandled_x_event(*e),
+            x::VisibilityFullyObscured => self.push_unhandled_x_event(*e),
+            _ => self.push_unhandled_x_event(*e),
         }
     }
 
@@ -206,7 +233,7 @@ impl X11SharedContext {
             position: Vec2::new(x as _, y as _),
             root_position: Vec2::new(x_root as _, y_root as _),
         };
-        self.push_handled_x_event(e, 1);
+        self.push_handled_x_event(*e, 1);
         self.push_event(ev)
     }
     fn pump_x_crossing_event(&self, e: &mut x::XCrossingEvent) {
@@ -236,7 +263,7 @@ impl X11SharedContext {
             },
             _ => unreachable!{},
         };
-        self.push_handled_x_event(e, 1);
+        self.push_handled_x_event(*e, 1);
         self.push_event(ev)
     }
     fn pump_x_focus_change_event(&self, e: &mut x::XFocusChangeEvent) {
@@ -254,7 +281,7 @@ impl X11SharedContext {
             },
             _ => unreachable!{},
         };
-        self.push_handled_x_event(e, 1);
+        self.push_handled_x_event(*e, 1);
         self.push_event(ev)
     }
     fn pump_x_expose_event(&self, e: &mut x::XExposeEvent) {
@@ -272,7 +299,7 @@ impl X11SharedContext {
             },
             more_to_follow: count as _,
         };
-        self.push_handled_x_event(e, 1);
+        self.push_handled_x_event(*e, 1);
         self.push_event(ev)
     }
     fn pump_x_gravity_event(&self, e: &mut x::XGravityEvent) {
@@ -287,7 +314,7 @@ impl X11SharedContext {
             position: Vec2::new(x as _, y as _),
             by_user: send_event == x::False,
         };
-        self.push_handled_x_event(e, 1);
+        self.push_handled_x_event(*e, 1);
         self.push_event(ev)
     }
     fn pump_x_configure_event(&self, e: &mut x::XConfigureEvent) {
@@ -300,7 +327,7 @@ impl X11SharedContext {
         let position = Vec2::new(x as _, y as _);
         let size = Extent2::new(width as _, height as _);
 
-        self.push_handled_x_event(e, 2);
+        self.push_handled_x_event(*e, 2);
         self.push_event(Event::WindowMoved { window, position, by_user, });
         self.push_event(Event::WindowResized { window, size, by_user, })
     }
@@ -308,7 +335,7 @@ impl X11SharedContext {
         unsafe {
             x::XRefreshKeyboardMapping(e);
         }
-        self.push_handled_x_event(e, 0);
+        self.push_handled_x_event(*e, 0);
     }
     fn pump_x_client_message_event(&self, e: &mut x::XClientMessageEvent) {
         let x_display = self.lock_x_display();
@@ -479,14 +506,14 @@ impl X11SharedContext {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
             time, deviceid, sourceid, reason, num_classes, classes,
         } = e;
-        self.push_unhandled_xi2_event(&*e);
+        self.push_unhandled_xi2_event(*e);
     }
     fn pump_xi_hierarchy_event(&self, e: &mut xi2::XIHierarchyEvent) {
         let &mut xi2::XIHierarchyEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
             time, flags, num_info, info,
         } = e;
-        self.push_unhandled_xi2_event(&*e);
+        self.push_unhandled_xi2_event(*e);
     }
     fn pump_xi_enter_event(&self, e: &mut xi2::XIEnterEvent) {
         let &mut xi2::XIEnterEvent {
@@ -496,14 +523,14 @@ impl X11SharedContext {
             event_x, event_y,
             mode, focus, same_screen, buttons, mods, group,
         } = e;
-        self.push_unhandled_xi2_event(&*e);
+        self.push_unhandled_xi2_event(*e);
     }
     fn pump_xi_property_event(&self, e: &mut xi2::XIPropertyEvent) {
         let &mut xi2::XIPropertyEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
             time, deviceid, property, what,
         } = e;
-        self.push_unhandled_xi2_event(&*e);
+        self.push_unhandled_xi2_event(*e);
     }
 
     fn pump_xi_device_event(&self, e: &mut xi2::XIDeviceEvent) {
@@ -528,15 +555,15 @@ impl X11SharedContext {
                     position: Vec2::new(event_x, event_y),
                     root_position: Vec2::new(root_x, root_y),
                 };
-                self.push_handled_xi2_event(&*e, 1);
+                self.push_handled_xi2_event(*e, 1);
                 self.push_event(ev);
             },
-            xi2::XI_KeyPress | xi2::XI_KeyRelease => self.push_unhandled_xi2_event(&*e),
-            xi2::XI_ButtonPress | xi2::XI_ButtonRelease => self.push_unhandled_xi2_event(&*e),
-            xi2::XI_TouchBegin => self.push_unhandled_xi2_event(&*e),
-            xi2::XI_TouchUpdate => self.push_unhandled_xi2_event(&*e),
-            xi2::XI_TouchEnd => self.push_unhandled_xi2_event(&*e),
-            _ => self.push_unhandled_xi2_event(&*e),
+            xi2::XI_KeyPress | xi2::XI_KeyRelease => self.push_unhandled_xi2_event(*e),
+            xi2::XI_ButtonPress | xi2::XI_ButtonRelease => self.push_unhandled_xi2_event(*e),
+            xi2::XI_TouchBegin => self.push_unhandled_xi2_event(*e),
+            xi2::XI_TouchUpdate => self.push_unhandled_xi2_event(*e),
+            xi2::XI_TouchEnd => self.push_unhandled_xi2_event(*e),
+            _ => self.push_unhandled_xi2_event(*e),
         }
     }
     fn pump_xi_raw_event(&self, e: &mut xi2::XIRawEvent) {
@@ -546,7 +573,7 @@ impl X11SharedContext {
             flags,
             valuators, raw_values,
         } = e;
-        self.push_unhandled_xi2_event(&*e);
+        self.push_unhandled_xi2_event(*e);
     }
 
 

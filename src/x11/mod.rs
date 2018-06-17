@@ -57,6 +57,7 @@ pub use self::window::{X11Window, X11SharedWindow, X11WindowHandle, X11WindowFro
 pub mod cursor;
 pub use self::cursor::{X11Cursor, X11SharedCursor};
 pub mod event;
+pub use self::event::X11UnprocessedEvent;
 pub mod gl;
 pub use self::gl::{
     X11GLPixelFormat,

@@ -21,11 +21,12 @@ use x11::{
     X11Context, X11Window, X11WindowHandle, X11WindowFromHandleParams, X11Cursor,
     X11GLProc, X11GLPixelFormat, X11GLContext,
     X11Keysym, X11Keycode,
+    X11UnprocessedEvent,
 };
 use error::{Result};
 use desktop::Desktop;
 use window::WindowSettings;
-use event::{Event, EventInstant};
+use event::{Event, EventInstant, UnprocessedEvent};
 use timeout::Timeout;
 use device::{
     self,
@@ -65,29 +66,16 @@ pub mod event_instant;
 pub use self::event_instant::OsEventInstant;
 
 
-// FIXME: Make a union instead, or a PR to x11-rs.
-// This would allow not having to do this, and not to Box values.
-unsafe pub(crate) trait XIEventVariantHack {
-    fn as_xi_event(&self) -> &xi2::XIEvent {
-        unsafe { &*(self as *const _ as _) }
-    }
-}
 
 // FIXME: This should have a variant to cope with events originating from udev/evdev.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OsUnprocessedEvent {
-    XEvent(x::XEvent),
-    XIEvent(Box<XIEventVariantHack>),
+    X11UnprocessedEvent(X11UnprocessedEvent),
 }
 
-impl From<x::XEvent> for OsUnprocessedEvent {
-    fn from(xevent: x::XEvent) -> Self {
-        OsUnprocessedEvent::XEvent(xevent)
-    }
-}
-impl From<xi2::XIEvent> for OsUnprocessedEvent {
-    fn from(xievent: xi2::XIEvent) -> Self {
-        OsUnprocessedEvent::XEvent(xievent)
+impl From<X11UnprocessedEvent> for OsUnprocessedEvent {
+    fn from(e: X11UnprocessedEvent) -> Self {
+        OsUnprocessedEvent::X11UnprocessedEvent(e)
     }
 }
 
@@ -95,14 +83,28 @@ impl UnprocessedEvent {
     /// (Linux, X11-specific) Gets the `XEvent` that caused this `UnprocessedEvent`, if any.
     /// This returns an `Option` because on Linux, events may originate from other APIs than X11.
     pub fn xlib_x_event(&self) -> Option<&x::XEvent> {
-        if let UnprocessedEvent::XEvent(ref e) = *self { Some(e) } else { None }
+
+        if let OsUnprocessedEvent::X11UnprocessedEvent(X11UnprocessedEvent::XEvent(ref e)) = self.os_event { Some(e) } else { None }
     }
     /// (Linux, X11-specific) Gets the `XIEvent` that caused this `UnprocessedEvent`, if any.
     /// This returns an `Option` because on Linux, events may originate from other APIs than X11.
     /// 
     /// You may treat the returned pointer as the appropriate `XIEvent` variant.
     pub fn xlib_xi_event(&self) -> Option<&xi2::XIEvent> {
-        if let UnprocessedEvent::XIEvent(ref e) = *self { Some(e.as_xi_event()) } else { None }
+        match self.os_event {
+            OsUnprocessedEvent::X11UnprocessedEvent(ref e) => match e {
+                X11UnprocessedEvent::XEvent(_) => None,
+                X11UnprocessedEvent::XIBarrierEvent       (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+                X11UnprocessedEvent::XIDeviceChangedEvent (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+                X11UnprocessedEvent::XIDeviceEvent        (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+                X11UnprocessedEvent::XIEnterEvent         (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+                X11UnprocessedEvent::XIEvent              (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+                X11UnprocessedEvent::XIHierarchyEvent     (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+                X11UnprocessedEvent::XIPropertyEvent      (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+                X11UnprocessedEvent::XIRawEvent           (ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+                X11UnprocessedEvent::XITouchOwnershipEvent(ref e) => Some(unsafe { &*(e as *const _ as *const xi2::XIEvent) }),
+            },
+        }
     }
 }
 

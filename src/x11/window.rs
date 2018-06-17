@@ -13,8 +13,10 @@ use window::{self, Window, WindowSettings, WindowHandle, WindowTypeHint, WindowS
 use error::{Result, failed, failed_unexplained};
 use device::{self, DeviceID, WindowMouseState, WindowTabletState};
 use vek::{Vec2, Extent2, Rect, Clamp, Rgba};
+use version_cmp;
 
 use super::x11::xlib as x;
+use super::x11::glx::*;
 use super::{X11Context, X11SharedContext};
 use super::cursor::X11Cursor;
 use super::missing_bits;
@@ -27,12 +29,15 @@ use super::xlib_error;
 pub type X11WindowHandle = x::Window;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct X11WindowFromHandleParams;
+pub struct X11WindowFromHandleParams {
+    pub glx_window: Option<GLXWindow>,
+}
 
 #[derive(Debug)]
 pub struct X11SharedWindow {
     pub context: Rc<X11SharedContext>,
     pub x_window: x::Window,
+    pub glx_window: Option<GLXWindow>,
     pub colormap: x::Colormap,
     // NOTE: If I implement child windows one day, they should not have their own XIC.
     // Or should they?
@@ -71,7 +76,10 @@ impl Deref for X11Window {
 impl Drop for X11SharedWindow {
     fn drop(&mut self) {
         let &mut Self {
-            ref mut context, x_window, colormap, xic, user_cursor: _,
+            ref mut context,
+            x_window, 
+            glx_window,
+            colormap, xic, user_cursor: _,
             is_cursor_visible: _,
         } = self;
 
@@ -87,6 +95,9 @@ impl Drop for X11SharedWindow {
                 x::XDestroyIC(xic);
                 trace!("Destroyed XIC {:?}", xic);
             }
+            if let Some(w) = glx_window {
+                glXDestroyWindow(*x_display, w);
+            };
             x::XDestroyWindow(*x_display, x_window);
             trace!("Destroyed X Window {}", x_window);
             x::XFreeColormap(*x_display, colormap);
@@ -117,17 +128,12 @@ impl X11Context {
 
         let (visual, depth, colormap) = match *opengl {
             Some(ref pixel_format) => {
-                unimplemented!{"We need to load the GLX extension"}
-                /*
-                if self.glx.is_none() {
-                    return failed("Cannot create OpenGL-capable window without GLX");
-                }
+                let _ = self.glx()?; // Return early if GLX is not supported.
                 let vi = unsafe { *pixel_format.0.visual_info };
                 let colormap = unsafe {
                     x::XCreateColormap(*x_display, parent, vi.visual, x::AllocNone)
                 };
                 (vi.visual, vi.depth, colormap)
-                */
             },
             None => {
                 let screen_num = unsafe {
@@ -280,11 +286,28 @@ impl X11Context {
             None
         };
 
+        let glx13 = {
+            let glx = self.glx()?;
+            version_cmp::ge((glx.major_version, glx.minor_version), (1, 3))
+        };
+
+        // Getting a GLXWindow ID
+        let glx_window = if !glx13 {
+            None
+        } else {
+            opengl.as_ref().map(|pf| {
+                let fbconfig = pf.0.fbconfig.unwrap();
+                unsafe {
+                    glXCreateWindow(*x_display, fbconfig, x_window, ptr::null_mut())
+                }
+            })
+        };
+
         let context = Rc::clone(&self.0);
         let is_cursor_visible = Cell::new(true);
         let user_cursor = RefCell::new(None);
         let window = X11Window(Rc::new(X11SharedWindow { 
-            context, x_window, colormap, xic, is_cursor_visible, user_cursor
+            context, x_window, glx_window, colormap, xic, is_cursor_visible, user_cursor
         }));
         match self.weak_windows.borrow_mut().insert(x_window, Rc::downgrade(&window.0)) {
             Some(_) => warn!("Newly created X Window {} was somewhat already present in the context's list", x_window),
@@ -385,8 +408,9 @@ impl X11Context {
         warn!("Window created from X Window `{}` will NOT have an associated XIC. Also, its Colormap will be freed along with it, and the cursor is assumed to be visible.", x_window);
         self.x_sync();
         let context = Rc::clone(&self.0);
+        let glx_window = params.map(|p| p.glx_window).unwrap_or(None);
         let window = X11Window(Rc::new(X11SharedWindow {
-            context, x_window, colormap, xic, is_cursor_visible, user_cursor,
+            context, x_window, glx_window, colormap, xic, is_cursor_visible, user_cursor,
         }));
         self.weak_windows.borrow_mut().insert(x_window, Rc::downgrade(&window.0));
         trace!("Inserted foreign X Window {} into the context's list", x_window);

@@ -20,6 +20,7 @@ use super::atoms;
 use super::prop::{self, PropType, PropElement, PropData};
 use super::xrender;
 use super::xi;
+use super::glx;
 use super::X11SharedWindow;
 
 
@@ -117,6 +118,7 @@ pub struct X11SharedContext {
     pub atoms: atoms::PreloadedAtoms,
     pub xrender: Result<xrender::XRender>,
     pub xi: Result<xi::XI>,
+    pub glx: Result<glx::Glx>,
     pub invisible_x_cursor: x::Cursor,
     pub default_x_cursor: x::Cursor,
     pub weak_windows: RefCell<HashMap<x::Window, Weak<X11SharedWindow>>>,
@@ -136,7 +138,7 @@ impl Deref for X11Context {
 impl Drop for X11SharedContext {
     fn drop(&mut self) {
         let &mut Self {
-            x11_owned_display: _, xim, atoms: _, xrender: _, xi: _,
+            x11_owned_display: _, xim, atoms: _, xrender: _, xi: _, glx: _,
             invisible_x_cursor, default_x_cursor, weak_windows: _,
             pending_translated_events: _,
             previous_x_key_release_keycode: _,
@@ -266,6 +268,7 @@ impl X11Context {
             let default_x_cursor = super::cursor::create_default_x_cursor(*x_display);
             let xrender = super::xrender::XRender::query(*x_display);
             let xi = super::xi::XI::query(*x_display);
+            let glx = super::glx::Glx::query(*x_display);
 
             let xim = {
                 let (db, res_name, res_class) = (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
@@ -279,7 +282,7 @@ impl X11Context {
                 }
             };
             X11SharedContext {
-                xim, atoms, xrender, xi, invisible_x_cursor, default_x_cursor,
+                xim, atoms, xrender, xi, glx, invisible_x_cursor, default_x_cursor,
                 weak_windows, pending_translated_events,
                 previous_x_key_release_keycode,
                 previous_x_key_release_time,

@@ -2,6 +2,9 @@
 
 use os::{OsGLPixelFormat, OsGLProc, OsGLContext};
 use std::os::raw::c_char;
+use context::Context;
+use window::Window;
+use error::Result;
 
 
 /// Hints for Multisample anti-aliasing (MSAA).
@@ -23,7 +26,7 @@ pub struct GLPixelFormatSettings {
     /// Often set to 24.
     pub depth_bits: u8,
     /// Number of bits used for storing per-fragment "stencil" values.
-    /// Often set to 32-`depth_bits`.
+    /// Often set to `(32 - depth_bits)`.
     pub stencil_bits: u8,
     /// Use double-buffering ? Defaults to `true` because 
     /// not enabling this has been deprecated long ago.
@@ -148,13 +151,13 @@ pub enum GLContextResetNotificationStrategy {
 /// Settings requested for an OpenGL context.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct GLContextSettings {
-    /// Hints the OpenGL version to use. Setting it to `Auto` will try to
+    /// Hints the OpenGL version to use. Setting it to `None` will try to
     /// pick the highest possible or a reasonably modern one.
     pub version: Option<GLVersion>,
-    /// Only used vhen the requested OpenGL version is 3.2 or
+    /// Only used when the requested OpenGL version is 3.2 or
     /// greater.
     /// 
-    /// If you set it to Auto, the implementation will
+    /// If you set it to None, the implementation will
     /// attempt to open a Compatibility profile, and if
     /// it fails, open a Core profile.
     pub profile: Option<GLProfile>,
@@ -183,13 +186,6 @@ impl Default for GLContextSettings {
 /// Wrapper around a platform-specific OpenGL Context.
 #[derive(Debug)]
 pub struct GLContext(pub(crate) OsGLContext);
-
-impl GLContext {
-    /// Retrieves the OpenGL function pointer for the given name.
-    pub unsafe fn get_proc_address(&self, name: *const c_char) -> Option<OsGLProc> {
-        self.0.get_proc_address(name)
-    }
-}
 
 
 /// The interval at which OpenGL buffers are swapped.
@@ -237,3 +233,48 @@ impl Default for GLSwapInterval {
     }
 }
 
+impl Context {
+    /// Requests an OpenGL pixel format that most closely matches the given settings.
+    ///
+    /// In some cases, operating systems may return some kind of list of these, usually sorted
+    /// from "best" to "worst".
+    /// In the future, we might want to expose this in the API.
+    pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<GLPixelFormat> {
+        self.0.choose_gl_pixel_format(settings).map(GLPixelFormat)
+    }
+    /// Creates an OpenGL context using the given context settings and pixel format.
+    pub fn create_gl_context(&self, settings: &GLContextSettings, pf: &GLPixelFormat) -> Result<GLContext> {
+        self.0.create_gl_context(settings, &pf.0).map(GLContext)
+    }
+    /// Makes this `GLContext` current for this thread and window.  
+    /// The window **must** have been created with the exact same `GLPixelFormat` from which
+    /// this `GLContext` was created.
+    ///
+    /// This is not a method of `Window`, because a `GLContext` can be only current
+    /// to at most one render target at a time.
+    pub fn make_gl_context_current(&self, w: &Window, c: Option<&GLContext>) -> Result<()> {
+        self.0.make_gl_context_current(&w.0, c.map(|c| &c.0))
+    }
+}
+
+impl GLContext {
+    /// Retrieves the OpenGL function pointer for the given name.
+    pub unsafe fn get_proc_address(&self, name: *const c_char) -> Option<OsGLProc> {
+        self.0.get_proc_address(name)
+    }
+}
+
+impl Window {
+    /// Presents an OpenGL frame (commonly referred to as "swapping buffers").
+    ///
+    /// There must be a current `GLContext` which targets this window.
+    pub fn gl_swap_buffers(&self) -> Result<()> {
+        self.0.gl_swap_buffers()
+    }
+    /// Sets the OpenGL swap interval for this window.
+    /// 
+    /// There must be a current `GLContext` which targets this window.
+    pub fn gl_set_swap_interval(&self, interval: GLSwapInterval) -> Result<()> {
+        self.0.gl_set_swap_interval(interval)
+    }
+}

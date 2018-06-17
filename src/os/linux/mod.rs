@@ -39,6 +39,7 @@ use device::{
     TouchInfo,
 };
 use cursor::{SystemCursor, RgbaCursorData, RgbaCursorAnimFrame};
+use gl::{GLPixelFormatSettings, GLContextSettings};
 use {Vec2, Extent2};
 
 
@@ -353,5 +354,14 @@ impl OsContext {
     }
     pub fn tablet_state(&self, tablet: DeviceID) -> device::Result<TabletState> {
         unimplemented!{}
+    }
+    pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<X11GLPixelFormat> {
+        self.x11.choose_gl_pixel_format(settings)
+    }
+    pub fn create_gl_context(&self, settings: &GLContextSettings, pf: &X11GLPixelFormat) -> Result<X11GLContext> {
+        self.x11.create_gl_context(settings, pf)
+    }
+    pub fn make_gl_context_current(&self, w: &X11Window, c: Option<&X11GLContext>) -> Result<()> {
+        self.x11.make_gl_context_current(w, c)
     }
 }

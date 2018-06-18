@@ -22,6 +22,11 @@ use x11::{
     X11GLProc, X11GLPixelFormat, X11GLContext,
     X11Keysym, X11Keycode,
     X11UnprocessedEvent,
+    X11TabletInfo,
+    X11KeyboardState,
+    X11MouseButtonsState,
+    X11TabletPadButtonsState,
+    X11TabletStylusButtonsState,
 };
 use error::{Result};
 use desktop::Desktop;
@@ -30,7 +35,7 @@ use event::{Event, EventInstant, UnprocessedEvent};
 use timeout::Timeout;
 use device::{
     self,
-    DeviceID, DeviceInfo, ButtonState, UsbIDs, Bus, AxisInfo,
+    DeviceID, DeviceInfo, ButtonState, UsbIDs, Bus,
     ControllerButton, ControllerAxis, ControllerState, ControllerInfo,
     VibrationState,
     KeyboardInfo, KeyState, KeyboardState, Keysym, Keycode,
@@ -40,7 +45,7 @@ use device::{
 };
 use cursor::{SystemCursor, RgbaCursorData, RgbaCursorAnimFrame};
 use gl::{GLPixelFormatSettings, GLContextSettings};
-use {Vec2, Extent2};
+use Extent2;
 
 
 pub fn set_hint(hint: ::hint::Hint) -> Result<()> {
@@ -62,6 +67,12 @@ pub type OsGLContext = X11GLContext;
 pub type OsGLProc = X11GLProc;
 pub type OsKeycode = X11Keycode;
 pub type OsKeysym = X11Keysym;
+pub type OsTabletInfo = X11TabletInfo;
+pub type OsKeyboardState = X11KeyboardState;
+pub type OsMouseButtonsState = X11MouseButtonsState;
+pub type OsTabletPadButtonsState = X11TabletPadButtonsState;
+pub type OsTabletStylusButtonsState = X11TabletStylusButtonsState;
+
 
 pub mod event_instant;
 pub use self::event_instant::OsEventInstant;
@@ -178,50 +189,6 @@ impl OsDeviceInfo {
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OsTabletInfo;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OsKeyboardState;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OsMouseButtonsState;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OsTabletPadButtonsState;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OsTabletStylusButtonsState;
-
-impl OsTabletInfo {
-    pub fn pressure_axis(&self) -> &AxisInfo { unimplemented!{} }
-    pub fn tilt_axis(&self) -> Vec2<&AxisInfo> { unimplemented!{} }
-    pub fn physical_position_axis(&self) -> &AxisInfo { unimplemented!{} }
-}
-
-
-impl OsKeyboardState {
-    pub fn keycode(&self, key: Keycode) -> Option<KeyState> {
-        unimplemented!{}
-    }
-    pub fn keysym(&self, key: Keysym) -> Option<KeyState> {
-        unimplemented!{}
-    }
-}
-impl OsMouseButtonsState {
-    pub fn button(&self, button: MouseButton) -> Option<ButtonState> {
-        unimplemented!{}
-    }
-}
-impl OsTabletPadButtonsState {
-    pub fn button(&self, button: TabletPadButton) -> Option<ButtonState> {
-        unimplemented!{}
-    }
-}
-impl OsTabletStylusButtonsState {
-    pub fn button(&self, button: TabletStylusButton) -> Option<ButtonState> {
-        unimplemented!{}
-    }
-}
-
-
-
 impl From<X11Context> for OsContext {
     fn from(x11: X11Context) -> Self {
         Self { x11, linuxdev: LinuxdevContext::default(), }
@@ -332,28 +299,28 @@ impl OsContext {
         Ok(self.x11.core_x_keyboard())
     }
     pub fn keyboard_state(&self, keyboard: DeviceID) -> device::Result<KeyboardState> {
-        unimplemented!{}
+        self.x11.keyboard_state(keyboard)
     }
     pub fn keyboard_keycode_state(&self, keyboard: DeviceID, keycode: Keycode) -> device::Result<KeyState> {
-        unimplemented!{}
+        self.x11.keyboard_keycode_state(keyboard, keycode)
     }
     pub fn keyboard_keysym_state(&self, keyboard: DeviceID, keysym: Keysym) -> device::Result<KeyState> {
-        unimplemented!{}
+        self.x11.keyboard_keysym_state(keyboard, keysym)
     }
     pub fn keysym_name(&self, keysym: Keysym) -> device::Result<String> {
-        unimplemented!{}
+        self.x11.keysym_name(keysym)
     }
     pub fn keysym_from_keycode(&self, keyboard: DeviceID, keycode: Keycode) -> device::Result<Keysym> {
-        unimplemented!{}
+        self.x11.keysym_from_keycode(keyboard, keycode)
     }
     pub fn keycode_from_keysym(&self, keyboard: DeviceID, keysym: Keysym) -> device::Result<Keycode> {
-        unimplemented!{}
+        self.x11.keycode_from_keysym(keyboard, keysym)
     }
     pub fn mouse_state(&self, mouse: DeviceID) -> device::Result<MouseState> {
-        unimplemented!{}
+        self.x11.mouse_state(mouse)
     }
     pub fn tablet_state(&self, tablet: DeviceID) -> device::Result<TabletState> {
-        unimplemented!{}
+        self.x11.tablet_state(tablet)
     }
     pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<X11GLPixelFormat> {
         self.x11.choose_gl_pixel_format(settings)

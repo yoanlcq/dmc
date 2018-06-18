@@ -74,6 +74,8 @@ pub mod missing_bits;
 pub mod net_wm;
 pub mod motif_wm;
 pub mod keys;
+pub mod device;
+pub use self::device::{X11TabletInfo, X11KeyboardState, X11MouseButtonsState, X11TabletPadButtonsState, X11TabletStylusButtonsState};
 
 use hint::Hint;
 use error::{Result, failed};

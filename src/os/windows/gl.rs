@@ -1,7 +1,7 @@
 use std::os::raw::c_char;
 use gl::{GLPixelFormatSettings, GLContextSettings, GLSwapInterval};
-use error::Result;
-use super::{OsContext, OsWindow};
+use error::{Result, failed};
+use super::{OsContext, OsWindow, winapi_utils::*};
 
 #[derive(Debug)]
 pub struct OsGLContext;
@@ -28,10 +28,49 @@ impl OsGLContext {
 
 impl OsWindow {
     pub fn gl_swap_buffers(&self) -> Result<()> {
-        unimplemented!()
+        let hdc = unimplemented!();
+        let is_ok = unsafe { SwapBuffers(hdc) };
+        if is_ok == FALSE {
+            winapi_fail("SwapBuffers")
+        } else {
+            Ok(())
+        }
     }
     pub fn gl_set_swap_interval(&self, interval: GLSwapInterval) -> Result<()> {
         unimplemented!()
+        /*
+        let wgl = self.context.wgl()?;
+
+        let interval = match interval {
+            GLSwapInterval::VSync => 1,
+            GLSwapInterval::Immediate => 0,
+            GLSwapInterval::LateSwapTearing => {
+                if !wgl.ext.WGL_EXT_swap_control_tear {
+                    return failed("Missing extension `WGL_EXT_swap_control_tear`");
+                }
+                -1
+            },
+            GLSwapInterval::Interval(i) => {
+                if i < 0 && !wgl.ext.WGL_EXT_swap_control_tear {
+                    return failed("Missing extension `WGL_EXT_swap_control_tear`");
+                }
+                i
+            },
+        };
+
+        if wgl.ext.WGL_EXT_swap_control {
+            let ssi = wgl.ext.wglSwapIntervalEXT.unwrap();
+            let is_ok = unsafe {
+                ssi(interval)
+            };
+            if is_ok == FALSE {
+                winapi_fail("wglSwapIntervalEXT")
+            } else {
+                Ok(())
+            }
+        } else {
+            failed("There's no extension that could set the swap interval!")
+        }*/
     }
 }
 

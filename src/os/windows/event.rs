@@ -11,10 +11,15 @@ pub struct OsUnprocessedEvent {
     wparam: WPARAM,
 }
 
+impl OsUnprocessedEvent {
+    fn umsg_lparam_wparam(&self) -> (UINT, LPARAM, WPARAM) {
+        (self.umsg, self.lparam, self.wparam)
+    }
+}
 impl UnprocessedEvent {
     /// (Windows-only) Gets the uMsg, LPARAM and WPARAM associated with the event.
     pub fn umsg_lparam_wparam(&self) -> (UINT, LPARAM, WPARAM) {
-        (self.0.umsg, self.0.lparam, self.0.wparam)
+        self.os_event.umsg_lparam_wparam()
     }
 }
 

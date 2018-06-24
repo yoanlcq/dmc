@@ -1,5 +1,7 @@
 //! OpenGL-related structures and abstractions.
 
+use std::os::raw::c_void;
+use std::ptr;
 use os::{OsGLPixelFormat, OsGLProc, OsGLContext};
 use std::os::raw::c_char;
 use context::Context;
@@ -238,9 +240,6 @@ impl Default for GLSwapInterval {
         GLSwapInterval::VSync
     }
 }
-
-use std::os::raw::c_void;
-use std::ptr;
 
 impl GLContext {
     /// Retrieves the OpenGL function pointer for the given name.

@@ -45,6 +45,7 @@ pub mod device;
 pub mod event;
 pub use event::{Event, EventInstant};
 pub mod gl;
+pub use gl::*;
 // pub mod battery;
 
 mod version_cmp;

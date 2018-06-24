@@ -18,10 +18,10 @@ pub struct OsGLPixelFormat(c_int);
 pub type OsGLProc = extern "system" fn();
 
 impl OsGLContext {
-    pub unsafe fn get_proc_address(&self, name: *const c_char) -> Option<OsGLProc> {
+    pub unsafe fn get_proc_address(&self, name: *const c_char) -> *const c_void {
         match wglGetProcAddress(name) as usize {
-            0 => None,
-            f => Some(mem::transmute(f))
+            0 => GetProcAddress(self.window.context.wgl().unwrap().opengl32_hmodule, name) as *const _, // wglGetProcAddress only works on extension functions
+            f => f as *const _,
         }
     }
 }

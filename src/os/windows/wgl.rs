@@ -44,8 +44,9 @@ impl Debug for WglFns {
 }
 
 #[allow(non_snake_case)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug)]
 pub struct Wgl {
+    pub opengl32_hmodule: HMODULE,
     pub fns: WglFns,
     pub WGL_ARB_create_context: bool,
     pub WGL_ARB_create_context_profile: bool,
@@ -66,10 +67,23 @@ pub struct Wgl {
     pub WGL_ARB_framebuffer_sRGB: bool,
 }
 
+impl Drop for Wgl {
+    fn drop(&mut self) {
+        unsafe {
+            FreeLibrary(self.opengl32_hmodule);
+        }
+    }
+}
+
 impl Wgl {
     pub fn new() -> Result<Self> {
         // The plan: Create a legacy OpenGL context (needs a temporary window, etc), get the WGL function pointers, then get rid of everything.
         unsafe {
+            let opengl32_hmodule = LoadLibraryA(b"opengl32.dll\0".as_ptr() as _);
+            if opengl32_hmodule.is_null() {
+                return winapi_fail("LoadLibraryA(\"opengl32.dll\") returned NULL");
+            }
+
             let hinstance = GetModuleHandleW(ptr::null());
 
             let classname = to_wide_with_nul("DMC dummy OpenGL context window");
@@ -159,6 +173,7 @@ impl Wgl {
             };
 
             let mut wgl = Wgl {
+                opengl32_hmodule,
                 fns: WglFns {
                     wglGetExtensionsStringARB: mem::transmute(get_fn(b"wglGetExtensionsStringARB\0")),
                     wglCreateContextAttribsARB: mem::transmute(get_fn(b"wglCreateContextAttribsARB\0")),
@@ -166,7 +181,23 @@ impl Wgl {
                     wglSwapIntervalEXT: mem::transmute(get_fn(b"wglSwapIntervalEXT\0")),
                     wglGetSwapIntervalEXT: mem::transmute(get_fn(b"wglGetSwapIntervalEXT\0")),
                 },
-                .. Default::default()
+                WGL_ARB_create_context: false,
+                WGL_ARB_create_context_profile: false,
+                WGL_ARB_create_context_robustness: false,
+                WGL_EXT_create_context_es_profile: false,
+                WGL_EXT_create_context_es2_profile: false,
+                WGL_ARB_multisample: false,
+                WGL_EXT_multisample: false,
+                WGL_EXT_pixel_format: false,
+                WGL_ARB_pixel_format: false,
+                WGL_ARB_pixel_format_float: false,
+                WGL_ARB_robustness_application_isolation: false,
+                WGL_ARB_robustness_share_group_isolation: false,
+                WGL_EXT_swap_control: false,
+                WGL_EXT_swap_control_tear: false,
+                WGL_EXT_colorspace: false,
+                WGL_EXT_framebuffer_sRGB: false,
+                WGL_ARB_framebuffer_sRGB: false,
             };
 
             if let Some(f) = wgl.fns.wglGetExtensionsStringARB {

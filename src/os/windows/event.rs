@@ -1,3 +1,5 @@
+use std::mem;
+use std::ptr;
 use timeout::Timeout;
 use error::Result;
 use event::{Event, UnprocessedEvent};
@@ -28,6 +30,34 @@ impl OsContext {
         unimplemented!()
     }
     pub fn next_event(&self, timeout: Timeout) -> Option<Event> {
+        unsafe {
+            let mut msg = mem::uninitialized();
+            match timeout.duration() {
+                None => {
+                    let ret = GetMessageW(&mut msg, ptr::null_mut(), 0, 0);
+                    if ret < 0 {
+                        panic!("GetMessageW() failed");
+                    }
+                    if ret == 0 {
+                        self.push_event(Event::Quit);
+                    } else {
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                },
+                Some(timeout) => {
+                    let has_one = PeekMessageW(&mut msg, ptr::null_mut(), 0, 0, PM_REMOVE) != FALSE;
+                    if has_one {
+                        if msg.message == WM_QUIT {
+                            self.push_event(Event::Quit);
+                        } else {
+                            TranslateMessage(&msg);
+                            DispatchMessageW(&msg);
+                        }
+                    }
+                },
+            };
+        }
         self.pending_events.borrow_mut().pop_front()
     }
 }

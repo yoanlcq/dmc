@@ -239,10 +239,23 @@ impl Default for GLSwapInterval {
     }
 }
 
+use std::os::raw::c_void;
+use std::ptr;
+
 impl GLContext {
     /// Retrieves the OpenGL function pointer for the given name.
-    pub unsafe fn get_proc_address(&self, name: *const c_char) -> Option<OsGLProc> {
+    pub unsafe fn get_proc_address(&self, name: *const c_char) -> *const c_void {
         self.0.get_proc_address(name)
+    }
+    /// Retrieves the OpenGL function pointer for the given name.
+    pub fn proc_address(&self, name_str: &str) -> *const c_void {
+        let name = name_str.as_bytes();
+        let mut cstr = [0_u8; 256];
+        assert!(name.len() < cstr.len());
+        unsafe {
+            ::std::ptr::copy_nonoverlapping(name.as_ptr(), cstr.as_mut_ptr(), name.len());
+            self.get_proc_address(cstr.as_ptr() as _)
+        }
     }
 }
 

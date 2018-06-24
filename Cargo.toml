@@ -30,7 +30,7 @@ vek = "0.9"
 uuid = "0.6"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "~0.3.4", features = ["winuser", "libloaderapi", "winbase", "winerror", "windowsx", "errhandlingapi", "shellscalingapi", "wingdi"] }
+winapi = { version = "~0.3.4", features = ["winuser", "libloaderapi", "winbase", "winerror", "windowsx", "errhandlingapi", "wingdi"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = "~0.10"

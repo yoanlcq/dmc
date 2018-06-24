@@ -114,11 +114,13 @@ mod dpi_awareness {
         unsafe {
             // FIXME: This is all wrong! This should involve dynamic loading of DLLs so it works on
             // any Windows version, and it's a bit more complicated than that.
+            /*
             if IS_SET.is_some() {
                 return;
             }
             let hresult = SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
             IS_SET = Some(hresult_to_result("SetProcessDpiAwareness", hresult));
+            */
         }
     }
 }

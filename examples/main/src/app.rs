@@ -192,8 +192,6 @@ impl App {
     }
     fn init_window(&mut self) -> test::Result {
         self.main_window = Some(self.context()?.create_window(&WindowSettings {
-            position: (0, 0).into(),
-            size: (400, 300).into(),
             opengl: None,
             high_dpi: true,
         })?);

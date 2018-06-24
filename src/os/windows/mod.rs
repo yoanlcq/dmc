@@ -31,7 +31,7 @@ pub mod wndproc;
 pub mod winapi_utils {
     pub use super::winapi::{
         shared::{windef::*, minwindef::*, ntdef::*, winerror::SUCCEEDED,},
-        um::{winuser::*, libloaderapi::*, winbase::*, errhandlingapi::*, shellscalingapi::*, wingdi::*,},
+        um::{winuser::*, libloaderapi::*, winbase::*, errhandlingapi::*, wingdi::*,},
     };
     pub use std::os::windows::ffi::{OsStringExt, OsStrExt};
 

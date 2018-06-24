@@ -4,15 +4,10 @@ use std::ptr;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::ops::Deref;
-use super::{winapi_utils::*, OsSharedWindow};
+use std::collections::VecDeque;
+use super::{winapi_utils::*, OsSharedWindow, wgl::Wgl, wndproc};
 use error::Result;
-
-extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // TODO: Reply to WM_GETMINMAXINFO: https://stackoverflow.com/a/22261818
-    // TODO: Handle WM_MOVING. if !self.is_movable, restore window to initial position.
-    unimplemented!()
-}
-
+use event::Event;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ClassSettings {
@@ -25,6 +20,8 @@ pub struct OsSharedContext {
     hinstance: HINSTANCE,
     class_atoms: RefCell<HashMap<ClassSettings, ATOM>>,
     pub weak_windows: RefCell<HashMap<HWND, Weak<OsSharedWindow>>>,
+    pub wgl: Result<Wgl>,
+    pub pending_events: RefCell<VecDeque<Event>>,
 }
 #[derive(Debug)]
 pub struct OsContext(pub(crate) Rc<OsSharedContext>);
@@ -39,9 +36,11 @@ impl Deref for OsContext {
 impl Drop for OsSharedContext {
     fn drop(&mut self) {
         let &mut Self {
-            hinstance, ref class_atoms, ref weak_windows,
+            hinstance, ref class_atoms, weak_windows: _, wgl: _,
+            pending_events: _,
         } = self;
         unsafe {
+            wndproc::CONTEXT = None;
             for class_atom in class_atoms.borrow().values() {
                 UnregisterClassW(MAKEINTATOM(*class_atom), hinstance);
             }
@@ -83,7 +82,7 @@ impl OsSharedContext {
         let wclass = WNDCLASSEXW {
             cbSize: mem::size_of::<WNDCLASSEXW>() as _,
             hInstance: self.hinstance(),
-            lpfnWndProc: Some(wndproc),
+            lpfnWndProc: Some(wndproc::wndproc),
             lpszClassName: classname.as_ptr(),
             style: CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW | (CS_OWNDC * owndc as u32) | (CS_NOCLOSE * noclose as u32),
             cbClsExtra: 0,
@@ -132,6 +131,8 @@ impl OsSharedContext {
                 hinstance: GetModuleHandleW(ptr::null()),
                 class_atoms: RefCell::new(HashMap::new()),
                 weak_windows: RefCell::new(HashMap::new()),
+                wgl: Wgl::new(),
+                pending_events: RefCell::new(VecDeque::new()),
             }
         };
         Ok(c)
@@ -140,10 +141,14 @@ impl OsSharedContext {
 
 impl OsContext {
     pub fn new() -> Result<Self> {
-        Ok(OsContext(Rc::new(OsSharedContext::new()?)))
+        let rc = Rc::new(OsSharedContext::new()?);
+        unsafe {
+            assert!(wndproc::CONTEXT.is_none(), "Only one context at a time is supported!");
+            wndproc::CONTEXT = Some(Rc::downgrade(&rc));
+        }
+        Ok(OsContext(rc))
     }
     pub fn untrap_mouse(&self) -> Result<()> {
         unimplemented!()
     }
 }
-

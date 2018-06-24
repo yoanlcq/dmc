@@ -3,7 +3,7 @@
 use context::Context;
 use vek::{Vec2, Extent2, Rect, Rgba};
 use os::{OsWindow, OsWindowHandle, OsWindowFromHandleParams};
-use gl::GLPixelFormat;
+use gl::{GLPixelFormatChooser};
 use error::{self, Result};
 
 impl Context {
@@ -171,18 +171,12 @@ pub struct WindowStyleHint {
     pub borders: Option<Borders>,
 }
 
-
 /// The absolute minimum information a window needs at creation time.
-#[derive(Debug)]
 pub struct WindowSettings<'a> {
-    /// The initial position (by top-left corner), in desktop space.
-    pub position: Vec2<i32>,
-    /// The initial size, in desktop space.
-    pub size: Extent2<u32>,
     /// Support OpenGL ? (defaults to `None`).
     /// The settings need to be known beforehand so that the window
     /// can use the proper pixel format at the time of its creation.
-    pub opengl: Option<&'a GLPixelFormat>,
+    pub opengl: Option<&'a GLPixelFormatChooser>,
     /// Some platforms (such as iOS and OS X) support high-dpi windows,
     /// which size in screen-coordinates then differ from their raster-
     /// coordinates size.

@@ -24,6 +24,8 @@ pub use self::device::{
     mouse::{OsMouseButtonsState},
     tablet::{OsTabletInfo, OsTabletPadButtonsState, OsTabletStylusButtonsState},
 };
+pub mod wgl;
+pub mod wndproc;
 
 
 pub mod winapi_utils {

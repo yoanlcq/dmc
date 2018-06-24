@@ -25,6 +25,7 @@ pub struct OsSharedWindow {
     pub context: Rc<OsSharedContext>,
     pub class_atom: ATOM,
     pub hwnd: HWND,
+    pub own_dc: Result<HDC>,
     pub hicon: Cell<Option<HICON>>,
     pub min_size: Cell<Option<Extent2<u32>>>,
     pub max_size: Cell<Option<Extent2<u32>>>,
@@ -44,9 +45,17 @@ impl Deref for OsWindow {
 impl Drop for OsSharedWindow {
     fn drop(&mut self) {
         let &mut Self {
-            ref context, class_atom, hwnd, ref hicon,
+            ref context, class_atom, hwnd, 
+            own_dc: _, // Destroyed with the window. DO NOT destroy it manually because it will fail.
+            ref hicon,
             min_size: _, max_size: _, is_movable: _,
         } = self;
+
+        match context.weak_windows.borrow_mut().remove(&hwnd) {
+            Some(_weak) => trace!("Removed HWND {:?} from the context's list", hwnd),
+            None => warn!("HWND {:?} is being destroyed but somehow wasn't in the context's list", hwnd),
+        }
+
         unsafe {
             if let Some(hicon) = hicon.get() {
                 DestroyIcon(hicon);
@@ -60,7 +69,7 @@ impl Drop for OsSharedWindow {
 impl OsContext {
     pub fn create_window(&self, settings: &WindowSettings) -> Result<OsWindow> {
         let &WindowSettings {
-            position: Vec2 { x, y }, size: Extent2 { w, h }, ref opengl, high_dpi,
+            ref opengl, high_dpi,
         } = settings;
         unsafe {
             let ex_style = WS_EX_ACCEPTFILES | WS_EX_OVERLAPPEDWINDOW;
@@ -68,13 +77,19 @@ impl OsContext {
             let class_settings = super::context::ClassSettings {
                 owndc: true, noclose: false,
             };
+            if opengl.is_some() {
+                assert!(class_settings.owndc);
+            }
             let class_atom = self.get_or_register_class(&class_settings)?;
             let hwnd = CreateWindowExW(
                 ex_style,
                 MAKEINTATOM(class_atom),
                 ptr::null(), // No title (yet)
                 style,
-                x, y, w as _, h as _,
+                CW_USEDEFAULT, // x
+                CW_USEDEFAULT, // y
+                CW_USEDEFAULT, // w
+                CW_USEDEFAULT, // h
                 ptr::null_mut(), // No parent
                 ptr::null_mut(), // No menu
                 self.hinstance(),
@@ -83,15 +98,32 @@ impl OsContext {
             if hwnd.is_null() {
                 return winapi_fail("CreateWindowExW");
             }
+            let own_dc = if !class_settings.owndc {
+                failed("Window has no HDC; CS_OWNDC wasn't set in the class")
+            } else {
+                let own_dc = GetDC(hwnd);
+                if own_dc.is_null() {
+                    winapi_fail("GetDC() returned NULL")
+                } else {
+                    Ok(own_dc)
+                }
+            };
+
             let os_window = OsSharedWindow {
                 context: Rc::clone(&self.0),
                 class_atom,
                 hwnd,
+                own_dc,
                 hicon: Cell::new(None),
                 min_size: Cell::new(None),
                 max_size: Cell::new(None),
                 is_movable: Cell::new(true),
             };
+            if let Some(opengl) = opengl.as_ref() {
+                let pf = os_window.choose_gl_pixel_format(*opengl)?;
+                os_window.set_pixel_format(&pf)?;
+            }
+
             let os_window = Rc::new(os_window);
             self.weak_windows.borrow_mut().insert(hwnd, Rc::downgrade(&os_window));
             Ok(OsWindow(os_window))
@@ -115,6 +147,10 @@ impl OsContext {
                 let os_window = OsSharedWindow {
                     context: Rc::clone(&self.0),
                     hwnd,
+                    own_dc: {
+                        let hdc = GetDC(hwnd);
+                        if hdc.is_null() { winapi_fail("GetDC() returned NULL") } else { Ok(hdc) }
+                    },
                     class_atom,
                     hicon: Cell::new(hicon),
                     min_size: Cell::new(min_size),
@@ -127,7 +163,10 @@ impl OsContext {
     }
 }
 
-impl OsWindow {
+impl OsSharedWindow {
+    pub fn own_dc(&self) -> Result<HDC> {
+        self.own_dc.clone()
+    }
     pub fn handle(&self) -> WindowHandle {
         WindowHandle(self.hwnd)
     }

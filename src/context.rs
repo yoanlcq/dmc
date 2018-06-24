@@ -18,7 +18,9 @@ mod nightly {
 impl Context {
     /// Attempts to get one handle to the platform-specific display backend.
     /// 
-    /// You should need only one, and it is most often invalid to have more than one.
+    /// You must assume that it is invalid to have more than one Context at a time (it's also pointless).  
+    /// It may work on some platforms (because we can make it so), but otherwise this could cause failures
+    /// at various points.
     pub fn new() -> Result<Self> {
         OsContext::new().map(Context)
     }

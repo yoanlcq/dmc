@@ -187,7 +187,7 @@ impl Glx {
             accum_red_bits, accum_blue_bits, accum_green_bits, 
             accum_alpha_bits, aux_buffers, msaa, ..
         } = settings;
-        [
+        let mut attribs = [
             GLX_FBCONFIG_ID, GLX_DONT_CARE,
             GLX_DOUBLEBUFFER, double_buffer as c_int,
             GLX_STEREO, stereo as c_int,
@@ -206,13 +206,27 @@ impl Glx {
             GLX_DRAWABLE_TYPE, GLX_WINDOW_BIT,
             GLX_X_VISUAL_TYPE, GLX_TRUE_COLOR,
             GLX_X_RENDERABLE, x::True,
-            GLX_SAMPLE_BUFFERS, msaa.buffer_count as _,
-            GLX_SAMPLES, msaa.sample_count as _,
             GLX_CONFIG_CAVEAT, GLX_DONT_CARE, // NOTE: Setting it to GLX_NONE is very strict.
-            // There's more GLX_TRANSPARENT_**_VALUE keys, might be
-            // worth checking later,
+            0, 0, // GLX_SAMPLE_BUFFERS, msaa.buffer_count as _, // FIXME: Nobody said we had GLX_ARB_MULTISAMPLE!
+            0, 0, // GLX_SAMPLES, msaa.sample_count as _,
             0 // keep last
-        ]
+        ];
+        let mut i = attribs.len() - 5;
+        assert_eq!(0, attribs[i]);
+        if self.ext.GLX_ARB_multisample {
+            assert_eq!(GLX_SAMPLE_BUFFERS, GLX_SAMPLE_BUFFERS_ARB);
+            assert_eq!(GLX_SAMPLES, GLX_SAMPLES_ARB);
+            attribs[i] = GLX_SAMPLE_BUFFERS;
+            i += 1;
+            attribs[i] = msaa.buffer_count as _;
+            i += 1;
+            attribs[i] = GLX_SAMPLES;
+            i += 1;
+            attribs[i] = msaa.sample_count as _;
+            i += 1;
+        }
+        assert_eq!(0, *attribs.last().unwrap());
+        attribs
     }
 
     // Configure an array of attribute parameters for 

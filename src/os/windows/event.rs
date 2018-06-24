@@ -1,8 +1,8 @@
-use super::OsContext;
 use timeout::Timeout;
 use error::Result;
 use event::{Event, UnprocessedEvent};
 use super::winapi_utils::*;
+use super::{OsContext, OsSharedContext};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OsUnprocessedEvent {
@@ -28,7 +28,12 @@ impl OsContext {
         unimplemented!()
     }
     pub fn next_event(&self, timeout: Timeout) -> Option<Event> {
-        unimplemented!()
+        self.pending_events.borrow_mut().pop_front()
     }
 }
 
+impl OsSharedContext {
+    pub fn push_event(&self, ev: Event) {
+        self.pending_events.borrow_mut().push_back(ev);
+    }
+}

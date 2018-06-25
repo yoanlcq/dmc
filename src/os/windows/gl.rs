@@ -41,32 +41,41 @@ impl OsWindow {
         let mut context_attribs = [
             WGL_CONTEXT_MAJOR_VERSION_ARB, version.major as _,
             WGL_CONTEXT_MINOR_VERSION_ARB, version.minor as _,
-            WGL_CONTEXT_FLAGS_ARB, 
-            (WGL_CONTEXT_DEBUG_BIT_ARB * debug as c_int)
-            | (WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB * forward_compatible as c_int)
-            | (WGL_CONTEXT_ROBUST_ACCESS_BIT_ARB * robust_access.is_some() as c_int * wgl.WGL_ARB_create_context_robustness as c_int),
+            0, 0, // WGL_CONTEXT_FLAGS_ARB, value,
             0, 0, // WGL_CONTEXT_PROFILE_MASK_ARB, value,
             0, 0, // WGL_CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB, value,
             0, // End
         ];
 
-        let mut i = context_attribs.len() - 5;
+        let mut i = context_attribs.len() - 7;
         assert_eq!(0, context_attribs[i]);
+
+        if !version.is_es() {
+            context_attribs[i] = WGL_CONTEXT_FLAGS_ARB;
+            i += 1;
+            context_attribs[i] =
+                (WGL_CONTEXT_DEBUG_BIT_ARB * debug as c_int)
+                | (WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB * forward_compatible as c_int)
+                | (WGL_CONTEXT_ROBUST_ACCESS_BIT_ARB * robust_access.is_some() as c_int * wgl.WGL_ARB_create_context_robustness as c_int);
+            i += 1;
+        }
 
         if wgl.WGL_ARB_create_context_profile {
             context_attribs[i] = WGL_CONTEXT_PROFILE_MASK_ARB;
             i += 1;
-            context_attribs[i] = match profile {
-                GLProfile::Core => WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
-                GLProfile::Compatibility => WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+
+            context_attribs[i] = if version.is_es() && (wgl.WGL_EXT_create_context_es_profile || wgl.WGL_EXT_create_context_es2_profile) {
+                WGL_CONTEXT_ES_PROFILE_BIT_EXT
+            } else {
+                match profile {
+                    GLProfile::Core => WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
+                    GLProfile::Compatibility => WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+                }
             };
-            if version.is_es() && (wgl.WGL_EXT_create_context_es_profile || wgl.WGL_EXT_create_context_es2_profile) {
-                context_attribs[i] |= WGL_CONTEXT_ES_PROFILE_BIT_EXT;
-            }
             i += 1;
         }
         if let Some(robust_access) = robust_access {
-            if wgl.WGL_ARB_create_context_robustness {
+            if !version.is_es() && wgl.WGL_ARB_create_context_robustness {
                 context_attribs[i] = WGL_CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB;
                 i += 1;
                 context_attribs[i] = match robust_access {

@@ -1,9 +1,14 @@
 use std::rc::Weak;
 use super::OsSharedContext;
 use super::winapi_utils as w32;
-use self::w32::{HWND, UINT, WPARAM, LPARAM, LRESULT, DefWindowProcW};
+use self::w32::{
+    HWND, UINT, WPARAM, LPARAM, LRESULT, DefWindowProcW,
+    LOWORD, HIWORD, RECT,
+    WINDOWPOS, SWP_NOMOVE, SWP_NOSIZE,
+};
 use event::{Event, EventInstant};
 use window::WindowHandle;
+use {Vec2, Extent2};
 
 pub static mut CONTEXT: Option<Weak<OsSharedContext>> = None;
 
@@ -37,6 +42,61 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
             push_event(hwnd, Event::WindowCloseRequested { window: WindowHandle(hwnd) });
             0
         },
+        // Sent after a window has been moved.
+        w32::WM_MOVE => {
+            let x = LOWORD(lparam as _) as i16;
+            let y = HIWORD(lparam as _) as i16;
+            push_event(hwnd, Event::WindowMoved { window: WindowHandle(hwnd), position: Vec2::new(x as _, y as _), by_user: false });
+            0
+        },
+        w32::WM_MOVING => {
+            let rect = unsafe {
+                &mut *(lparam as *mut RECT)
+            };
+            // NOTE: We are allowed to mutate the rect
+            push_event(hwnd, Event::WindowMoved { window: WindowHandle(hwnd), position: Vec2::new(rect.left as _, rect.top as _), by_user: false });
+            1
+        },
+        w32::WM_SIZE => {
+            let w = LOWORD(lparam as _) as i16;
+            let h = HIWORD(lparam as _) as i16;
+            push_event(hwnd, Event::WindowResized { window: WindowHandle(hwnd), size: Extent2::new(w as _, h as _), by_user: false });
+            0
+        },
+        w32::WM_SIZING => {
+            let rect = unsafe {
+                &mut *(lparam as *mut RECT)
+            };
+            // NOTE: We are allowed to mutate the rect
+            push_event(hwnd, Event::WindowResized { window: WindowHandle(hwnd), size: Extent2::new((rect.right - rect.left) as _, (rect.bottom - rect.top) as _), by_user: false });
+            1
+        },
+        // Sent to a window whose size, position, or place in the Z order has changed as a result of a call to the SetWindowPos function or another window-management function.
+        w32::WM_WINDOWPOSCHANGED => {
+            let wpos = unsafe {
+                &*(lparam as *const WINDOWPOS)
+            };
+            if (wpos.flags & SWP_NOMOVE) == 0 {
+                push_event(hwnd, Event::WindowMoved { window: WindowHandle(hwnd), position: Vec2::new(wpos.x as _, wpos.y as _), by_user: true });
+            }
+            if (wpos.flags & SWP_NOSIZE) == 0 {
+                push_event(hwnd, Event::WindowResized { window: WindowHandle(hwnd), size: Extent2::new(wpos.cx as _, wpos.cy as _), by_user: true });
+            }
+            0
+        },
+        // Sent to a window whose size, position, or place in the Z order is about to change as a result of a call to the SetWindowPos function or another window-management function.
+        w32::WM_WINDOWPOSCHANGING => {
+            let wpos = unsafe {
+                &*(lparam as *const WINDOWPOS)
+            };
+            if (wpos.flags & SWP_NOMOVE) == 0 {
+                push_event(hwnd, Event::WindowMoved { window: WindowHandle(hwnd), position: Vec2::new(wpos.x as _, wpos.y as _), by_user: true });
+            }
+            if (wpos.flags & SWP_NOSIZE) == 0 {
+                push_event(hwnd, Event::WindowResized { window: WindowHandle(hwnd), size: Extent2::new(wpos.cx as _, wpos.cy as _), by_user: true });
+            }
+            0
+        },
         w32::WM_ACTIVATEAPP
         | w32::WM_CANCELMODE
         | w32::WM_CHILDACTIVATE
@@ -51,8 +111,6 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
         | w32::WM_GETMINMAXINFO
         | w32::WM_INPUTLANGCHANGE
         | w32::WM_INPUTLANGCHANGEREQUEST
-        | w32::WM_MOVE
-        | w32::WM_MOVING
         | w32::WM_NCACTIVATE
         | w32::WM_NCCALCSIZE
         | w32::WM_NCCREATE
@@ -61,14 +119,10 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
         | w32::WM_QUERYDRAGICON
         | w32::WM_QUERYOPEN
         | w32::WM_SHOWWINDOW
-        | w32::WM_SIZE
-        | w32::WM_SIZING
         | w32::WM_STYLECHANGED
         | w32::WM_STYLECHANGING
         | w32::WM_THEMECHANGED
         | w32::WM_USERCHANGED
-        | w32::WM_WINDOWPOSCHANGED
-        | w32::WM_WINDOWPOSCHANGING
         | w32::WM_CAPTURECHANGED
         | w32::WM_LBUTTONDBLCLK
         | w32::WM_LBUTTONDOWN

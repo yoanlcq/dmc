@@ -3,10 +3,11 @@ use super::OsSharedContext;
 use super::winapi_utils as w32;
 use self::w32::{
     HWND, UINT, WPARAM, LPARAM, LRESULT, DefWindowProcW,
-    LOWORD, HIWORD, RECT,
+    LOWORD, HIWORD, GET_X_LPARAM, GET_Y_LPARAM, RECT,
     WINDOWPOS, SWP_NOMOVE, SWP_NOSIZE,
 };
 use event::{Event, EventInstant};
+use device::MouseButton;
 use window::WindowHandle;
 use {Vec2, Extent2};
 
@@ -97,6 +98,50 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
             }
             0
         },
+        w32::WM_MOUSEACTIVATE
+        | w32::WM_MOUSEHOVER
+        | w32::WM_MOUSELEAVE
+        | w32::WM_MOUSEMOVE
+        | w32::WM_MOUSEWHEEL
+        | w32::WM_MOUSEHWHEEL => {
+            unimplemented!();
+            default_window_proc()
+        },
+
+        w32::WM_LBUTTONDBLCLK
+        | w32::WM_LBUTTONDOWN
+        | w32::WM_LBUTTONUP
+        | w32::WM_MBUTTONDBLCLK
+        | w32::WM_MBUTTONDOWN
+        | w32::WM_MBUTTONUP
+        | w32::WM_RBUTTONDBLCLK
+        | w32::WM_RBUTTONDOWN
+        | w32::WM_RBUTTONUP
+        | w32::WM_XBUTTONDBLCLK
+        | w32::WM_XBUTTONDOWN
+        | w32::WM_XBUTTONUP => {
+            let x = GET_X_LPARAM(lparam);
+            let y = GET_Y_LPARAM(lparam);
+            let is_down = match msg {
+                  w32::WM_LBUTTONUP | w32::WM_MBUTTONUP | w32::WM_RBUTTONUP | w32::WM_XBUTTONUP => false,
+                _ => true,
+            };
+            let button = match msg {
+                w32::WM_LBUTTONDBLCLK | w32::WM_LBUTTONDOWN | w32::WM_LBUTTONUP => MouseButton::Left,
+                w32::WM_MBUTTONDBLCLK | w32::WM_MBUTTONDOWN | w32::WM_MBUTTONUP => MouseButton::Middle,
+                w32::WM_RBUTTONDBLCLK | w32::WM_RBUTTONDOWN | w32::WM_RBUTTONUP => MouseButton::Right,
+                w32::WM_XBUTTONDBLCLK | w32::WM_XBUTTONDOWN | w32::WM_XBUTTONUP => unimplemented!(),
+            };
+            let mouse = unimplemented!();
+            push_event(hwnd, Event::MouseMoved { mouse, position: Vec2::new(x as _, y as _) });
+            push_event(hwnd, if is_down {
+                Event::MouseButtonDown { mouse, button }
+            } else {
+                Event::MouseButtonUp { mouse, button }
+            });
+            0
+        },
+
         w32::WM_ACTIVATEAPP
         | w32::WM_CANCELMODE
         | w32::WM_CHILDACTIVATE
@@ -124,18 +169,6 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
         | w32::WM_THEMECHANGED
         | w32::WM_USERCHANGED
         | w32::WM_CAPTURECHANGED
-        | w32::WM_LBUTTONDBLCLK
-        | w32::WM_LBUTTONDOWN
-        | w32::WM_LBUTTONUP
-        | w32::WM_MBUTTONDBLCLK
-        | w32::WM_MBUTTONDOWN
-        | w32::WM_MBUTTONUP
-        | w32::WM_MOUSEACTIVATE
-        | w32::WM_MOUSEHOVER
-        | w32::WM_MOUSEHWHEEL
-        | w32::WM_MOUSELEAVE
-        | w32::WM_MOUSEMOVE
-        | w32::WM_MOUSEWHEEL
         | w32::WM_NCHITTEST
         | w32::WM_NCLBUTTONDBLCLK
         | w32::WM_NCLBUTTONDOWN
@@ -152,12 +185,6 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
         | w32::WM_NCXBUTTONDBLCLK
         | w32::WM_NCXBUTTONDOWN
         | w32::WM_NCXBUTTONUP
-        | w32::WM_RBUTTONDBLCLK
-        | w32::WM_RBUTTONDOWN
-        | w32::WM_RBUTTONUP
-        | w32::WM_XBUTTONDBLCLK
-        | w32::WM_XBUTTONDOWN
-        | w32::WM_XBUTTONUP
         | w32::WM_SETFOCUS
         | w32::WM_KILLFOCUS
         | w32::WM_KEYDOWN

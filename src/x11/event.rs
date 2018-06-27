@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use super::context::X11SharedContext;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
-use super::X11SharedWindow;
-use os::{OsEventInstant, OsDeviceID};
+use super::{X11SharedWindow, X11DeviceID};
+use os::{OsEventInstant};
 use error::{Result, failed};
 use event::{Event, EventInstant, UnprocessedEvent};
 use device::{self, DeviceID, DeviceInfo, MouseButton, Key, Keysym, Keycode};
@@ -227,7 +227,7 @@ impl X11SharedContext {
             time, x, y, x_root, y_root, state: _, is_hint: _, same_screen: _,
         } = e;
         let ev = Event::MouseMotion {
-            mouse: self.core_x_mouse(),
+            mouse: self.core_x_mouse_deviceid(),
             instant: EventInstant(OsEventInstant::X11EventTimeMillis(time)),
             window: WindowHandle(window),
             position: Vec2::new(x as _, y as _),
@@ -241,7 +241,7 @@ impl X11SharedContext {
             type_, serial: _, send_event: _, display: _, window, root: _, subwindow: _,
             time, x, y, x_root, y_root, mode, detail: _, same_screen: _, focus, state: _,
         } = e;
-        let mouse = self.core_x_mouse();
+        let mouse = self.core_x_mouse_deviceid();
         let window = WindowHandle(window);
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
         let position = Vec2::new(x as f64, y as _);
@@ -254,23 +254,21 @@ impl X11SharedContext {
             x::NotifyUngrab => (false, true),
             _ => unreachable!{},
         };
+        let motion = Event::MouseMotion { mouse, window, instant, position, root_position };
         let ev = match type_ {
-            x::EnterNotify => Event::MouseEnter {
-                mouse, window, instant, position, root_position, is_grabbed, is_focused,
-            },
-            x::LeaveNotify => Event::MouseLeave {
-                mouse, window, instant, position, root_position, was_grabbed, was_focused,
-            },
+            x::EnterNotify => Event::MouseEnter { mouse, window, instant, is_grabbed, is_focused },
+            x::LeaveNotify => Event::MouseLeave { mouse, window, instant, was_grabbed, was_focused },
             _ => unreachable!{},
         };
-        self.push_handled_x_event(*e, 1);
+        self.push_handled_x_event(*e, 2);
+        self.push_event(motion);
         self.push_event(ev)
     }
     fn pump_x_focus_change_event(&self, e: &mut x::XFocusChangeEvent) {
         let &mut x::XFocusChangeEvent {
             type_, serial: _, send_event: _, display: _, window, mode: _, detail: _,
         } = e;
-        let keyboard = self.core_x_keyboard();
+        let keyboard = self.core_x_keyboard_deviceid();
         let window = WindowHandle(window);
         let ev = match type_ {
             x::FocusIn => Event::KeyboardFocusGained {
@@ -383,7 +381,7 @@ impl X11SharedContext {
 
         self.set_net_wm_user_time_for_x_window(window, time);
 
-        let keyboard = self.core_x_keyboard();
+        let keyboard = self.core_x_keyboard_deviceid();
         let window = WindowHandle(window);
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
         let keycode = keycode as x::KeyCode;
@@ -407,7 +405,7 @@ impl X11SharedContext {
         };
 
         let mouse_ev = Event::MouseMotion {
-            mouse: self.core_x_mouse(),
+            mouse: self.core_x_mouse_deviceid(),
             instant,
             window,
             position: Vec2::new(x as _, y as _),
@@ -450,7 +448,7 @@ impl X11SharedContext {
 
         self.set_net_wm_user_time_for_x_window(window, time);
 
-        let mouse = self.core_x_mouse();
+        let mouse = self.core_x_mouse_deviceid();
         let window = WindowHandle(window);
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
         let position = Vec2::new(x as _, y as _);
@@ -471,33 +469,30 @@ impl X11SharedContext {
             9 => (Some(MouseButton::Forward), None),
             b => (Some(MouseButton::Other(b as _)), None),
         };
+        let motion = Event::MouseMotion { mouse, window, instant, position, root_position };
         let ev = match scroll {
             Some(scroll) => match type_ {
-                x::ButtonPress => Some(Event::MouseScroll {
-                    mouse, window, instant, position, root_position, scroll,
-                }),
+                x::ButtonPress => Some(Event::MouseScroll { mouse, window, instant, scroll: scroll.map(|x| x as _), }),
                 x::ButtonRelease => None, // Ignore button release events when it's a scroll button
                 _ => unreachable!{},
             },
             None => {
                 let button = button.unwrap();
                 let ev = match type_ {
-                    x::ButtonPress => Event::MouseButtonPressed {
-                        mouse, window, instant, position, root_position, button, clicks: None,
-                    },
-                    x::ButtonRelease => Event::MouseButtonReleased {
-                        mouse, window, instant, position, root_position, button,
-                    },
+                    x::ButtonPress => Event::MouseButtonPressed { mouse, window, instant, button, clicks: None },
+                    x::ButtonRelease => Event::MouseButtonReleased { mouse, window, instant, button },
                     _ => unreachable!{},
                 };
                 Some(ev)
             },
         };
         if let Some(ev) = ev {
-            self.push_handled_x_event(&*e, 1);
+            self.push_handled_x_event(&*e, 2);
+            self.push_event(motion);
             self.push_event(ev);
         } else {
-            self.push_handled_x_event(&*e, 0);
+            self.push_handled_x_event(&*e, 1);
+            self.push_event(motion);
         }
     }
 
@@ -549,7 +544,7 @@ impl X11SharedContext {
         match evtype {
             xi2::XI_Motion => {
                 let ev = Event::MouseMotion {
-                    mouse: DeviceID(OsDeviceID::XISlave(sourceid)),
+                    mouse: DeviceID(X11DeviceID::XISlave(sourceid).into()),
                     instant,
                     window: WindowHandle(x_window),
                     position: Vec2::new(event_x, event_y),
@@ -643,11 +638,17 @@ impl X11SharedContext {
             trace!("Sucessfully set _NET_WM_USER_TIME to {} for X Window {}", time, window);
         }
     }
-    pub fn core_x_mouse(&self) -> DeviceID {
-        DeviceID(OsDeviceID::CorePointer)
+    pub fn core_x_mouse(&self) -> X11DeviceID {
+        X11DeviceID::CorePointer
     }
-    pub fn core_x_keyboard(&self) -> DeviceID {
-        DeviceID(OsDeviceID::CoreKeyboard)
+    pub fn core_x_keyboard(&self) -> X11DeviceID {
+        X11DeviceID::CoreKeyboard
+    }
+    pub fn core_x_mouse_deviceid(&self) -> DeviceID {
+        DeviceID(self.core_x_mouse().into())
+    }
+    pub fn core_x_keyboard_deviceid(&self) -> DeviceID {
+        DeviceID(self.core_x_keyboard().into())
     }
     pub fn devices(&self) -> device::Result<HashMap<DeviceID, DeviceInfo>> {
         // FIXME

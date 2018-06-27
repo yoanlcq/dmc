@@ -10,7 +10,7 @@ pub mod desktop;
 pub mod cursor;
 pub use self::cursor::OsCursor;
 pub mod gl;
-pub use self::gl::{OsGLContext, OsGLPixelFormat, OsGLProc};
+pub use self::gl::{OsGLContext, OsGLPixelFormat};
 pub mod event_instant;
 pub use self::event_instant::OsEventInstant;
 pub mod event;

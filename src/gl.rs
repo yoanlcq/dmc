@@ -1,10 +1,7 @@
 //! OpenGL-related structures and abstractions.
 
-use std::os::raw::c_void;
-use std::ptr;
-use os::{OsGLPixelFormat, OsGLProc, OsGLContext};
-use std::os::raw::c_char;
-use context::Context;
+use std::os::raw::{c_void, c_char};
+use os::{OsGLPixelFormat, OsGLContext};
 use window::Window;
 use error::Result;
 

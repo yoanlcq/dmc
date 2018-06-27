@@ -59,7 +59,7 @@ macro_rules! os_mod {
                 set_hint,
                 OsContext, OsWindow, OsWindowHandle, OsWindowFromHandleParams,
                 OsCursor,
-                OsGLPixelFormat, OsGLContext, OsGLProc,
+                OsGLPixelFormat, OsGLContext,
                 OsEventInstant, OsUnprocessedEvent,
                 device_consts,
                 OsDeviceID, OsAxisInfo, OsDeviceInfo,
@@ -69,10 +69,6 @@ macro_rules! os_mod {
                 OsTabletInfo, OsTabletPadButtonsState, OsTabletStylusButtonsState,
             };
         }
-
-        // NOTE: This one is public on purpose!
-        /// Raw OpenGL function type, with the appropriate calling convention for this platform.
-        pub type OsGLProc = os::OsGLProc;
     };
 }
 

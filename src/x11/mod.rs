@@ -62,7 +62,6 @@ pub mod gl;
 pub use self::gl::{
     X11GLPixelFormat,
     X11GLContext,
-    X11GLProc,
 };
 pub mod glx;
 pub mod xrender;
@@ -75,7 +74,7 @@ pub mod net_wm;
 pub mod motif_wm;
 pub mod keys;
 pub mod device;
-pub use self::device::{X11TabletInfo, X11KeyboardState, X11MouseButtonsState, X11TabletPadButtonsState, X11TabletStylusButtonsState};
+pub use self::device::{X11DeviceID, X11TabletInfo, X11KeyboardState, X11MouseButtonsState, X11TabletPadButtonsState, X11TabletStylusButtonsState};
 
 use hint::Hint;
 use error::{Result, failed};

@@ -15,8 +15,6 @@ pub struct OsGLContext {
 #[derive(Debug)]
 pub struct OsGLPixelFormat(c_int);
 
-pub type OsGLProc = extern "system" fn();
-
 impl OsGLContext {
     pub unsafe fn get_proc_address(&self, name: *const c_char) -> *const c_void {
         match wglGetProcAddress(name) as usize {

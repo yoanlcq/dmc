@@ -19,19 +19,17 @@
 //   - GLX_EXT_create_context_es_profile
 //   - GLX_EXT_create_context_es2_profile
 
-use std::os::raw::c_char;
+use std::os::raw::{c_void, c_char};
 use std::rc::Rc;
 use std::ptr;
 use std::slice;
 use version_cmp;
 use super::x11::xlib as x;
 use super::x11::glx::*;
-use super::{X11SharedContext, X11Window, X11Context};
+use super::{X11Context, X11SharedContext, X11SharedWindow};
 use super::xlib_error;
-use gl::{GLPixelFormatSettings, GLContextSettings, GLSwapInterval};
+use gl::{GLPixelFormatChooser, GLContextSettings, GLSwapInterval};
 use error::{Result, failed};
-
-pub type X11GLProc = unsafe extern "C" fn();
 
 #[derive(Debug)]
 pub struct X11GLContext {
@@ -66,18 +64,24 @@ impl Drop for X11GLContext {
 
 
 impl X11GLContext {
-    pub unsafe fn get_proc_address(&self, name: *const c_char) -> Option<X11GLProc> {
+    pub unsafe fn get_proc_address(&self, name: *const c_char) -> *const c_void {
         #[cfg(not(target_os = "linux"))]
         unimplemented!("We don't know how the situation is in OSes other than Linux! This could require moving to x11-dl.");
 
         #[cfg(target_os = "linux")]
-        glXGetProcAddressARB(name as _)
+        match glXGetProcAddressARB(name as _) {
+            None => ptr::null(),
+            Some(p) => p as _,
+        }
     }
 }
+
+
 impl X11Context {
-    pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<X11GLPixelFormat> {
+    pub fn choose_gl_pixel_format(&self, chooser: &GLPixelFormatChooser) -> Result<X11GLPixelFormat> {
         let glx = self.glx()?;
         let x_display = self.lock_x_display();
+        let settings = chooser.settings();
 
         if version_cmp::lt((glx.major_version, glx.minor_version), (1, 3)) {
             // Not actually mutated, but glXChooseVisual wants *mut...
@@ -120,6 +124,9 @@ impl X11Context {
         // So what we've got to do is run through the list of candidates and
         // stop at the first that supports double buffering and exactly our
         // MSAA params. If there's none, we'll just select the first one.
+
+        // NOTE: Because of this, I'm completely ignoring the `chooser`'s object's opinion.
+        // I won't bother to do the best-to-worst sorting myself.
 
         let mut best_fbc = fbconfigs[0];
         let mut best_fbc_i = 0;
@@ -291,11 +298,14 @@ impl X11Context {
             Ok(X11GLPixelFormat { context: Rc::clone(&self.0), visual_info, fbconfig: Some(best_fbc) })
         }
     }
+}
 
-    pub fn create_gl_context(&self, settings: &GLContextSettings, pf: &X11GLPixelFormat) -> Result<X11GLContext> {
-        let glx = self.glx()?;
-        let x_display = self.lock_x_display();
-        let &X11GLPixelFormat { visual_info, fbconfig, context: _ } = pf;
+
+impl X11SharedWindow {
+    pub fn create_gl_context(&self, settings: &GLContextSettings) -> Result<X11GLContext> {
+        let glx = self.context.glx()?;
+        let x_display = self.context.lock_x_display();
+        let &X11GLPixelFormat { visual_info, fbconfig, context: _ } = &self.x11_gl_pixel_format?;
 
         let glx_lt_1_3 = version_cmp::lt((glx.major_version, glx.minor_version), (1, 3));
         let glx_lt_1_4 = version_cmp::lt((glx.major_version, glx.minor_version), (1, 4));
@@ -316,29 +326,24 @@ impl X11Context {
         if glx_context.is_null() {
             return failed(format!("{}() returned NULL", f));
         }
-        Ok(X11GLContext { context: Rc::clone(&self.0), glx_context })
+        Ok(X11GLContext { context: Rc::clone(&self.context), glx_context })
     }
-}
 
-impl X11SharedContext {
-    pub fn make_gl_context_current(&self, w: &X11Window, c: Option<&X11GLContext>) -> Result<()> {
-        let x_display = self.lock_x_display();
+    pub fn make_gl_context_current(&self, c: Option<&X11GLContext>) -> Result<()> {
+        let x_display = self.context.lock_x_display();
         let glx_context = match c {
             Some(c) => c.glx_context,
             None => ptr::null_mut(),
         };
         unsafe {
-            match w.glx_window {
+            match self.glx_window {
                 Some(w) => glXMakeContextCurrent(*x_display, w, w, glx_context),
-                None => glXMakeCurrent(*x_display, w.x_window, glx_context),
+                None => glXMakeCurrent(*x_display, self.x_window, glx_context),
             };
         }
         Ok(())
     }
-}
 
-
-impl X11Window {
     pub fn gl_swap_buffers(&self) -> Result<()> {
         unsafe {
             glXSwapBuffers(*self.context.lock_x_display(), match self.glx_window {

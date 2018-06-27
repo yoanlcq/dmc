@@ -17,7 +17,7 @@ use version_cmp;
 
 use super::x11::xlib as x;
 use super::x11::glx::*;
-use super::{X11Context, X11SharedContext};
+use super::{X11Context, X11SharedContext, X11GLPixelFormat};
 use super::cursor::X11Cursor;
 use super::missing_bits;
 use super::net_wm::{NetWMStateAction, NetWMWindowType, BypassCompositor};
@@ -38,6 +38,7 @@ pub struct X11SharedWindow {
     pub context: Rc<X11SharedContext>,
     pub x_window: x::Window,
     pub glx_window: Option<GLXWindow>,
+    pub x11_gl_pixel_format: Result<X11GLPixelFormat>,
     pub colormap: x::Colormap,
     // NOTE: If I implement child windows one day, they should not have their own XIC.
     // Or should they?
@@ -81,6 +82,7 @@ impl Drop for X11SharedWindow {
             glx_window,
             colormap, xic, user_cursor: _,
             is_cursor_visible: _,
+            x11_gl_pixel_format: _,
         } = self;
 
         let x_display = context.lock_x_display();
@@ -116,24 +118,24 @@ impl X11Context {
         };
 
         let &WindowSettings {
-            position, size, ref opengl, high_dpi,
+            ref opengl, high_dpi,
         } = window_settings;
 
         if high_dpi {
             warn!("The `high_dpi` setting was set to `true`, but will not be handled.");
         }
 
-        let Extent2 { w, h } = size;
-        let Vec2 { x, y } = position;
+        let (x, y, w, h) = (0, 0, 600, 480);
 
-        let (visual, depth, colormap) = match *opengl {
-            Some(ref pixel_format) => {
+        let (visual, depth, colormap, x11_gl_pixel_format) = match *opengl {
+            Some(ref chooser) => {
                 let _ = self.glx()?; // Return early if GLX is not supported.
-                let vi = unsafe { *pixel_format.0.visual_info };
+                let x11_gl_pixel_format = self.choose_gl_pixel_format(*chooser)?;
+                let vi = unsafe { &*x11_gl_pixel_format.visual_info };
                 let colormap = unsafe {
                     x::XCreateColormap(*x_display, parent, vi.visual, x::AllocNone)
                 };
-                (vi.visual, vi.depth, colormap)
+                (vi.visual, vi.depth, colormap, Ok(x11_gl_pixel_format))
             },
             None => {
                 let screen_num = unsafe {
@@ -149,7 +151,8 @@ impl X11Context {
                     Ok(c) => c,
                     Err(e) => return failed(format!("XCreateColormap failed with {}", e)),
                 };
-                (visual, depth, colormap)
+                let x11_gl_pixel_format = failed("Window was not created with OpenGL support");
+                (visual, depth, colormap, x11_gl_pixel_format)
             },
         };
 
@@ -295,19 +298,20 @@ impl X11Context {
         let glx_window = if !glx13 {
             None
         } else {
-            opengl.as_ref().map(|pf| {
-                let fbconfig = pf.0.fbconfig.unwrap();
+            x11_gl_pixel_format.as_ref().map(|pf| {
+                let fbconfig = pf.fbconfig.unwrap();
                 unsafe {
                     glXCreateWindow(*x_display, fbconfig, x_window, ptr::null_mut())
                 }
-            })
+            }).ok()
         };
 
         let context = Rc::clone(&self.0);
         let is_cursor_visible = Cell::new(true);
         let user_cursor = RefCell::new(None);
         let window = X11Window(Rc::new(X11SharedWindow { 
-            context, x_window, glx_window, colormap, xic, is_cursor_visible, user_cursor
+            context, x_window, glx_window, colormap, xic, is_cursor_visible, user_cursor,
+            x11_gl_pixel_format,
         }));
         match self.weak_windows.borrow_mut().insert(x_window, Rc::downgrade(&window.0)) {
             Some(_) => warn!("Newly created X Window {} was somewhat already present in the context's list", x_window),
@@ -411,6 +415,7 @@ impl X11Context {
         let glx_window = params.map(|p| p.glx_window).unwrap_or(None);
         let window = X11Window(Rc::new(X11SharedWindow {
             context, x_window, glx_window, colormap, xic, is_cursor_visible, user_cursor,
+            x11_gl_pixel_format: failed("OpenGL is not guaranteed on foreign windows"),
         }));
         self.weak_windows.borrow_mut().insert(x_window, Rc::downgrade(&window.0));
         trace!("Inserted foreign X Window {} into the context's list", x_window);

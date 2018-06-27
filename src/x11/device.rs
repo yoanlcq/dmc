@@ -1,4 +1,5 @@
 use std::slice;
+use std::os::raw::c_int;
 use super::x11::xinput2 as xi2;
 use super::x11::xlib as x;
 use super::X11SharedContext;
@@ -13,6 +14,22 @@ use device::{
     TouchInfo,
 };
 use Vec2;
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum X11DeviceID {
+    CoreKeyboard,
+    CorePointer,
+    XISlave(c_int),
+}
+
+impl X11DeviceID {
+    pub fn xi_device_id(&self) -> device::Result<c_int> {
+        match *self {
+            X11DeviceID::XISlave(x) => Ok(x),
+            _ => device::failed("This device ID is not a XI device ID"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct X11TabletInfo;
@@ -57,7 +74,7 @@ impl X11TabletStylusButtonsState {
 }
 
 impl X11SharedContext {
-    pub fn keyboard_state(&self, keyboard: DeviceID) -> device::Result<KeyboardState> {
+    pub fn keyboard_state(&self, keyboard: X11DeviceID) -> device::Result<KeyboardState> {
         let x_display = self.lock_x_display();
         /*
         // Quoting the man page:
@@ -92,25 +109,25 @@ impl X11SharedContext {
         }
         unimplemented!{}
     }
-    pub fn keyboard_keycode_state(&self, keyboard: DeviceID, keycode: Keycode) -> device::Result<KeyState> {
+    pub fn keyboard_keycode_state(&self, keyboard: X11DeviceID, keycode: Keycode) -> device::Result<KeyState> {
         unimplemented!{}
     }
-    pub fn keyboard_keysym_state(&self, keyboard: DeviceID, keysym: Keysym) -> device::Result<KeyState> {
+    pub fn keyboard_keysym_state(&self, keyboard: X11DeviceID, keysym: Keysym) -> device::Result<KeyState> {
         unimplemented!{}
     }
     pub fn keysym_name(&self, keysym: Keysym) -> device::Result<String> {
         unimplemented!{}
     }
-    pub fn keysym_from_keycode(&self, keyboard: DeviceID, keycode: Keycode) -> device::Result<Keysym> {
+    pub fn keysym_from_keycode(&self, keyboard: X11DeviceID, keycode: Keycode) -> device::Result<Keysym> {
         unimplemented!{}
     }
-    pub fn keycode_from_keysym(&self, keyboard: DeviceID, keysym: Keysym) -> device::Result<Keycode> {
+    pub fn keycode_from_keysym(&self, keyboard: X11DeviceID, keysym: Keysym) -> device::Result<Keycode> {
         unimplemented!{}
     }
-    pub fn mouse_state(&self, mouse: DeviceID) -> device::Result<MouseState> {
+    pub fn mouse_state(&self, mouse: X11DeviceID) -> device::Result<MouseState> {
         unimplemented!{}
     }
-    pub fn tablet_state(&self, tablet: DeviceID) -> device::Result<TabletState> {
+    pub fn tablet_state(&self, tablet: X11DeviceID) -> device::Result<TabletState> {
         unimplemented!{}
     }
 }

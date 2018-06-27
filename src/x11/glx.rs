@@ -138,6 +138,7 @@ impl Glx {
             red_bits, blue_bits, green_bits, alpha_bits,
             accum_red_bits, accum_blue_bits, accum_green_bits, 
             accum_alpha_bits, aux_buffers, msaa,
+            transparent: _,
         } = settings;
         let mut attr = [
             GLX_RGBA,
@@ -214,8 +215,6 @@ impl Glx {
         let mut i = attribs.len() - 5;
         assert_eq!(0, attribs[i]);
         if self.ext.GLX_ARB_multisample {
-            assert_eq!(GLX_SAMPLE_BUFFERS, GLX_SAMPLE_BUFFERS_ARB);
-            assert_eq!(GLX_SAMPLES, GLX_SAMPLES_ARB);
             attribs[i] = GLX_SAMPLE_BUFFERS;
             i += 1;
             attribs[i] = msaa.buffer_count as _;
@@ -245,10 +244,7 @@ impl Glx {
             ..
         } = &self.ext;
 
-        let (major, minor, gl_variant) = match version {
-            Some(GLVersion { major, minor, variant }) => (major, minor, variant),
-            None => (3, 0, GLVariant::Desktop),
-        };
+        let GLVersion { major, minor, variant } = version;
 
         let flags = if debug { 
             GLX_CONTEXT_DEBUG_BIT_ARB
@@ -260,7 +256,7 @@ impl Glx {
             GLX_CONTEXT_ROBUST_ACCESS_BIT_ARB
         } else { 0 };
 
-        let profile_param = match gl_variant {
+        let profile_param = match variant {
             GLVariant::Desktop if GLX_ARB_create_context_profile =>
                 GLX_CONTEXT_PROFILE_MASK_ARB,
             GLVariant::ES if GLX_EXT_create_context_es_profile =>
@@ -268,19 +264,12 @@ impl Glx {
             _ => 0,
         };
 
-        let profile_mask = match gl_variant {
+        let profile_mask = match variant {
+            GLVariant::ES => GLX_CONTEXT_ES_PROFILE_BIT_EXT,
             GLVariant::Desktop => match profile {
-                None => GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-                Some(p) => match p {
-                    GLProfile::Core =>
-                        GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
-                    GLProfile::Compatibility => 
-                        GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-                }
+                GLProfile::Core => GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
+                GLProfile::Compatibility => GLX_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
             },
-            GLVariant::ES =>
-                // Same as GLX_CONTEXT_ES2_PROFILE_BIT_EXT.
-                GLX_CONTEXT_ES_PROFILE_BIT_EXT,
         };
 
         let robust_param = if robust_access.is_some() {

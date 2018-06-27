@@ -4,7 +4,6 @@ extern crate x11;
 extern crate libc;
 
 use std::time::Instant;
-use std::os::raw::c_int;
 use std::ops::Range;
 use std::path::Path;
 use std::collections::HashMap;
@@ -19,7 +18,7 @@ pub use self::linuxdev::{OsControllerInfo, OsControllerState};
 use x11::{
     set_hint as set_hint_x11,
     X11Context, X11Window, X11WindowHandle, X11WindowFromHandleParams, X11Cursor,
-    X11GLProc, X11GLPixelFormat, X11GLContext,
+    X11GLPixelFormat, X11GLContext,
     X11Keysym, X11Keycode,
     X11UnprocessedEvent,
     X11TabletInfo,
@@ -27,6 +26,7 @@ use x11::{
     X11MouseButtonsState,
     X11TabletPadButtonsState,
     X11TabletStylusButtonsState,
+    X11DeviceID,
 };
 use error::{Result};
 use desktop::Desktop;
@@ -39,7 +39,7 @@ use device::{
     ControllerButton, ControllerAxis, ControllerState, ControllerInfo,
     VibrationState,
     KeyboardInfo, KeyState, KeyboardState, Keysym, Keycode,
-    MouseInfo, MouseState, MouseButton,
+    MouseInfo, MouseState,
     TabletInfo, TabletState, TabletPadButton, TabletStylusButton,
     TouchInfo,
 };
@@ -64,7 +64,6 @@ pub type OsWindowFromHandleParams = X11WindowFromHandleParams;
 pub type OsCursor = X11Cursor;
 pub type OsGLPixelFormat = X11GLPixelFormat;
 pub type OsGLContext = X11GLContext;
-pub type OsGLProc = X11GLProc;
 pub type OsKeycode = X11Keycode;
 pub type OsKeysym = X11Keysym;
 pub type OsTabletInfo = X11TabletInfo;
@@ -132,11 +131,25 @@ pub mod device_consts;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum OsDeviceID {
-    CoreKeyboard,
-    CorePointer,
-    XISlave(c_int),
+    X11(X11DeviceID),
     Linuxdev(LinuxdevToken),
 }
+
+impl From<X11DeviceID> for OsDeviceID {
+    fn from(x11: X11DeviceID) -> Self {
+        OsDeviceID::X11(x11)
+    }
+}
+
+impl OsDeviceID {
+    pub fn x11(self) -> device::Result<X11DeviceID> {
+        match self {
+            OsDeviceID::X11(x11) => Ok(x11),
+            OsDeviceID::Linuxdev(_) => device::failed("This device ID was not from X11"),
+        }
+    }
+}
+
 
 // Will probably be an enum later on, because X11 has one too.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,34 +306,34 @@ impl OsContext {
         self.linuxdev.controller_set_vibration(controller, vibration)
     }
     pub fn main_mouse(&self) -> device::Result<DeviceID> {
-        Ok(self.x11.core_x_mouse())
+        Ok(self.x11.core_x_mouse_deviceid())
     }
     pub fn main_keyboard(&self) -> device::Result<DeviceID> {
-        Ok(self.x11.core_x_keyboard())
+        Ok(self.x11.core_x_keyboard_deviceid())
     }
     pub fn keyboard_state(&self, keyboard: DeviceID) -> device::Result<KeyboardState> {
-        self.x11.keyboard_state(keyboard)
+        self.x11.keyboard_state(keyboard.0.x11()?)
     }
     pub fn keyboard_keycode_state(&self, keyboard: DeviceID, keycode: Keycode) -> device::Result<KeyState> {
-        self.x11.keyboard_keycode_state(keyboard, keycode)
+        self.x11.keyboard_keycode_state(keyboard.0.x11()?, keycode)
     }
     pub fn keyboard_keysym_state(&self, keyboard: DeviceID, keysym: Keysym) -> device::Result<KeyState> {
-        self.x11.keyboard_keysym_state(keyboard, keysym)
+        self.x11.keyboard_keysym_state(keyboard.0.x11()?, keysym)
     }
     pub fn keysym_name(&self, keysym: Keysym) -> device::Result<String> {
         self.x11.keysym_name(keysym)
     }
     pub fn keysym_from_keycode(&self, keyboard: DeviceID, keycode: Keycode) -> device::Result<Keysym> {
-        self.x11.keysym_from_keycode(keyboard, keycode)
+        self.x11.keysym_from_keycode(keyboard.0.x11()?, keycode)
     }
     pub fn keycode_from_keysym(&self, keyboard: DeviceID, keysym: Keysym) -> device::Result<Keycode> {
-        self.x11.keycode_from_keysym(keyboard, keysym)
+        self.x11.keycode_from_keysym(keyboard.0.x11()?, keysym)
     }
     pub fn mouse_state(&self, mouse: DeviceID) -> device::Result<MouseState> {
-        self.x11.mouse_state(mouse)
+        self.x11.mouse_state(mouse.0.x11()?)
     }
     pub fn tablet_state(&self, tablet: DeviceID) -> device::Result<TabletState> {
-        self.x11.tablet_state(tablet)
+        self.x11.tablet_state(tablet.0.x11()?)
     }
     pub fn choose_gl_pixel_format(&self, settings: &GLPixelFormatSettings) -> Result<X11GLPixelFormat> {
         self.x11.choose_gl_pixel_format(settings)

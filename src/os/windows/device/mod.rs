@@ -23,7 +23,11 @@ pub mod consts {
     pub const MAX_HAT_AXES: Option<u32> = None;
 } 
 
-pub type OsDeviceID = ();
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum OsDeviceID {
+    MainMouse,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OsAxisInfo;
 #[derive(Debug, Clone, PartialEq)]

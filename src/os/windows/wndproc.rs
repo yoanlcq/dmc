@@ -1,13 +1,16 @@
 use std::rc::Weak;
-use super::OsSharedContext;
+use std::time::Instant;
+use super::{OsSharedContext, OsDeviceID, OsEventInstant};
 use super::winapi_utils as w32;
 use self::w32::{
     HWND, UINT, WPARAM, LPARAM, LRESULT, DefWindowProcW,
-    LOWORD, HIWORD, GET_X_LPARAM, GET_Y_LPARAM, RECT,
+    LOWORD, HIWORD, GET_X_LPARAM, GET_Y_LPARAM, GET_XBUTTON_WPARAM,
+    RECT, POINT,
     WINDOWPOS, SWP_NOMOVE, SWP_NOSIZE,
+    ClientToScreen,
 };
 use event::{Event, EventInstant};
-use device::MouseButton;
+use device::{DeviceID, MouseButton};
 use window::WindowHandle;
 use {Vec2, Extent2};
 
@@ -33,6 +36,14 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
     let default_window_proc = || unsafe {
         DefWindowProcW(hwnd, msg, wparam, lparam)
     };
+    let get_root_position = |x, y| {
+        let mut point = POINT { x, y };
+        let is_ok = unsafe {
+            ClientToScreen(hwnd, &mut point)
+        };
+        Vec2::new(point.x as f64, point.y as f64)
+    };
+
     match msg {
         // This message is actually never received by windows, because only GetMessage() and PeekMessage() functions retrieve it. But oh well.
         w32::WM_QUIT => {
@@ -98,16 +109,42 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
             }
             0
         },
+        //Sent when the cursor is in an inactive window and the user presses a mouse button
         w32::WM_MOUSEACTIVATE
+        // Posted to a window when the cursor hovers over the client area of the window for the period of time specified in a prior call to TrackMouseEvent.
         | w32::WM_MOUSEHOVER
-        | w32::WM_MOUSELEAVE
-        | w32::WM_MOUSEMOVE
-        | w32::WM_MOUSEWHEEL
-        | w32::WM_MOUSEHWHEEL => {
-            unimplemented!();
-            default_window_proc()
+        // Posted to a window when the cursor leaves the client area of the window specified in a prior call to TrackMouseEvent.
+        | w32::WM_MOUSELEAVE => {
+            unimplemented!()
         },
-
+        w32::WM_MOUSEMOVE => {
+            let x = GET_X_LPARAM(lparam);
+            let y = GET_Y_LPARAM(lparam);
+            let mouse = DeviceID(OsDeviceID::MainMouse);
+            let window = WindowHandle(hwnd);
+            let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
+            let root_position = get_root_position(x, y);
+            push_event(hwnd, Event::MouseMotion { mouse, window, instant, position: Vec2::new(x as _, y as _), root_position });
+            0
+        },
+        w32::WM_MOUSEWHEEL
+        | w32::WM_MOUSEHWHEEL => {
+            let x = GET_X_LPARAM(lparam);
+            let y = GET_Y_LPARAM(lparam);
+            let delta = w32::GET_WHEEL_DELTA_WPARAM(wparam) as f64 / w32::WHEEL_DELTA as f64;
+            let scroll = match msg {
+                w32::WM_MOUSEWHEEL => Vec2::new(0., delta),
+                w32::WM_MOUSEHWHEEL => Vec2::new(delta, 0.),
+                _ => unreachable!(),
+            };
+            let mouse = DeviceID(OsDeviceID::MainMouse);
+            let window = WindowHandle(hwnd);
+            let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
+            let root_position = get_root_position(x, y);
+            push_event(hwnd, Event::MouseMotion { mouse, window, instant, position: Vec2::new(x as _, y as _), root_position });
+            push_event(hwnd, Event::MouseScroll { mouse, window, instant, scroll });
+            0
+        },
         w32::WM_LBUTTONDBLCLK
         | w32::WM_LBUTTONDOWN
         | w32::WM_LBUTTONUP
@@ -130,16 +167,32 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
                 w32::WM_LBUTTONDBLCLK | w32::WM_LBUTTONDOWN | w32::WM_LBUTTONUP => MouseButton::Left,
                 w32::WM_MBUTTONDBLCLK | w32::WM_MBUTTONDOWN | w32::WM_MBUTTONUP => MouseButton::Middle,
                 w32::WM_RBUTTONDBLCLK | w32::WM_RBUTTONDOWN | w32::WM_RBUTTONUP => MouseButton::Right,
-                w32::WM_XBUTTONDBLCLK | w32::WM_XBUTTONDOWN | w32::WM_XBUTTONUP => unimplemented!(),
+                w32::WM_XBUTTONDBLCLK | w32::WM_XBUTTONDOWN | w32::WM_XBUTTONUP => match GET_XBUTTON_WPARAM(wparam) {
+                    w32::XBUTTON1 => ::device::mouse::XBUTTON1,
+                    w32::XBUTTON2 => ::device::mouse::XBUTTON2,
+                    other => MouseButton::Other(other as _),
+                },
+                _ => unreachable!(),
             };
-            let mouse = unimplemented!();
-            push_event(hwnd, Event::MouseMoved { mouse, position: Vec2::new(x as _, y as _) });
+            let clicks = match msg {
+                w32::WM_LBUTTONDBLCLK | w32::WM_MBUTTONDBLCLK | w32::WM_RBUTTONDBLCLK | w32::WM_XBUTTONDBLCLK => Some(2),
+                _ => None,
+            };
+            let mouse = DeviceID(OsDeviceID::MainMouse);
+            let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
+            let root_position = get_root_position(x, y);
+
+            let window = WindowHandle(hwnd);
+            push_event(hwnd, Event::MouseMotion { mouse, window, instant, position: Vec2::new(x as _, y as _), root_position });
             push_event(hwnd, if is_down {
-                Event::MouseButtonDown { mouse, button }
+                Event::MouseButtonPressed { mouse, window, instant, button, clicks, }
             } else {
-                Event::MouseButtonUp { mouse, button }
+                Event::MouseButtonReleased { mouse, window, instant, button }
             });
-            0
+            match msg {
+                w32::WM_XBUTTONDBLCLK | w32::WM_XBUTTONDOWN | w32::WM_XBUTTONUP => 1,
+                _ => 0,
+            }
         },
 
         w32::WM_ACTIVATEAPP

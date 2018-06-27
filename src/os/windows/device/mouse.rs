@@ -3,7 +3,7 @@ use device::{
     DeviceID, ButtonState,
     MouseButton, MouseState, WindowMouseState,
 };
-use os::{OsContext, OsWindow};
+use os::{OsContext, OsWindow, OsDeviceID};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OsMouseButtonsState;
@@ -16,7 +16,7 @@ impl OsMouseButtonsState {
 
 impl OsContext {
     pub fn main_mouse(&self) -> device::Result<DeviceID> {
-        unimplemented!()
+        Ok(DeviceID(OsDeviceID::MainMouse))
     }
     pub fn mouse_state(&self, mouse: DeviceID) -> device::Result<MouseState> {
         unimplemented!()

@@ -236,47 +236,47 @@ impl X11Context {
                 _ => "<??>",
             };
 
-            info!("Matching FBConfig n°{}", i);
-            info!("- sample_buffers          : {}", sample_buffers         );
-            info!("- samples                 : {}", samples                );
-            info!("- fbconfig_id             : 0x{:x}", fbconfig_id            );
-            info!("- buffer_size             : {}", buffer_size            );
-            info!("- level                   : {}", level                  );
-            info!("- stereo                  : {}", stereo                 );
-            info!("- doublebuffer            : {}", doublebuffer           );
-            info!("- aux_buffers             : {}", aux_buffers            );
-            info!("- red_size                : {}", red_size               );
-            info!("- green_size              : {}", green_size             );
-            info!("- blue_size               : {}", blue_size              );
-            info!("- alpha_size              : {}", alpha_size             );
-            info!("- depth_size              : {}", depth_size             );
-            info!("- stencil_size            : {}", stencil_size           );
-            info!("- accum_red_size          : {}", accum_red_size         );
-            info!("- accum_green_size        : {}", accum_green_size       );
-            info!("- accum_blue_size         : {}", accum_blue_size        );
-            info!("- accum_alpha_size        : {}", accum_alpha_size       );
-            info!("- render_type             : 0x{:x}{}{}", render_type, 
+            trace!("Matching FBConfig n°{}", i);
+            trace!("- sample_buffers          : {}", sample_buffers         );
+            trace!("- samples                 : {}", samples                );
+            trace!("- fbconfig_id             : 0x{:x}", fbconfig_id            );
+            trace!("- buffer_size             : {}", buffer_size            );
+            trace!("- level                   : {}", level                  );
+            trace!("- stereo                  : {}", stereo                 );
+            trace!("- doublebuffer            : {}", doublebuffer           );
+            trace!("- aux_buffers             : {}", aux_buffers            );
+            trace!("- red_size                : {}", red_size               );
+            trace!("- green_size              : {}", green_size             );
+            trace!("- blue_size               : {}", blue_size              );
+            trace!("- alpha_size              : {}", alpha_size             );
+            trace!("- depth_size              : {}", depth_size             );
+            trace!("- stencil_size            : {}", stencil_size           );
+            trace!("- accum_red_size          : {}", accum_red_size         );
+            trace!("- accum_green_size        : {}", accum_green_size       );
+            trace!("- accum_blue_size         : {}", accum_blue_size        );
+            trace!("- accum_alpha_size        : {}", accum_alpha_size       );
+            trace!("- render_type             : 0x{:x}{}{}", render_type, 
                 if render_type & GLX_RGBA_BIT != 0 { " (GLX_RGBA_BIT)" } else { "" },
                 if render_type & GLX_COLOR_INDEX_BIT != 0 { " (GLX_COLOR_INDEX_BIT)" } else { "" }
             );
-            info!("- drawable_type           : 0x{:x}{}{}{}", drawable_type,
+            trace!("- drawable_type           : 0x{:x}{}{}{}", drawable_type,
                 if drawable_type & GLX_WINDOW_BIT  != 0 { " (GLX_WINDOW_BIT)"  } else { "" },
                 if drawable_type & GLX_PIXMAP_BIT  != 0 { " (GLX_PIXMAP_BIT)"  } else { "" },
                 if drawable_type & GLX_PBUFFER_BIT != 0 { " (GLX_PBUFFER_BIT)" } else { "" }
             ); // GLX_WINDOW_BIT, GLX_PIXMAP_BIT, and GLX_PBUFFER_BIT
-            info!("- x_renderable            : {}", x_renderable           );
-            info!("- visual_id               : 0x{:x}", visual_id              );
-            info!("- x_visual_type           : {}", x_visual_type          ); // GLX_TRUE_COLOR, GLX_DIRECT_COLOR, GLX_PSEUDO_COLOR, GLX_STATIC_COLOR, GLX_GRAY_SCALE, or GLX_STATIC_GRAY
-            info!("- config_caveat           : {}", config_caveat          ); // GLX_NONE, GLX_SLOW_CONFIG, GLX_NON_CONFORMANT_CONFIG
-            info!("- transparent_type        : {}", transparent_type       ); // GLX_NONE, GLX_TRANSPARENT_RGB, GLX_TRANSPARENT_INDEX
-            info!("- transparent_index_value : {}", transparent_index_value);
-            info!("- transparent_red_value   : {}", transparent_red_value  );
-            info!("- transparent_green_value : {}", transparent_green_value);
-            info!("- transparent_blue_value  : {}", transparent_blue_value );
-            info!("- transparent_alpha_value : {}", transparent_alpha_value);
-            info!("- max_pbuffer_width       : {}", max_pbuffer_width      );
-            info!("- max_pbuffer_height      : {}", max_pbuffer_height     );
-            info!("- max_pbuffer_pixels      : {}", max_pbuffer_pixels     );
+            trace!("- x_renderable            : {}", x_renderable           );
+            trace!("- visual_id               : 0x{:x}", visual_id              );
+            trace!("- x_visual_type           : {}", x_visual_type          ); // GLX_TRUE_COLOR, GLX_DIRECT_COLOR, GLX_PSEUDO_COLOR, GLX_STATIC_COLOR, GLX_GRAY_SCALE, or GLX_STATIC_GRAY
+            trace!("- config_caveat           : {}", config_caveat          ); // GLX_NONE, GLX_SLOW_CONFIG, GLX_NON_CONFORMANT_CONFIG
+            trace!("- transparent_type        : {}", transparent_type       ); // GLX_NONE, GLX_TRANSPARENT_RGB, GLX_TRANSPARENT_INDEX
+            trace!("- transparent_index_value : {}", transparent_index_value);
+            trace!("- transparent_red_value   : {}", transparent_red_value  );
+            trace!("- transparent_green_value : {}", transparent_green_value);
+            trace!("- transparent_blue_value  : {}", transparent_blue_value );
+            trace!("- transparent_alpha_value : {}", transparent_alpha_value);
+            trace!("- max_pbuffer_width       : {}", max_pbuffer_width      );
+            trace!("- max_pbuffer_height      : {}", max_pbuffer_height     );
+            trace!("- max_pbuffer_pixels      : {}", max_pbuffer_pixels     );
 
             if !is_fbconfig_chosen
             && sample_buffers == settings.msaa.buffer_count as _
@@ -290,7 +290,7 @@ impl X11Context {
                 // so we can log them all.
             }
         }
-        info!("Chosen FBConfig n°{}", best_fbc_i);
+        trace!("Chosen FBConfig n°{}", best_fbc_i);
         unsafe { 
             let visual_info = glXGetVisualFromFBConfig(*x_display, best_fbc);
             assert!(!visual_info.is_null());

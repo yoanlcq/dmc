@@ -302,17 +302,20 @@ impl X11Context {
 
 
 impl X11SharedWindow {
+    pub fn x11_gl_pixel_format(&self) -> Result<&X11GLPixelFormat> {
+        self.x11_gl_pixel_format.as_ref().map_err(Clone::clone)
+    }
     pub fn create_gl_context(&self, settings: &GLContextSettings) -> Result<X11GLContext> {
         let glx = self.context.glx()?;
         let x_display = self.context.lock_x_display();
-        let &X11GLPixelFormat { visual_info, fbconfig, context: _ } = &self.x11_gl_pixel_format?;
+        let &X11GLPixelFormat { visual_info, fbconfig, context: _ } = &self.x11_gl_pixel_format()?;
 
         let glx_lt_1_3 = version_cmp::lt((glx.major_version, glx.minor_version), (1, 3));
         let glx_lt_1_4 = version_cmp::lt((glx.major_version, glx.minor_version), (1, 4));
 
         let (f, glx_context) = unsafe {
             let get_glx_context = || if glx_lt_1_3 {
-                ("glXCreateContext", glXCreateContext(*x_display, visual_info, ptr::null_mut(), x::True))
+                ("glXCreateContext", glXCreateContext(*x_display, *visual_info, ptr::null_mut(), x::True))
             } else if glx_lt_1_4 || (!glx_lt_1_4 && !glx.ext.GLX_ARB_create_context) {
                 ("glXCreateNewContext", glXCreateNewContext(*x_display, fbconfig.unwrap(), GLX_RGBA_TYPE, ptr::null_mut(), x::True))
             } else {

@@ -127,6 +127,7 @@ impl X11SharedContext {
             x::ClientMessage => self.pump_x_client_message_event(e.as_mut()),
             x::GravityNotify => self.pump_x_gravity_event(e.as_mut()),
             x::ConfigureNotify => self.pump_x_configure_event(e.as_mut()),
+            x::ResizeRequest => self.pump_x_resize_request_event(e.as_mut()),
             x::MappingNotify => self.pump_x_mapping_event(e.as_mut()),
             x::Expose  => self.pump_x_expose_event(e.as_mut()),
             x::VisibilityNotify => self.pump_x_visibility_event(e.as_mut()),
@@ -146,7 +147,6 @@ impl X11SharedContext {
             | x::CirculateRequest
             | x::ConfigureRequest
             | x::MapRequest
-            | x::ResizeRequest
             | x::CirculateNotify
             | x::CreateNotify
             | x::DestroyNotify
@@ -329,6 +329,19 @@ impl X11SharedContext {
         self.push_event(Event::WindowMoved { window, position, by_user, });
         self.push_event(Event::WindowResized { window, size, by_user, })
     }
+    fn pump_x_resize_request_event(&self, e: &mut x::XResizeRequestEvent) {
+        let &mut x::XResizeRequestEvent {
+            type_: _, serial: _, send_event, display: _, window,
+            width, height,
+        } = e;
+        let window = WindowHandle(window);
+        let by_user = send_event == x::False;
+        let size = Extent2::new(width as _, height as _);
+
+        self.push_handled_x_event(*e, 1);
+        self.push_event(Event::WindowResized { window, size, by_user, })
+    }
+
     fn pump_x_mapping_event(&self, e: &mut x::XMappingEvent) {
         unsafe {
             x::XRefreshKeyboardMapping(e);

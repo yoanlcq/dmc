@@ -180,7 +180,8 @@ impl X11Context {
                 | x::ExposureMask
                 | x::VisibilityChangeMask
                 | x::StructureNotifyMask
-                | x::ResizeRedirectMask
+                // | x::ResizeRedirectMask // https://www.opengl.org/discussion_boards/showthread.php/164305-help-problems-resizing-GLX-windows
+                // Basically setting this bit screws up OpenGL rendering when resizing windows.
                 | x::SubstructureNotifyMask
                 | x::SubstructureRedirectMask
                 | x::FocusChangeMask

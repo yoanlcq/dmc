@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use super::context::X11SharedContext;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
-use super::{X11SharedWindow, X11DeviceID};
+use super::{X11SharedWindow, X11DeviceID, missing_bits};
 use os::{OsEventInstant};
 use error::{Result, failed};
 use event::{Event, EventInstant, UnprocessedEvent};
@@ -52,6 +52,18 @@ define_x11_unprocessed_event_enum!{
     XITouchOwnershipEvent (xi2::XITouchOwnershipEvent),
 }
 
+fn io_read_ready(fd: c_int) -> bool {
+    loop {
+        use nix::poll::*;
+        let info = PollFd::new(fd, EventFlags::POLLIN | EventFlags::POLLPRI);
+        match poll(&mut [info], 0 /* timeout_ms */) {
+            Err(::nix::Error::Sys(::nix::errno::Errno::EINTR)) => continue,
+            Ok(n) => return n > 0,
+            _ => return false,
+        };
+    }
+}
+
 impl X11SharedContext {
     pub fn supports_raw_device_events(&self) -> Result<bool> {
         self.xi()?;
@@ -62,19 +74,30 @@ impl X11SharedContext {
         self.pending_translated_events.borrow_mut().pop_front()
     }
     fn pump_events(&self) {
-        let x_display = self.lock_x_display();
-        while unsafe { x::XPending(*x_display) } > 0 {
-            self.pump_next_event();
+        while self.x_pending() > 0 {
+            self.pump_x_event(&mut self.x_next_event());
         }
     }
-    fn pump_next_event(&self) {
+    fn x_pending(&self) -> c_int {
         let x_display = self.lock_x_display();
-        let mut x_event = unsafe {
-            let mut x_event: x::XEvent = mem::zeroed();
-            x::XNextEvent(*x_display, &mut x_event);
+        unsafe {
+            x::XFlush(*x_display);
+            match x::XEventsQueued(*x_display, missing_bits::x::QueuedAlready) {
+                0 => (),
+                n => return n,
+            };
+            if io_read_ready(x::XConnectionNumber(*x_display)) {
+                return x::XPending(*x_display);
+            }
+        }
+        0
+    }
+    fn x_next_event(&self) -> x::XEvent {
+        unsafe {
+            let mut x_event = mem::zeroed();
+            x::XNextEvent(*self.lock_x_display(), &mut x_event);
             x_event
-        };
-        self.pump_x_event(&mut x_event);
+        }
     }
 
     fn push_event(&self, e: Event) {

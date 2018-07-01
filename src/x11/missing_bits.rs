@@ -1,5 +1,11 @@
 #![allow(dead_code)]
 
+pub mod x {
+    pub const QueuedAlready     : i32 = 0;
+    pub const QueuedAfterReading: i32 = 1;
+    pub const QueuedAfterFlush  : i32 = 2;
+}
+
 // TODO: Send a PR to x11-rs.
 // Missing items for X11
 pub mod glx {

@@ -158,7 +158,7 @@ impl X11Context {
 
         let border_thickness = 0;
         let class = x::InputOutput;
-        let valuemask = x::CWColormap | x::CWEventMask | x::CWBackPixel;
+        let valuemask = x::CWColormap | x::CWEventMask /*x::CWBackPixel |*/;
         let mut swa = x::XSetWindowAttributes {
             colormap,
             event_mask: { // Basically, all events. Copy-pasted from /usr/include/x11/X.h
@@ -323,7 +323,7 @@ impl X11Context {
         // and place the window wherever they want.
         // We have to enforce this by setting what's called size hints for our window.
         window.x_set_wm_normal_hints(x::XSizeHints {
-            flags: x::PPosition | x::PSize | x::PBaseSize,
+            flags: x::PPosition | x::PSize /*| x::PBaseSize*/,
             x, y, 
             width: w as _, 
             height: h as _,

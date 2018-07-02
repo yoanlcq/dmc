@@ -1,4 +1,5 @@
 use std::mem;
+use std::ptr;
 use std::slice;
 use std::rc::Rc;
 use std::os::raw::c_int;
@@ -69,26 +70,44 @@ impl X11SharedContext {
         self.xi()?;
         Ok(true)
     }
+
     pub fn poll_next_event(&self) -> Option<Event> {
-        self.pump_events();
-        self.pending_translated_events.borrow_mut().pop_front()
-    }
-    fn pump_events(&self) {
-        while self.x_pending() > 0 {
-            self.pump_x_event(&mut self.x_next_event());
+        let ev = self.poll_next_event_real();
+        let q = self.pending_translated_events.borrow();
+        if let Some(ev) = ev.as_ref() {
+            trace!("[EV] ---- ({} / {}): {:?}", q.len(), q.capacity(), ev);
         }
+        ev
+    }
+    pub fn poll_next_event_real(&self) -> Option<Event> {
+        let ev = self.pending_translated_events.borrow_mut().pop_front();
+        if let Some(ev) = ev {
+            return Some(ev);
+        }
+        loop {
+            let n = self.x_pending();
+            if n <= 0 {
+                break;
+            }
+            for _ in 0..n {
+                self.pump_x_event(&mut self.x_next_event());
+            }
+        }
+        self.pending_translated_events.borrow_mut().pop_front()
     }
     fn x_pending(&self) -> c_int {
         let x_display = self.lock_x_display();
         unsafe {
-            x::XFlush(*x_display);
-            match x::XEventsQueued(*x_display, missing_bits::x::QueuedAlready) {
-                0 => (),
+            return x::XPending(*x_display);
+            /*
+            match x::XEventsQueued(*x_display, missing_bits::x::QueuedAfterFlush) {
+                x if x <= 0 => (),
                 n => return n,
             };
             if io_read_ready(x::XConnectionNumber(*x_display)) {
                 return x::XPending(*x_display);
             }
+            */
         }
         0
     }
@@ -101,19 +120,21 @@ impl X11SharedContext {
     }
 
     fn push_event(&self, e: Event) {
+        trace!("[EV] ++++ ({} / {}): {:?}", self.pending_translated_events.borrow().len(), self.pending_translated_events.borrow().capacity(), e);
         self.pending_translated_events.borrow_mut().push_back(e);
     }
+    // FIXME: So what should be do about these?
     fn push_unhandled_x_event<T: Into<x::XEvent>>(&self, e: T) {
-        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: X11UnprocessedEvent::from(e.into()).into(), following: 0, was_ignored: true, }))
+        // self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: X11UnprocessedEvent::from(e.into()).into(), following: 0, was_ignored: true, }))
     }
     fn push_handled_x_event<T: Into<x::XEvent>>(&self, e: T, following: usize) {
-        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: X11UnprocessedEvent::from(e.into()).into(), following, was_ignored: false, }))
+        // self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: X11UnprocessedEvent::from(e.into()).into(), following, was_ignored: false, }))
     }
     fn push_unhandled_xi2_event<T: Into<X11UnprocessedEvent>>(&self, e: T) {
-        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following: 0, was_ignored: true, }))
+        // self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following: 0, was_ignored: true, }))
     }
     fn push_handled_xi2_event<T: Into<X11UnprocessedEvent>>(&self, e: T, following: usize) {
-        self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following, was_ignored: false, }))
+        // self.push_event(Event::UnprocessedEvent(UnprocessedEvent { os_event: e.into().into(), following, was_ignored: false, }))
     }
 
 
@@ -324,6 +345,8 @@ impl X11SharedContext {
         self.push_event(ev)
     }
     fn pump_x_gravity_event(&self, e: &mut x::XGravityEvent) {
+        // Blah! Don't handle these; they're redundant with XConfigureEvent.
+        /*
         // Window moved because its parent's position or size changed.
         // x and y are relative to the parent window's top-left corner.
         let &mut x::XGravityEvent {
@@ -337,22 +360,49 @@ impl X11SharedContext {
         };
         self.push_handled_x_event(*e, 1);
         self.push_event(ev)
+        */
     }
     fn pump_x_configure_event(&self, e: &mut x::XConfigureEvent) {
         let &mut x::XConfigureEvent {
-            type_: _, serial: _, send_event, display: _, event: _, window, x, y,
-            width, height, border_width: _, above: _, override_redirect: _,
+            type_: _, serial: _, send_event, display: _, event: _, window: x_window,
+            mut x, mut y, width, height, border_width: _, above: _, override_redirect: _,
         } = e;
-        let window = WindowHandle(window);
+
+        if send_event == x::False {
+            let mut children = ptr::null_mut();
+            let mut nb_children = 0;
+            let mut child = 0;
+            let mut root = 0;
+            let mut parent = 0;
+            let x_display = self.lock_x_display();
+            unsafe {
+                x::XQueryTree(*x_display, x_window, &mut root, &mut parent, &mut children, &mut nb_children);
+                x::XTranslateCoordinates(*x_display, parent, root, x, y, &mut x, &mut y, &mut child);
+            }
+        }
+
+        let window = WindowHandle(x_window);
         let by_user = send_event == x::False;
         let position = Vec2::new(x as _, y as _);
         let size = Extent2::new(width as _, height as _);
 
-        self.push_handled_x_event(*e, 2);
-        self.push_event(Event::WindowMoved { window, position, by_user, });
-        self.push_event(Event::WindowResized { window, size, by_user, })
+        let w = self.weak_windows.borrow()[&x_window].upgrade().unwrap();
+
+        if position != w.prev_pos.get() {
+            if send_event != x::False {
+                self.push_event(Event::WindowMoved { window, position, by_user, });
+            }
+            w.prev_pos.set(position);
+        }
+        if size != w.prev_size.get() {
+            self.push_event(Event::WindowResized { window, size, by_user, });
+            w.prev_size.set(size);
+        }
+        // self.push_handled_x_event(*e, 2); FIXME
     }
     fn pump_x_resize_request_event(&self, e: &mut x::XResizeRequestEvent) {
+        unimplemented!{} // They're evil, we never use them
+        /*
         let &mut x::XResizeRequestEvent {
             type_: _, serial: _, send_event, display: _, window,
             width, height,
@@ -363,6 +413,7 @@ impl X11SharedContext {
 
         self.push_handled_x_event(*e, 1);
         self.push_event(Event::WindowResized { window, size, by_user, })
+        */
     }
 
     fn pump_x_mapping_event(&self, e: &mut x::XMappingEvent) {

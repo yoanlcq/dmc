@@ -45,6 +45,8 @@ pub struct X11SharedWindow {
     pub xic: Option<x::XIC>,
     pub user_cursor: RefCell<Option<X11Cursor>>,
     pub is_cursor_visible: Cell<bool>,
+    pub prev_pos: Cell<Vec2<i32>>,
+    pub prev_size: Cell<Extent2<u32>>,
 }
 
 #[derive(Debug)]
@@ -83,6 +85,8 @@ impl Drop for X11SharedWindow {
             colormap, xic, user_cursor: _,
             is_cursor_visible: _,
             x11_gl_pixel_format: _,
+            prev_pos: _,
+            prev_size: _,
         } = self;
 
         let x_display = context.lock_x_display();
@@ -158,37 +162,45 @@ impl X11Context {
 
         let border_thickness = 0;
         let class = x::InputOutput;
-        let valuemask = x::CWColormap | x::CWEventMask /*x::CWBackPixel |*/;
+        let valuemask = x::CWColormap /*| x::CWEventMask /*x::CWBackPixel |*/*/;
+        let eventmask_sdl2 = {
+             x::FocusChangeMask | x::EnterWindowMask | x::LeaveWindowMask |
+             x::ExposureMask | x::ButtonPressMask | x::ButtonReleaseMask |
+             x::PointerMotionMask | x::KeyPressMask | x::KeyReleaseMask |
+             x::PropertyChangeMask | x::StructureNotifyMask |
+             x::KeymapStateMask /*| fevent*/
+        };
+        let eventmask_dmc = { // Basically, all events. Copy-pasted from /usr/include/x11/X.h
+              x::KeyPressMask
+            | x::KeyReleaseMask
+            | x::ButtonPressMask
+            | x::ButtonReleaseMask
+            | x::EnterWindowMask
+            | x::LeaveWindowMask
+            | x::PointerMotionMask
+            // | x::PointerMotionHintMask // But not this flag, it sucks! >:(
+            | x::Button1MotionMask
+            | x::Button2MotionMask
+            | x::Button3MotionMask
+            | x::Button4MotionMask
+            | x::Button5MotionMask
+            | x::ButtonMotionMask
+            | x::KeymapStateMask
+            | x::ExposureMask
+            | x::VisibilityChangeMask
+            | x::StructureNotifyMask
+            // | x::ResizeRedirectMask // https://www.opengl.org/discussion_boards/showthread.php/164305-help-problems-resizing-GLX-windows
+            // Basically setting this bit screws up OpenGL rendering when resizing windows.
+            | x::SubstructureNotifyMask
+            | x::SubstructureRedirectMask
+            | x::FocusChangeMask
+            | x::PropertyChangeMask
+            | x::ColormapChangeMask
+            | x::OwnerGrabButtonMask
+        };
         let mut swa = x::XSetWindowAttributes {
             colormap,
-            event_mask: { // Basically, all events. Copy-pasted from /usr/include/x11/X.h
-                  x::KeyPressMask
-                | x::KeyReleaseMask
-                | x::ButtonPressMask
-                | x::ButtonReleaseMask
-                | x::EnterWindowMask
-                | x::LeaveWindowMask
-                | x::PointerMotionMask
-                // | x::PointerMotionHintMask // But not this flag, it sucks! >:(
-                | x::Button1MotionMask
-                | x::Button2MotionMask
-                | x::Button3MotionMask
-                | x::Button4MotionMask
-                | x::Button5MotionMask
-                | x::ButtonMotionMask
-                | x::KeymapStateMask
-                | x::ExposureMask
-                | x::VisibilityChangeMask
-                | x::StructureNotifyMask
-                // | x::ResizeRedirectMask // https://www.opengl.org/discussion_boards/showthread.php/164305-help-problems-resizing-GLX-windows
-                // Basically setting this bit screws up OpenGL rendering when resizing windows.
-                | x::SubstructureNotifyMask
-                | x::SubstructureRedirectMask
-                | x::FocusChangeMask
-                | x::PropertyChangeMask
-                | x::ColormapChangeMask
-                | x::OwnerGrabButtonMask
-            },
+            event_mask: 0,
             background_pixmap    : 0,
             background_pixel     : unsafe {
                 x::XWhitePixel(*x_display, 0)
@@ -219,6 +231,10 @@ impl X11Context {
             return failed("XCreateWindow() returned 0");
         }
         trace!("Created X Window {}", x_window);
+
+        unsafe {
+            x::XSelectInput(*x_display, x_window, eventmask_dmc);
+        }
 
         // We're not done: Say which protocols we support, and
         // set our process ID property for _NET_WM_PING.
@@ -313,6 +329,8 @@ impl X11Context {
         let window = X11Window(Rc::new(X11SharedWindow { 
             context, x_window, glx_window, colormap, xic, is_cursor_visible, user_cursor,
             x11_gl_pixel_format,
+            prev_pos: Cell::new(Vec2::new(x, y)),
+            prev_size: Cell::new(Extent2::new(w, h)),
         }));
         match self.weak_windows.borrow_mut().insert(x_window, Rc::downgrade(&window.0)) {
             Some(_) => warn!("Newly created X Window {} was somewhat already present in the context's list", x_window),
@@ -417,6 +435,8 @@ impl X11Context {
         let window = X11Window(Rc::new(X11SharedWindow {
             context, x_window, glx_window, colormap, xic, is_cursor_visible, user_cursor,
             x11_gl_pixel_format: failed("OpenGL is not guaranteed on foreign windows"),
+            prev_pos: unimplemented!(),
+            prev_size: unimplemented!(),
         }));
         self.weak_windows.borrow_mut().insert(x_window, Rc::downgrade(&window.0));
         trace!("Inserted foreign X Window {} into the context's list", x_window);

@@ -510,7 +510,7 @@ impl OsSharedWindow {
         self.position_and_size().map(|ps| ps.extent())
     }
     pub fn canvas_size(&self) -> Result<Extent2<u32>> {
-        unimplemented!()
+        self.size() // FIXME: not true!
     }
 
     fn set_window_pos(&self, r: Rect<i32, u32>, flags: u32) -> Result<()> {

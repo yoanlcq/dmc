@@ -27,9 +27,9 @@ pub enum MouseButton {
     Other(i32),
 }
 
-// On Windows, the XBUTTON1 mouse button is the "Back" variant.
+/// On Windows, the XBUTTON1 mouse button is the "Back" variant.
 pub const XBUTTON1: MouseButton = MouseButton::Back;
-// On Windows, the XBUTTON2 mouse button is the "Forward" variant.
+/// On Windows, the XBUTTON2 mouse button is the "Forward" variant.
 pub const XBUTTON2: MouseButton = MouseButton::Forward;
 
 /// An opaque container for the current state a mouse's buttons.

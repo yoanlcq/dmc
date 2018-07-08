@@ -617,7 +617,7 @@ impl X11SharedContext {
 
     fn pump_xi_device_event(&self, e: &mut xi2::XIDeviceEvent) {
         let &mut xi2::XIDeviceEvent {
-            _type: _, serial: _, send_event: _, display: _, extension: _, evtype,
+            _type: _, serial, send_event, display: _, extension: _, evtype,
             time, deviceid, sourceid, detail, // detail: The button number, key code, touch ID, or 0.
             root, event: x_window, child, // windows
             root_x, root_y, event_x, event_y,
@@ -626,6 +626,7 @@ impl X11SharedContext {
             mods, group, // XKB group and modifiers state
         } = e;
 
+        let x_display = self.lock_x_display();
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
 
         match evtype {
@@ -640,7 +641,64 @@ impl X11SharedContext {
                 self.push_handled_xi2_event(*e, 1);
                 self.push_event(ev);
             },
-            xi2::XI_KeyPress | xi2::XI_KeyRelease => self.push_unhandled_xi2_event(*e),
+            xi2::XI_KeyPress | xi2::XI_KeyRelease => {
+                self.set_net_wm_user_time_for_x_window(x_window, time);
+
+                let keycode = detail as x::KeyCode;
+
+                let get_x_keysym = || unsafe {
+                    let index_into_x_keysyms_list = 0;
+                    match x::XKeycodeToKeysym(*x_display, keycode, index_into_x_keysyms_list) {
+                        sym if sym == x::NoSymbol as _ => None,
+                        sym => Some(sym),
+                    }
+                };
+                let (keysym, text) = match evtype {
+                    xi2::XI_KeyRelease => (get_x_keysym(), None),
+                    xi2::XI_KeyPress => match self.retrieve_window(x_window) {
+                        Err(_) => (get_x_keysym(), None),
+                        Ok(w) => match w.xic {
+                            None => (get_x_keysym(), None),
+                            Some(xic) => {
+                                // Uhh, hey, this actually seems to work!
+                                self.x_utf8_lookup_string(xic, &mut x::XKeyEvent {
+                                    type_: x::KeyPress, serial, send_event, display: *x_display,
+                                    window: x_window, root, subwindow: child,
+                                    time, x: 0, y: 0, x_root: 0, y_root: 0,
+                                    state: mods.effective as _, keycode: keycode as _, same_screen: 1,
+                                })
+                            },
+                        },
+                    },
+                    _ => unreachable!{}
+                };
+
+                let window = WindowHandle(x_window);
+                let keyboard = DeviceID(X11DeviceID::XISlave(sourceid).into());
+                let key = Key {
+                    code: Keycode(keycode),
+                    sym: keysym.map(Keysym::from_x_keysym),
+                };
+
+                let key_ev = match evtype {
+                    xi2::XI_KeyRelease => Event::KeyboardKeyReleased {
+                        keyboard, window, instant, key,
+                    },
+                    xi2::XI_KeyPress => {
+                        let is_repeat = (flags & xi2::XIKeyRepeat) != 0;
+                        let is_text = unsafe {
+                            x::False == x::XFilterEvent(e as *mut _ as _, 0)
+                        };
+                        let text = if is_text { text } else { None };
+                        Event::KeyboardKeyPressed {
+                            keyboard, window, instant, key, is_repeat, text,
+                        }
+                    },
+                    _ => unreachable!{},
+                };
+                self.push_handled_xi2_event(*e, 1);
+                self.push_event(key_ev);
+            },
             xi2::XI_ButtonPress | xi2::XI_ButtonRelease => self.push_unhandled_xi2_event(*e),
             xi2::XI_TouchBegin => self.push_unhandled_xi2_event(*e),
             xi2::XI_TouchUpdate => self.push_unhandled_xi2_event(*e),

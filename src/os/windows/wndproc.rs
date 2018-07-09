@@ -1,5 +1,6 @@
 use std::rc::Weak;
 use std::time::Instant;
+use std::mem;
 use super::{OsSharedContext, OsDeviceID, OsEventInstant};
 use super::winapi_utils as w32;
 use self::w32::{
@@ -10,7 +11,7 @@ use self::w32::{
     ClientToScreen,
 };
 use event::{Event, EventInstant};
-use device::{DeviceID, MouseButton};
+use device::{DeviceID, MouseButton, Key, Keycode};
 use window::WindowHandle;
 use {Vec2, Extent2};
 
@@ -194,7 +195,50 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
                 _ => 0,
             }
         },
-
+        w32::WM_SETFOCUS | w32::WM_KILLFOCUS => {
+            let keyboard = DeviceID(OsDeviceID::MainKeyboard);
+            let window = WindowHandle(hwnd);
+            push_event(hwnd, match msg {
+                w32::WM_SETFOCUS => Event::KeyboardFocusGained { keyboard, window },
+                w32::WM_KILLFOCUS => Event::KeyboardFocusLost { keyboard, window },
+                _ => unreachable!(),
+            });
+            0
+        },
+        w32::WM_KEYDOWN | w32::WM_KEYUP => {
+            let vkey = wparam;
+            let repeat_count = lparam & 0xffff;
+            let scan_code = (lparam >> 16) & 0xff;
+            let _is_extended = ((lparam >> 24) & 1) == 1;
+            let keyboard = DeviceID(OsDeviceID::MainKeyboard);
+            let window = WindowHandle(hwnd);
+            let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
+            let key = Key {
+                code: Keycode(scan_code as _),
+                sym: super::device::keyboard::keysym_from_vkey(vkey as _).into(),
+            };
+            push_event(hwnd, match msg {
+                w32::WM_KEYDOWN => Event::KeyboardKeyPressed { keyboard, window, instant, key, repeat_count: repeat_count as _, },
+                w32::WM_KEYUP => Event::KeyboardKeyReleased { keyboard, window, instant, key },
+                _ => unreachable!(),
+            });
+            0
+        },
+        w32::WM_DEADCHAR => default_window_proc(),
+        w32::WM_CHAR | w32::WM_UNICHAR => if msg == w32::WM_UNICHAR && wparam == w32::UNICODE_NOCHAR {
+            1
+        } else {
+            let repeat_count = lparam & 0xffff;
+            let _scan_code = (lparam >> 16) & 0xff;
+            let _is_extended = ((lparam >> 24) & 1) == 1;
+            let keyboard = DeviceID(OsDeviceID::MainKeyboard);
+            let window = WindowHandle(hwnd);
+            let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
+            if let Some(char) = ::std::char::from_u32(wparam as _) {
+                push_event(hwnd, Event::KeyboardTextChar { keyboard, window, instant, char, repeat_count: repeat_count as _ });
+            }
+            0
+        },
         w32::WM_ACTIVATEAPP
         | w32::WM_CANCELMODE
         | w32::WM_CHILDACTIVATE
@@ -238,13 +282,6 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
         | w32::WM_NCXBUTTONDBLCLK
         | w32::WM_NCXBUTTONDOWN
         | w32::WM_NCXBUTTONUP
-        | w32::WM_SETFOCUS
-        | w32::WM_KILLFOCUS
-        | w32::WM_KEYDOWN
-        | w32::WM_KEYUP
-        | w32::WM_CHAR
-        | w32::WM_DEADCHAR
-        | w32::WM_UNICHAR
         | w32::WM_ACTIVATE
         | w32::WM_SETCURSOR
         | _ => default_window_proc(),

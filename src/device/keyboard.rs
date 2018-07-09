@@ -157,6 +157,7 @@ pub enum Keysym {
     NumLock,
     ScrollLock,
 
+    Plus,
     Minus,
     Equal,
     LeftBrace,
@@ -249,10 +250,10 @@ pub enum Keysym {
     Help,
     Apps,
 
-    OemPlus,
-    OemComma,
-    OemMinus,
-    OemPeriod,
+    ImeConvert,
+    ImeNonConvert,
+    ImeAccept,
+    ImeModeChange,
 
     ZenkakuHankaku,
     Katakana,

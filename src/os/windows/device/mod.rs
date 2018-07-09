@@ -26,6 +26,7 @@ pub mod consts {
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum OsDeviceID {
     MainMouse,
+    MainKeyboard,
 }
 
 #[derive(Debug, Clone, PartialEq)]

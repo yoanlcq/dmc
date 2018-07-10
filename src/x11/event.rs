@@ -471,7 +471,17 @@ impl X11SharedContext {
 
         self.set_net_wm_user_time_for_x_window(window, time);
 
-        let keyboard = self.core_x_keyboard_deviceid();
+        let keyboard = {
+            // The raw counterpart to a KeyEvent is always sent right before it, with the
+            // same timestamp. We can use this to find the keyboard's actual ID, since
+            // we don't use XI_Key* events, for reasons (see src/x11/xi2.rs).
+            let (sourceid, xi_time, xi_keycode) = self.previous_xi_raw_key_event.get();
+            if time == xi_time && xi_keycode == keycode as _ {
+                DeviceID(X11DeviceID::XISlave(sourceid).into())
+            } else {
+                self.core_x_keyboard_deviceid()
+            }
+        };
         let window = WindowHandle(window);
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
         let keycode = keycode as x::KeyCode;
@@ -672,7 +682,11 @@ impl X11SharedContext {
             mods, group, // XKB group and modifiers state
         } = e;
 
-        let x_display = self.lock_x_display();
+        if deviceid == sourceid { // Ignore master device events; To us, they're duplicates of slave device events
+            self.push_unhandled_xi2_event(*e);
+            return;
+        }
+
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
 
         match evtype {
@@ -689,8 +703,9 @@ impl X11SharedContext {
                 self.push_handled_xi2_event(*e, 1);
                 self.push_event(ev);
             },
-            // See src/x11/xi.rs for a rationale
+            // Ignore XI Key events. See src/x11/xi.rs for a rationale.
             xi2::XI_KeyPress | xi2::XI_KeyRelease => self.push_unhandled_xi2_event(*e),
+            // These are to be done
             xi2::XI_ButtonPress | xi2::XI_ButtonRelease => self.push_unhandled_xi2_event(*e),
             xi2::XI_TouchBegin => self.push_unhandled_xi2_event(*e),
             xi2::XI_TouchUpdate => self.push_unhandled_xi2_event(*e),
@@ -700,15 +715,86 @@ impl X11SharedContext {
     }
     fn pump_xi_raw_event(&self, e: &mut xi2::XIRawEvent) {
         let &mut xi2::XIRawEvent {
-            _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
+            _type: _, serial: _, send_event: _, display: _, extension: _, evtype,
             time, deviceid, sourceid, detail,
             flags,
-            valuators, raw_values,
+            valuators, // Accelerated values
+            raw_values, // Unaccelerated values
         } = e;
-        self.push_unhandled_xi2_event(*e);
+
+        if deviceid == sourceid { // Ignore master device events; To us, they're duplicates of slave device events
+            self.push_unhandled_xi2_event(*e);
+            return;
+        }
+
+        let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
+        let valuators_mask = unsafe {
+            slice::from_raw_parts(valuators.mask, valuators.mask_len as _)
+        };
+        let nb_values = {
+            let mut nb_values = 0;
+            for i in 0..valuators.mask_len*8 {
+                if xi2::XIMaskIsSet(valuators_mask, i) {
+                    nb_values = i+1;
+                }
+            }
+            nb_values as usize
+        };
+        let raw_values = unsafe {
+            slice::from_raw_parts(raw_values, nb_values)
+        };
+        let valuators_values = unsafe {
+            slice::from_raw_parts(valuators.values, nb_values)
+        };
+
+        match evtype {
+            xi2::XI_RawMotion => {
+                let has_x = xi2::XIMaskIsSet(valuators_mask, 0);
+                let has_y = xi2::XIMaskIsSet(valuators_mask, 1);
+                if has_x && has_y {
+                    let mouse = DeviceID(X11DeviceID::XISlave(sourceid).into());
+                    let displacement = Vec2::new(valuators_values[0], valuators_values[1]);
+                    let ev = Event::MouseMotionRaw { mouse, instant, displacement };
+                    self.push_handled_xi2_event(*e, 1);
+                    self.push_event(ev);
+                } else {
+                    self.push_unhandled_xi2_event(*e);
+                }
+            },
+            xi2::XI_RawKeyPress | xi2::XI_RawKeyRelease => {
+                let keyboard = DeviceID(X11DeviceID::XISlave(sourceid).into());
+                let keycode = detail as x::KeyCode;
+                let key = Key {
+                    code: Keycode(keycode),
+                    sym: self.x_keycode_to_keysym(keycode, 0).map(Keysym::from_x_keysym),
+                    // The code => sym translation is supposedly keyboard-specific, but I found no API in X11
+                    // that allows doing this (accepting an XInput2 device id).
+                };
+                let ev = match evtype {
+                    xi2::XI_RawKeyPress => Event::KeyboardKeyPressedRaw { keyboard, instant, key },
+                    xi2::XI_RawKeyRelease => Event::KeyboardKeyReleasedRaw { keyboard, instant, key },
+                    _ => unreachable!{},
+                };
+                self.push_handled_xi2_event(*e, 1);
+                self.push_event(ev);
+                self.previous_xi_raw_key_event.set((sourceid, time, keycode));
+            },
+            xi2::XI_RawButtonPress | xi2::XI_RawButtonRelease => self.push_unhandled_xi2_event(*e),
+            xi2::XI_RawTouchBegin => self.push_unhandled_xi2_event(*e),
+            xi2::XI_RawTouchUpdate => self.push_unhandled_xi2_event(*e),
+            xi2::XI_RawTouchEnd => self.push_unhandled_xi2_event(*e),
+            _ => self.push_unhandled_xi2_event(*e),
+        }
     }
 
-
+    pub fn x_keycode_to_keysym(&self, keycode: x::KeyCode, index: c_int) -> Option<x::KeySym> {
+        unsafe {
+            match x::XKeycodeToKeysym(*self.lock_x_display(), keycode, index) {
+                x if x == x::NoSymbol as _ => None,
+                sym => Some(sym),
+            }
+        }
+    }
 
     fn x_key_event_keysym(&self, x_event: &mut x::XKeyEvent, index: c_int) -> Option<x::KeySym> {
         match unsafe { x::XLookupKeysym(x_event, index) } {

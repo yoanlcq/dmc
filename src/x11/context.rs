@@ -127,6 +127,7 @@ pub struct X11SharedContext {
     pub previous_x_key_release_keycode: Cell<x::KeyCode>,
     pub previous_x_key_release_time: Cell<x::Time>,
     pub previous_mouse_position: Cell<Option<Vec2<f64>>>,
+    pub previous_xi_raw_key_event: Cell<(c_int, x::Time, x::KeyCode)>,
 }
 
 impl Deref for X11Context {
@@ -145,6 +146,7 @@ impl Drop for X11SharedContext {
             previous_x_key_release_keycode: _,
             previous_x_key_release_time: _,
             previous_mouse_position: _,
+            previous_xi_raw_key_event: _,
         } = self;
         let x_display = self.lock_x_display();
         unsafe {
@@ -261,6 +263,7 @@ impl X11Context {
             let previous_x_key_release_keycode = Cell::new(x::KeyCode::default());
             let previous_x_key_release_time = Cell::new(x::Time::default());
             let previous_mouse_position = Cell::new(None);
+            let previous_xi_raw_key_event = Cell::default();
             let pending_translated_events = RefCell::new(VecDeque::new());
             let weak_windows = RefCell::new(HashMap::new());
 
@@ -290,6 +293,7 @@ impl X11Context {
                 previous_x_key_release_keycode,
                 previous_x_key_release_time,
                 previous_mouse_position,
+                previous_xi_raw_key_event,
                 x11_owned_display: mem::zeroed(), // Can't move x11_owned_display because it is borrowed
             }
         };

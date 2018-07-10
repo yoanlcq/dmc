@@ -287,6 +287,11 @@ impl X11SharedContext {
             type_, serial: _, send_event: _, display: _, window, root: _, subwindow: _,
             time, x, y, x_root, y_root, mode, detail: _, same_screen: _, focus, state: _,
         } = e;
+
+        if self.xi().is_ok() {
+            return;
+        }
+
         let mouse = self.core_x_mouse_deviceid();
         let window = WindowHandle(window);
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
@@ -318,12 +323,8 @@ impl X11SharedContext {
         let keyboard = self.core_x_keyboard_deviceid();
         let window = WindowHandle(window);
         let ev = match type_ {
-            x::FocusIn => Event::KeyboardFocusGained {
-                keyboard, window,
-            },
-            x::FocusOut => Event::KeyboardFocusLost {
-                keyboard, window,
-            },
+            x::FocusIn => Event::KeyboardFocusGained { keyboard, window, },
+            x::FocusOut => Event::KeyboardFocusLost { keyboard, window, },
             _ => unreachable!{},
         };
         self.push_handled_x_event(*e, 1);
@@ -655,13 +656,44 @@ impl X11SharedContext {
     }
     fn pump_xi_enter_event(&self, e: &mut xi2::XIEnterEvent) {
         let &mut xi2::XIEnterEvent {
-            _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
+            _type: _, serial: _, send_event: _, display: _, extension: _, evtype,
             time, deviceid, sourceid, detail, root, event: x_window, child,
             root_x, root_y,
             event_x, event_y,
             mode, focus, same_screen, buttons, mods, group,
         } = e;
-        self.push_unhandled_xi2_event(*e);
+
+        if deviceid == sourceid { // Ignore master device events; To us, they're duplicates of slave device events
+            self.push_unhandled_xi2_event(*e);
+            return;
+        }
+
+        let keyboard = DeviceID(X11DeviceID::XISlave(sourceid).into());
+        let mouse = keyboard; // Yes, absolutely
+        let window = WindowHandle(x_window);
+        let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
+        let position = Vec2::new(event_x, event_y);
+        let root_position = Vec2::new(root_x, root_y);
+        let is_focused = focus == x::True;
+        let was_focused = is_focused;
+        let motion = Event::MouseMotion { mouse, window, instant, position, root_position };
+        self.previous_mouse_position.set(Some(position));
+        let (is_grabbed, was_grabbed) = match mode {
+            xi2::XINotifyNormal => (false, false),
+            xi2::XINotifyGrab => (true, false),
+            xi2::XINotifyUngrab => (false, true),
+            _ => unreachable!{},
+        };
+        let ev = match evtype {
+            xi2::XI_Enter => Event::MouseEnter { mouse, window, instant, is_grabbed, is_focused },
+            xi2::XI_Leave => Event::MouseLeave { mouse, window, instant, was_grabbed, was_focused },
+            xi2::XI_FocusIn => Event::KeyboardFocusGained { keyboard, window, },
+            xi2::XI_FocusOut => Event::KeyboardFocusLost { keyboard, window, },
+            _ => unreachable!{},
+        };
+        self.push_handled_xi2_event(*e, 2);
+        self.push_event(motion);
+        self.push_event(ev);
     }
     fn pump_xi_property_event(&self, e: &mut xi2::XIPropertyEvent) {
         let &mut xi2::XIPropertyEvent {

@@ -499,6 +499,12 @@ impl X11SharedContext {
             root_position: Vec2::new(x_root as _, y_root as _),
         };
 
+        let is_repeat = {
+            self.previous_x_key_release_time.get() == time
+         && self.previous_x_key_release_keycode.get() == keycode
+        };
+        let repeat_count = 1;
+
         let key_ev = match type_ {
             x::KeyRelease => {
                 self.previous_x_key_release_time.set(time);
@@ -508,23 +514,39 @@ impl X11SharedContext {
                 }
             },
             x::KeyPress => {
-                let is_repeat = {
-                    self.previous_x_key_release_time.get() == time
-                 && self.previous_x_key_release_keycode.get() == keycode
-                };
-                let is_text = unsafe {
-                    x::False == x::XFilterEvent(e as *mut _ as _, 0)
-                };
-                let text = if is_text { text } else { None };
                 Event::KeyboardKeyPressed {
-                    keyboard, window, instant, key, is_repeat, text,
+                    keyboard, window, instant, key, is_repeat, repeat_count,
                 }
             },
             _ => unreachable!{},
         };
-        self.push_handled_x_event(&*e, 2);
+
+        let mut nb_events = 2;
+
+        let text_ev = if type_ == x::KeyPress {
+            let is_text = unsafe {
+                x::False == x::XFilterEvent(e as *mut _ as _, 0)
+            };
+            if is_text {
+                if let Some(text) = text { // Should be unwrap(), but being careful doesn't hurt I guess
+                    nb_events += 1;
+                    Some(Event::KeyboardTextString { keyboard, window, instant, is_repeat, repeat_count, text})
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        self.push_handled_x_event(&*e, nb_events);
         self.push_event(mouse_ev);
         self.push_event(key_ev);
+        if let Some(text_ev) = text_ev {
+            self.push_event(text_ev);
+        }
     }
 
     fn pump_x_button_event(&self, e: &mut x::XButtonEvent) {
@@ -646,28 +668,23 @@ impl X11SharedContext {
 
                 let keycode = detail as x::KeyCode;
 
-                let get_x_keysym = || unsafe {
-                    let index_into_x_keysyms_list = 0;
-                    match x::XKeycodeToKeysym(*x_display, keycode, index_into_x_keysyms_list) {
-                        sym if sym == x::NoSymbol as _ => None,
-                        sym => Some(sym),
-                    }
+                let fake_x_key_event = &mut x::XKeyEvent {
+                    type_: if evtype == xi2::XI_KeyPress { x::KeyPress } else { x::KeyRelease },
+                    serial, send_event, display: *x_display,
+                    window: x_window, root, subwindow: child,
+                    time, x: 0, y: 0, x_root: 0, y_root: 0,
+                    state: mods.effective as _, keycode: keycode as _, same_screen: 1,
+                    // ^ XXX: Is this the correct state to send?
                 };
+
+                let index_into_x_keysyms_list = 0;
                 let (keysym, text) = match evtype {
-                    xi2::XI_KeyRelease => (get_x_keysym(), None),
+                    xi2::XI_KeyRelease => (self.x_key_event_keysym(fake_x_key_event, index_into_x_keysyms_list), None),
                     xi2::XI_KeyPress => match self.retrieve_window(x_window) {
-                        Err(_) => (get_x_keysym(), None),
+                        Err(_) => (self.x_key_event_keysym(fake_x_key_event, index_into_x_keysyms_list), None),
                         Ok(w) => match w.xic {
-                            None => (get_x_keysym(), None),
-                            Some(xic) => {
-                                // Uhh, hey, this actually seems to work!
-                                self.x_utf8_lookup_string(xic, &mut x::XKeyEvent {
-                                    type_: x::KeyPress, serial, send_event, display: *x_display,
-                                    window: x_window, root, subwindow: child,
-                                    time, x: 0, y: 0, x_root: 0, y_root: 0,
-                                    state: mods.effective as _, keycode: keycode as _, same_screen: 1,
-                                })
-                            },
+                            None => (self.x_key_event_keysym(fake_x_key_event, index_into_x_keysyms_list), None),
+                            Some(xic) => self.x_utf8_lookup_string(xic, fake_x_key_event),
                         },
                     },
                     _ => unreachable!{}
@@ -680,24 +697,46 @@ impl X11SharedContext {
                     sym: keysym.map(Keysym::from_x_keysym),
                 };
 
+                let is_repeat = (flags & xi2::XIKeyRepeat) != 0;
+                let repeat_count = 1;
+
                 let key_ev = match evtype {
                     xi2::XI_KeyRelease => Event::KeyboardKeyReleased {
                         keyboard, window, instant, key,
                     },
                     xi2::XI_KeyPress => {
-                        let is_repeat = (flags & xi2::XIKeyRepeat) != 0;
-                        let is_text = unsafe {
-                            x::False == x::XFilterEvent(e as *mut _ as _, 0)
-                        };
-                        let text = if is_text { text } else { None };
                         Event::KeyboardKeyPressed {
-                            keyboard, window, instant, key, is_repeat, text,
+                            keyboard, window, instant, key, is_repeat, repeat_count,
                         }
                     },
                     _ => unreachable!{},
                 };
-                self.push_handled_xi2_event(*e, 1);
+
+                let mut nb_events = 1;
+
+                let text_ev = if evtype == xi2::XI_KeyPress {
+                    let is_text = unsafe {
+                        x::False == x::XFilterEvent(fake_x_key_event as *mut _ as _, 0)
+                    };
+                    if is_text {
+                        if let Some(text) = text { // Should be unwrap(), but being careful doesn't hurt I guess
+                            nb_events += 1;
+                            Some(Event::KeyboardTextString { keyboard, window, instant, is_repeat, repeat_count, text})
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                self.push_handled_xi2_event(*e, nb_events);
                 self.push_event(key_ev);
+                if let Some(text_ev) = text_ev {
+                    self.push_event(text_ev);
+                }
             },
             xi2::XI_ButtonPress | xi2::XI_ButtonRelease => self.push_unhandled_xi2_event(*e),
             xi2::XI_TouchBegin => self.push_unhandled_xi2_event(*e),

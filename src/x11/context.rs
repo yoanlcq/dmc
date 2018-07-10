@@ -13,7 +13,7 @@ use desktop::Desktop;
 use error::{Result, failed};
 use event::Event;
 use os::OsContext;
-use Rect;
+use {Rect, Vec2};
 
 use super::x11::xlib as x;
 use super::atoms;
@@ -126,6 +126,7 @@ pub struct X11SharedContext {
     // These two fields are used to detect key repeat events.
     pub previous_x_key_release_keycode: Cell<x::KeyCode>,
     pub previous_x_key_release_time: Cell<x::Time>,
+    pub previous_mouse_position: Cell<Option<Vec2<f64>>>,
 }
 
 impl Deref for X11Context {
@@ -143,6 +144,7 @@ impl Drop for X11SharedContext {
             pending_translated_events: _,
             previous_x_key_release_keycode: _,
             previous_x_key_release_time: _,
+            previous_mouse_position: _,
         } = self;
         let x_display = self.lock_x_display();
         unsafe {
@@ -258,6 +260,7 @@ impl X11Context {
 
             let previous_x_key_release_keycode = Cell::new(x::KeyCode::default());
             let previous_x_key_release_time = Cell::new(x::Time::default());
+            let previous_mouse_position = Cell::new(None);
             let pending_translated_events = RefCell::new(VecDeque::new());
             let weak_windows = RefCell::new(HashMap::new());
 
@@ -286,6 +289,7 @@ impl X11Context {
                 weak_windows, pending_translated_events,
                 previous_x_key_release_keycode,
                 previous_x_key_release_time,
+                previous_mouse_position,
                 x11_owned_display: mem::zeroed(), // Can't move x11_owned_display because it is borrowed
             }
         };

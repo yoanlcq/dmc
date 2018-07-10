@@ -30,8 +30,9 @@ impl X11SharedContext {
                 &[
                     xi2::XI_ButtonPress,
                     xi2::XI_ButtonRelease,
-                    xi2::XI_KeyPress,
-                    xi2::XI_KeyRelease,
+                    // xi2::XI_KeyPress, // Do not subscribe to XI_KeyPress; It replaces core
+                    // KeyPress events, which we have to rely on to get proper results with XUtf8LookupString (especielly with compose, e.g "^e" => "ê")
+                    // xi2::XI_KeyRelease,
                     xi2::XI_Motion,
                     xi2::XI_DeviceChanged,
                     xi2::XI_Enter,

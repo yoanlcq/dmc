@@ -209,7 +209,7 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
             let vkey = wparam;
             let repeat_count = lparam & 0xffff;
             let scan_code = (lparam >> 16) & 0xff;
-            let _is_extended = ((lparam >> 24) & 1) == 1;
+            let is_repeat = ((lparam >> 30) & 1) != 0;
             let keyboard = DeviceID(OsDeviceID::MainKeyboard);
             let window = WindowHandle(hwnd);
             let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
@@ -218,7 +218,7 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
                 sym: super::device::keyboard::keysym_from_vkey(vkey as _).into(),
             };
             push_event(hwnd, match msg {
-                w32::WM_KEYDOWN => Event::KeyboardKeyPressed { keyboard, window, instant, key, repeat_count: repeat_count as _, },
+                w32::WM_KEYDOWN => Event::KeyboardKeyPressed { keyboard, window, instant, key, is_repeat, repeat_count: repeat_count as _, },
                 w32::WM_KEYUP => Event::KeyboardKeyReleased { keyboard, window, instant, key },
                 _ => unreachable!(),
             });
@@ -229,13 +229,12 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
             1
         } else {
             let repeat_count = lparam & 0xffff;
-            let _scan_code = (lparam >> 16) & 0xff;
-            let _is_extended = ((lparam >> 24) & 1) == 1;
+            let is_repeat = ((lparam >> 30) & 1) != 0;
             let keyboard = DeviceID(OsDeviceID::MainKeyboard);
             let window = WindowHandle(hwnd);
             let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
             if let Some(char) = ::std::char::from_u32(wparam as _) {
-                push_event(hwnd, Event::KeyboardTextChar { keyboard, window, instant, char, repeat_count: repeat_count as _ });
+                push_event(hwnd, Event::KeyboardTextChar { keyboard, window, instant, char, is_repeat, repeat_count: repeat_count as _ });
             }
             0
         },

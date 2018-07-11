@@ -30,6 +30,7 @@ pub struct OsSharedWindow {
     pub min_size: Cell<Option<Extent2<u32>>>,
     pub max_size: Cell<Option<Extent2<u32>>>,
     pub is_movable: Cell<bool>,
+    pub is_mouse_outside: Cell<bool>,
 }
 
 #[derive(Debug)]
@@ -48,7 +49,7 @@ impl Drop for OsSharedWindow {
             ref context, class_atom, hwnd, 
             own_dc: _, // Destroyed with the window. DO NOT destroy it manually because it will fail.
             ref hicon,
-            min_size: _, max_size: _, is_movable: _,
+            min_size: _, max_size: _, is_movable: _, is_mouse_outside: _,
         } = self;
 
         match context.weak_windows.borrow_mut().remove(&hwnd) {
@@ -118,12 +119,14 @@ impl OsContext {
                 min_size: Cell::new(None),
                 max_size: Cell::new(None),
                 is_movable: Cell::new(true),
+                is_mouse_outside: Cell::new(true), // XXX not correct?
             };
             if let Some(opengl) = opengl.as_ref() {
                 let pf = os_window.choose_gl_pixel_format(*opengl)?;
                 os_window.set_pixel_format(&pf)?;
             }
 
+            let _ = os_window.call_track_mouse_event();
             let os_window = Rc::new(os_window);
             self.weak_windows.borrow_mut().insert(hwnd, Rc::downgrade(&os_window));
             Ok(OsWindow(os_window))
@@ -156,10 +159,28 @@ impl OsContext {
                     min_size: Cell::new(min_size),
                     max_size: Cell::new(max_size),
                     is_movable: Cell::new(is_movable),
+                    is_mouse_outside: Cell::new(true),
                 };
+                let _ = os_window.call_track_mouse_event();
                 Ok(OsWindow(Rc::new(os_window)))
             },
         }
+    }
+}
+
+pub fn call_track_mouse_event(hwnd: HWND) -> Result<()> {
+    let is_ok = unsafe {
+        TrackMouseEvent(&mut TRACKMOUSEEVENT {
+            cbSize: mem::size_of::<TRACKMOUSEEVENT>() as _,
+            dwFlags: TME_LEAVE,
+            hwndTrack: hwnd,
+            dwHoverTime: 1, // or HOVER_DEFAULT which is ~400ms
+        })
+    };
+    if is_ok == 0 {
+        winapi_fail("TrackMouseEvent")
+    } else {
+        Ok(())
     }
 }
 
@@ -169,6 +190,9 @@ impl OsSharedWindow {
     }
     pub fn handle(&self) -> WindowHandle {
         WindowHandle(self.hwnd)
+    }
+    pub fn call_track_mouse_event(&self) -> Result<()> {
+        call_track_mouse_event(self.hwnd)
     }
     pub fn set_title(&self, title: &str) -> Result<()> {
         let is_ok = unsafe {

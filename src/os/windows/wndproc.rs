@@ -1,7 +1,6 @@
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 use std::time::Instant;
-use std::mem;
-use super::{OsSharedContext, OsDeviceID, OsEventInstant};
+use super::{OsSharedContext, OsSharedWindow, OsDeviceID, OsEventInstant};
 use super::winapi_utils as w32;
 use self::w32::{
     HWND, UINT, WPARAM, LPARAM, LRESULT, DefWindowProcW,
@@ -29,6 +28,21 @@ fn push_event(hwnd: HWND, ev: Event) {
         Some(strong) => strong,
     };
     context.push_event(ev);
+}
+
+fn retrieve_window(hwnd: HWND) -> Option<Rc<OsSharedWindow>> {
+    let weak = match unsafe { CONTEXT.as_ref() } {
+        None => return None,
+        Some(weak) => weak,
+    };
+    let context = match weak.upgrade() {
+        None => return None,
+        Some(strong) => strong,
+    };
+    let out = { // Urgh thanks borrow checker
+        context.weak_windows.borrow().get(&hwnd).map(Weak::upgrade).unwrap_or(None)
+    };
+    out
 }
 
 pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -111,12 +125,33 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
             0
         },
         //Sent when the cursor is in an inactive window and the user presses a mouse button
-        w32::WM_MOUSEACTIVATE
-        // Posted to a window when the cursor hovers over the client area of the window for the period of time specified in a prior call to TrackMouseEvent.
-        | w32::WM_MOUSEHOVER
-        // Posted to a window when the cursor leaves the client area of the window specified in a prior call to TrackMouseEvent.
-        | w32::WM_MOUSELEAVE => {
-            unimplemented!()
+        w32::WM_MOUSEACTIVATE => default_window_proc(),
+        w32::WM_MOUSEHOVER => {
+            let _ = super::window::call_track_mouse_event(hwnd);
+            default_window_proc()
+            /*
+            let x = GET_X_LPARAM(lparam); 
+            let y = GET_Y_LPARAM(lparam); 
+            let root_position = get_root_position(x, y);
+            let mouse = DeviceID(OsDeviceID::MainMouse);
+            let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
+            let window = WindowHandle(hwnd);
+            push_event(hwnd, Event::MouseEnter { mouse, instant, window, is_focused: false, is_grabbed: false, });
+            push_event(hwnd, Event::MouseMotion { mouse, window, instant, position: Vec2::new(x as _, y as _), root_position });
+            let _ = super::window::call_track_mouse_event(hwnd);
+            0
+            */
+        },
+        w32::WM_MOUSELEAVE => {
+            // lparam and wparam are not used and must be zero
+            let mouse = DeviceID(OsDeviceID::MainMouse);
+            let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
+            let window = WindowHandle(hwnd);
+            push_event(hwnd, Event::MouseLeave { mouse, instant, window, was_focused: false, was_grabbed: false, });
+            retrieve_window(hwnd).unwrap().is_mouse_outside.set(true);
+            // DO NOT call
+            // let _ = super::window::call_track_mouse_event(hwnd);
+            0
         },
         w32::WM_MOUSEMOVE => {
             let x = GET_X_LPARAM(lparam);
@@ -125,6 +160,10 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
             let window = WindowHandle(hwnd);
             let instant = EventInstant(OsEventInstant::Wndproc(Instant::now()));
             let root_position = get_root_position(x, y);
+            if retrieve_window(hwnd).unwrap().is_mouse_outside.replace(false) {
+                push_event(hwnd, Event::MouseEnter { mouse, instant, window, is_focused: false, is_grabbed: false, });
+                let _ = super::window::call_track_mouse_event(hwnd);
+            }
             push_event(hwnd, Event::MouseMotion { mouse, window, instant, position: Vec2::new(x as _, y as _), root_position });
             0
         },

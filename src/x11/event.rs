@@ -577,6 +577,24 @@ impl X11SharedContext {
         }
     }
 
+    fn x11_button_to_mousebutton_or_scroll(button: u32) -> (Option<MouseButton>, Option<Vec2<i32>>) {
+        // http://xahlee.info/linux/linux_x11_mouse_button_number.html
+        // On my R.A.T 7, 10 is right scroll and 11 is left scroll (using thumb barrel).
+        // Pretty sure it's not standard though.
+        match button {
+            1 => (Some(MouseButton::Left), None),
+            2 => (Some(MouseButton::Middle), None),
+            3 => (Some(MouseButton::Right), None),
+            4 => (None, Some(Vec2::new(0,  1))),
+            5 => (None, Some(Vec2::new(0, -1))),
+            6 => (None, Some(Vec2::new(-1, 0))),
+            7 => (None, Some(Vec2::new( 1, 0))),
+            8 => (Some(MouseButton::Back), None),
+            9 => (Some(MouseButton::Forward), None),
+            b => (Some(MouseButton::Other(b as _)), None),
+        }
+    }
+
     fn pump_x_button_event(&self, e: &mut x::XButtonEvent) {
         let &mut x::XButtonEvent {
             type_, serial: _, send_event: _, display: _, window, root: _, subwindow: _,
@@ -591,21 +609,7 @@ impl X11SharedContext {
         let position = Vec2::new(x as _, y as _);
         let root_position = Vec2::new(x_root as _, y_root as _);
 
-        // http://xahlee.info/linux/linux_x11_mouse_button_number.html
-        // On my R.A.T 7, 10 is right scroll and 11 is left scroll (using thumb barrel).
-        // Pretty sure it's not standard though.
-        let (button, scroll) = match button {
-            1 => (Some(MouseButton::Left), None),
-            2 => (Some(MouseButton::Middle), None),
-            3 => (Some(MouseButton::Right), None),
-            4 => (None, Some(Vec2::new(0,  1))),
-            5 => (None, Some(Vec2::new(0, -1))),
-            6 => (None, Some(Vec2::new(-1, 0))),
-            7 => (None, Some(Vec2::new( 1, 0))),
-            8 => (Some(MouseButton::Back), None),
-            9 => (Some(MouseButton::Forward), None),
-            b => (Some(MouseButton::Other(b as _)), None),
-        };
+        let (button, scroll) = Self::x11_button_to_mousebutton_or_scroll(button);
         let motion = if self.previous_mouse_position.replace(Some(position)) == Some(position) {
             None
         } else {
@@ -628,7 +632,7 @@ impl X11SharedContext {
                 Some(ev)
             },
         };
-        let mut nb_events = motion.is_some() as usize + ev.is_some() as usize;
+        let nb_events = motion.is_some() as usize + ev.is_some() as usize;
         if nb_events > 0 {
             self.push_handled_x_event(&*e, nb_events);
             if let Some(motion) = motion {
@@ -720,16 +724,19 @@ impl X11SharedContext {
         }
 
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
+        let position = Vec2::new(event_x, event_y);
+        let root_position = Vec2::new(root_x, root_y);
+        let window = WindowHandle(x_window);
+        let slave_device_id = DeviceID(X11DeviceID::XISlave(sourceid).into());
 
         match evtype {
             xi2::XI_Motion => {
-                let position = Vec2::new(event_x, event_y);
                 let ev = Event::MouseMotion {
-                    mouse: DeviceID(X11DeviceID::XISlave(sourceid).into()),
+                    mouse: slave_device_id,
                     instant,
-                    window: WindowHandle(x_window),
+                    window,
                     position,
-                    root_position: Vec2::new(root_x, root_y),
+                    root_position,
                 };
                 self.previous_mouse_position.set(Some(position));
                 self.push_handled_xi2_event(*e, 1);
@@ -737,8 +744,46 @@ impl X11SharedContext {
             },
             // Ignore XI Key events. See src/x11/xi.rs for a rationale.
             xi2::XI_KeyPress | xi2::XI_KeyRelease => self.push_unhandled_xi2_event(*e),
+            // ----
+            xi2::XI_ButtonPress | xi2::XI_ButtonRelease => {
+                self.set_net_wm_user_time_for_x_window(x_window, time);
+
+                let mouse = slave_device_id;
+                let (button, scroll) = Self::x11_button_to_mousebutton_or_scroll(detail as _);
+                let motion = if self.previous_mouse_position.replace(Some(position)) == Some(position) {
+                    None
+                } else {
+                    Some(Event::MouseMotion { mouse, window, instant, position, root_position })
+                };
+
+                let ev = match scroll {
+                    Some(scroll) => match evtype {
+                        xi2::XI_ButtonPress => Some(Event::MouseScroll { mouse, window, instant, scroll: scroll.map(|x| x as _), }),
+                        xi2::XI_ButtonRelease => None, // Ignore button release events when it's a scroll button
+                        _ => unreachable!{},
+                    },
+                    None => {
+                        let button = button.unwrap();
+                        let ev = match evtype {
+                            xi2::XI_ButtonPress => Event::MouseButtonPressed { mouse, window, instant, button, clicks: None },
+                            xi2::XI_ButtonRelease => Event::MouseButtonReleased { mouse, window, instant, button },
+                            _ => unreachable!{},
+                        };
+                        Some(ev)
+                    },
+                };
+                let nb_events = motion.is_some() as usize + ev.is_some() as usize;
+                if nb_events > 0 {
+                    self.push_handled_xi2_event(*e, nb_events);
+                    if let Some(motion) = motion {
+                        self.push_event(motion);
+                    }
+                    if let Some(ev) = ev {
+                        self.push_event(ev);
+                    }
+                }
+            },
             // These are to be done
-            xi2::XI_ButtonPress | xi2::XI_ButtonRelease => self.push_unhandled_xi2_event(*e),
             xi2::XI_TouchBegin => self.push_unhandled_xi2_event(*e),
             xi2::XI_TouchUpdate => self.push_unhandled_xi2_event(*e),
             xi2::XI_TouchEnd => self.push_unhandled_xi2_event(*e),

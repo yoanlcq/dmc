@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+#[allow(non_upper_case_globals)]
 pub mod x {
     pub const QueuedAlready     : i32 = 0;
     pub const QueuedAfterReading: i32 = 1;

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::context::X11SharedContext;
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
-use super::{X11SharedWindow, X11DeviceID, missing_bits};
+use super::{X11SharedWindow, X11DeviceID};
 use os::{OsEventInstant};
 use error::{Result, failed};
 use event::{Event, EventInstant, UnprocessedEvent};
@@ -465,12 +465,40 @@ impl X11SharedContext {
     }
 
     fn pump_x_key_event(&self, e: &mut x::XKeyEvent) {
+        // First of all, check if it is a key repeat event.
+        // We detect this when a KeyRelease event is diretcly followed by a KeyPress, both having the exact same time.
+        let mut is_repeat = false;
+        if e.type_ == x::KeyRelease && self.x_pending() > 0 {
+            let x_display = self.lock_x_display();
+
+            // Peek (don't remove) event from the queue.
+            let mut next_ev = unsafe { 
+                let mut next_ev = mem::zeroed();
+                x::XPeekEvent(*x_display, &mut next_ev);
+                next_ev
+            };
+            if unsafe { next_ev.type_ } == x::KeyPress {
+                let next_ev: &mut x::XKeyEvent = next_ev.as_mut();
+
+                if next_ev.time == e.time && next_ev.keycode == e.keycode {
+                    is_repeat = true;
+                    // We've proved it as a key repeat. We're handling this ourselves, so remove
+                    // it from the queue.
+                    unsafe {
+                        x::XNextEvent(*x_display, next_ev as *mut _ as _);
+                    }
+                    *e = *next_ev;
+                }
+            }
+        }
+
         let &mut x::XKeyEvent {
             type_, serial: _, send_event: _, display: _, window, root: _, subwindow: _,
             time, x, y, x_root, y_root, state: _, keycode, same_screen: _,
         } = e;
 
         self.set_net_wm_user_time_for_x_window(window, time);
+
 
         let keyboard = {
             // The raw counterpart to a KeyEvent is always sent right before it, with the
@@ -518,32 +546,14 @@ impl X11SharedContext {
             })
         };
 
-        let is_repeat = {
-            self.previous_x_key_release_time.get() == time
-         && self.previous_x_key_release_keycode.get() == keycode
-        };
         let repeat_count = 1;
 
         let key_ev = match type_ {
-            x::KeyRelease => {
-                self.previous_x_key_release_time.set(time);
-                self.previous_x_key_release_keycode.set(keycode);
-                Event::KeyboardKeyReleased {
-                    keyboard, window, instant, key,
-                }
-            },
-            x::KeyPress => {
-                Event::KeyboardKeyPressed {
-                    keyboard, window, instant, key, is_repeat, repeat_count,
-                }
-            },
+            x::KeyRelease => Event::KeyboardKeyReleased { keyboard, window, instant, key },
+            x::KeyPress => Event::KeyboardKeyPressed { keyboard, window, instant, key, is_repeat, repeat_count },
             _ => unreachable!{},
         };
-        let key_ev = if keycode == 0 {
-            None
-        } else {
-            Some(key_ev)
-        };
+        let key_ev = if keycode == 0 { None } else { Some(key_ev) };
 
         let text_ev = if type_ == x::KeyPress {
             let is_text = unsafe {

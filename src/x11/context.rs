@@ -124,8 +124,6 @@ pub struct X11SharedContext {
     pub weak_windows: RefCell<HashMap<x::Window, Weak<X11SharedWindow>>>,
     pub pending_translated_events: RefCell<VecDeque<Event>>,
     // These two fields are used to detect key repeat events.
-    pub previous_x_key_release_keycode: Cell<x::KeyCode>,
-    pub previous_x_key_release_time: Cell<x::Time>,
     pub previous_mouse_position: Cell<Option<Vec2<f64>>>,
     pub previous_xi_raw_key_event: Cell<(c_int, x::Time, x::KeyCode)>,
 }
@@ -143,8 +141,6 @@ impl Drop for X11SharedContext {
             x11_owned_display: _, xim, atoms: _, xrender: _, xi: _, glx: _,
             invisible_x_cursor, default_x_cursor, weak_windows: _,
             pending_translated_events: _,
-            previous_x_key_release_keycode: _,
-            previous_x_key_release_time: _,
             previous_mouse_position: _,
             previous_xi_raw_key_event: _,
         } = self;
@@ -260,8 +256,6 @@ impl X11Context {
             trace!("X server vendor: `{}`, release {}", server_vendor, vendor_release);
             trace!("X server screen count: {}", screen_count);
 
-            let previous_x_key_release_keycode = Cell::new(x::KeyCode::default());
-            let previous_x_key_release_time = Cell::new(x::Time::default());
             let previous_mouse_position = Cell::new(None);
             let previous_xi_raw_key_event = Cell::default();
             let pending_translated_events = RefCell::new(VecDeque::new());
@@ -290,8 +284,6 @@ impl X11Context {
             X11SharedContext {
                 xim, atoms, xrender, xi, glx, invisible_x_cursor, default_x_cursor,
                 weak_windows, pending_translated_events,
-                previous_x_key_release_keycode,
-                previous_x_key_release_time,
                 previous_mouse_position,
                 previous_xi_raw_key_event,
                 x11_owned_display: mem::zeroed(), // Can't move x11_owned_display because it is borrowed

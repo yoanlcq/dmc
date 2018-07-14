@@ -301,7 +301,7 @@ pub enum Event {
     MouseMotion            { mouse: DeviceID, window: WindowHandle, instant: EventInstant, position: Vec2<f64>, root_position: Vec2<f64>, },
     MouseButtonPressedRaw  { mouse: DeviceID, instant: EventInstant, button: MouseButton, },
     MouseButtonReleasedRaw { mouse: DeviceID, instant: EventInstant, button: MouseButton, },
-    MouseScrollRaw         { mouse: DeviceID, instant: EventInstant, scroll: Vec2<i32>, },
+    MouseScrollRaw         { mouse: DeviceID, instant: EventInstant, scroll: Vec2<f64>, },
     MouseMotionRaw         { mouse: DeviceID, instant: EventInstant, displacement: Vec2<f64>, },
 
     // Keyboard

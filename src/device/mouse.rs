@@ -17,6 +17,8 @@ pub enum MouseButton {
     Right,
     /// The side button, whatever it means to the platform, if any.
     Side,
+    /// The extra button, whatever it means to the platform, if any.
+    Extra,
     /// The "task" button, whatever it means to the platform, if any.
     Task,
     /// The "forward navigation" button, if any.

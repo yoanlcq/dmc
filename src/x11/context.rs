@@ -16,9 +16,11 @@ use os::OsContext;
 use {Rect, Vec2};
 
 use super::x11::xlib as x;
+use super::x11::xinput2 as xi2;
 use super::atoms;
 use super::prop::{self, PropType, PropElement, PropData};
 use super::xrender;
+use super::device::{XI2DeviceCache};
 use super::xi;
 use super::glx;
 use super::X11SharedWindow;
@@ -126,6 +128,7 @@ pub struct X11SharedContext {
     // These two fields are used to detect key repeat events.
     pub previous_mouse_position: Cell<Option<Vec2<f64>>>,
     pub previous_xi_raw_key_event: Cell<(c_int, x::Time, x::KeyCode)>,
+    pub xi2_devices: RefCell<HashMap<c_int, XI2DeviceCache>>,
 }
 
 impl Deref for X11Context {
@@ -143,6 +146,7 @@ impl Drop for X11SharedContext {
             pending_translated_events: _,
             previous_mouse_position: _,
             previous_xi_raw_key_event: _,
+            xi2_devices: _,
         } = self;
         let x_display = self.lock_x_display();
         unsafe {
@@ -256,11 +260,6 @@ impl X11Context {
             trace!("X server vendor: `{}`, release {}", server_vendor, vendor_release);
             trace!("X server screen count: {}", screen_count);
 
-            let previous_mouse_position = Cell::new(None);
-            let previous_xi_raw_key_event = Cell::default();
-            let pending_translated_events = RefCell::new(VecDeque::new());
-            let weak_windows = RefCell::new(HashMap::new());
-
             init_all_extensions(*x_display);
 
             let atoms = atoms::PreloadedAtoms::load(*x_display)?; // Sneaky return, watch out for unmanaged resources created before this line!
@@ -281,11 +280,30 @@ impl X11Context {
                     Some(xim)
                 }
             };
+
+            let previous_mouse_position = Cell::new(None);
+            let previous_xi_raw_key_event = Cell::default();
+            let pending_translated_events = RefCell::new(VecDeque::new());
+            let weak_windows = RefCell::new(HashMap::new());
+            let xi2_devices = RefCell::new(super::device::xi2_query_device_info(*x_display, xi2::XIAllDevices, &atoms)
+                .unwrap()
+                .into_iter()
+                .map(|(deviceid, info)| {
+                    let props = atoms.interesting_xi2_props()
+                        .iter()
+                        .filter_map(|k| super::device::xi2_get_device_property(*x_display, deviceid, *k).ok().map(|v| (k, v)))
+                        .filter_map(|(k, v)| v.map(|v| (*k, v)))
+                        .collect();
+                    (deviceid, XI2DeviceCache { info, props })
+                })
+                .collect());
+
             X11SharedContext {
                 xim, atoms, xrender, xi, glx, invisible_x_cursor, default_x_cursor,
                 weak_windows, pending_translated_events,
                 previous_mouse_position,
                 previous_xi_raw_key_event,
+                xi2_devices,
                 x11_owned_display: mem::zeroed(), // Can't move x11_owned_display because it is borrowed
             }
         };

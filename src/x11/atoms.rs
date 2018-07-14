@@ -1,32 +1,48 @@
 use std::os::raw::c_char;
+use std::ffi::CStr;
 use super::x11::xlib as x;
 use super::xlib_error;
 use error::{Result, failed};
 
 /// Generate this module's `PreparedAtoms` struct, where all atoms are retrieved
-/// once when opening a display.
+/// once after opening a display.
 macro_rules! atoms {
     ($($atom:ident => $name:expr,)+) => {
-        #[repr(C)]
+        #[repr(C)] // Passed directly as array of Atoms to XInternAtoms()
         #[allow(non_snake_case)]
         #[derive(Debug, Default, Clone, Hash, PartialEq, Eq)]
         pub struct PreloadedAtoms {
-            $($atom: x::Atom,)+
+            $($atom: x::Atom,)+ // Make sure the atom fields come first!
+            interesting_xi2_props: Vec<x::Atom>,
         }
         const ATOM_NAMES: &'static [*const c_char] = &[
             $($name as *const _ as *const c_char,)+
         ];
         #[allow(non_snake_case)]
         impl PreloadedAtoms {
+            fn err_atom_not_present(name: &[u8]) -> Result<x::Atom> {
+                failed(format!("`{}` atom is not present", CStr::from_bytes_with_nul(name).unwrap().to_string_lossy()))
+            }
+            fn err_atom_not_registered(name: &[u8]) -> Result<x::Atom> {
+                failed(format!("`{}` atom was not registered", CStr::from_bytes_with_nul(name).unwrap().to_string_lossy()))
+            }
             $(
                 #[allow(non_snake_case, dead_code)]
                 pub fn $atom(&self) -> Result<x::Atom> {
                     match self.$atom {
-                        0 => failed(format!("{} atom is not present", stringify!($atom))),
+                        0 => Self::err_atom_not_present($name),
                         atom => Ok(atom),
                     }
                 }
             )+
+            pub fn from_name_with_nul(&self, name: &[u8]) -> Result<x::Atom> {
+                assert_eq!(&0, name.last().unwrap());
+                match name {
+                    $($name => self.$atom(),)+
+                    name => Self::err_atom_not_registered(name),
+                }
+            }
+
             pub fn load(x_display: *mut x::Display) -> Result<Self> {
                 $(assert_eq!(&0, $name.last().unwrap());)+
                 let mut atoms = Self::default();
@@ -42,7 +58,21 @@ macro_rules! atoms {
                         );
                     })?;
                 }
+
+                atoms.interesting_xi2_props = [
+                    atoms.Device_Node(),
+                    atoms.Wacom_Tablet_Area(),
+                    atoms.Wacom_Serial_IDs(),
+                    atoms.Wacom_Tool_Type(),
+                ].iter().filter_map(|x| x.as_ref().ok().map(|x| *x)).collect();
+
                 Ok(atoms)
+            }
+            pub fn interesting_xi2_props(&self) -> &[x::Atom] {
+                &self.interesting_xi2_props
+            }
+            pub fn is_interesting_xi2_prop(&self, prop: x::Atom) -> bool {
+                self.interesting_xi2_props.contains(&prop)
             }
         }
     }
@@ -51,7 +81,7 @@ macro_rules! atoms {
 // NOTE: It looks annoying to have to write each atom name twice,
 // but here are reasons for it :
 // - There exist atoms which name is not a valid Rust identifier.
-// - We avoid stringify!() which in turns implies a CString allocation.
+// - We avoid stringify!() which would imply one CString allocation per atom.
 atoms!{
     // Some base atoms
     UTF8_STRING => b"UTF8_STRING\0",
@@ -196,5 +226,44 @@ atoms!{
     XWacomEraser  => b"XWacomEraser\0",
     XTabletStylus => b"XTabletStylus\0",
     XTabletEraser => b"XTabletEraser\0",
+
+    // XInput2 relative axis labels
+    Rel_X              => b"Rel X\0",
+    Rel_Y              => b"Rel Y\0",
+    Rel_Horiz_Scroll   => b"Rel Horiz Scroll\0",
+    Rel_Vert_Scroll    => b"Rel Vert Scroll\0",
+    // XInput2 absolute axis labels
+    Abs_MT_Touch_Major => b"Abs MT Touch Major\0",
+    Abs_MT_Pressure    => b"Abs MT Pressure\0",
+    Abs_X              => b"Abs X\0",
+    Abs_Y              => b"Abs Y\0",
+    Abs_Pressure       => b"Abs Pressure\0",
+    Abs_Tilt_X         => b"Abs Tilt X\0",
+    Abs_Tilt_Y         => b"Abs Tilt Y\0",
+    Abs_Wheel          => b"Abs Wheel\0",
+    // XInput2 mouse buttons labels
+    Button_Left              => b"Button Left\0",
+    Button_Middle            => b"Button Middle\0",
+    Button_Right             => b"Button Right\0",
+    Button_Side              => b"Button Side\0",
+    Button_Extra             => b"Button Extra\0",
+    Button_Forward           => b"Button Forward\0",
+    Button_Back              => b"Button Back\0",
+    Button_Task              => b"Button Task\0",
+    Button_Unknown           => b"Button Unknown\0",
+    Button_Wheel_Up          => b"Button Wheel Up\0",
+    Button_Wheel_Down        => b"Button Wheel Down\0",
+    Button_Horiz_Wheel_Left  => b"Button Horiz Wheel Left\0",
+    Button_Horiz_Wheel_Right => b"Button Horiz Wheel Right\0",
+    // XInput2 properties.
+    // If you add any, make sure to update the `interesting_xi2_props` initialization!
+    Device_Node       => b"Device Node\0", // e.g "/dev/input/event14"
+    Wacom_Tablet_Area => b"Wacom Tablet Area\0", // e.g: 0, 0, 21648, 13700
+    Wacom_Serial_IDs  => b"Wacom Serial IDs\0", // e.g: 216, 0, 2, 0, 0
+    Wacom_Tool_Type   => b"Wacom Tool Type\0", // One of the atoms right below
+        STYLUS            => b"STYLUS\0",
+        ERASER            => b"ERASER\0",
+        PAD               => b"PAD\0",
+        TOUCH             => b"TOUCH\0",
 }
 

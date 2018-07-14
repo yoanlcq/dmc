@@ -4,10 +4,16 @@ use std::slice;
 use std::rc::Rc;
 use std::os::raw::c_int;
 use std::collections::HashMap;
-use super::context::X11SharedContext;
+use super::context::{X11SharedContext};
 use super::x11::xlib as x;
 use super::x11::xinput2 as xi2;
 use super::{X11SharedWindow, X11DeviceID};
+use super::device::{
+    XI2DeviceCache,
+    XI2DeviceRole, XI2DeviceAnyClassInfo,
+    XI2ButtonLabel, XI2AxisLabel,
+    XI2ValuatorClassInfo,
+};
 use os::{OsEventInstant};
 use error::{Result, failed};
 use event::{Event, EventInstant, UnprocessedEvent};
@@ -53,6 +59,7 @@ define_x11_unprocessed_event_enum!{
     XITouchOwnershipEvent (xi2::XITouchOwnershipEvent),
 }
 
+// TODO: Move this somewhere else or get rid of it
 fn io_read_ready(fd: c_int) -> bool {
     loop {
         use nix::poll::*;
@@ -109,7 +116,7 @@ impl X11SharedContext {
             }
             */
         }
-        0
+        // 0
     }
     fn x_next_event(&self) -> x::XEvent {
         unsafe {
@@ -289,7 +296,7 @@ impl X11SharedContext {
         } = e;
 
         if self.xi().is_ok() {
-            return;
+            return self.push_handled_x_event(*e, 0);
         }
 
         let mouse = self.core_x_mouse_deviceid();
@@ -605,6 +612,31 @@ impl X11SharedContext {
         }
     }
 
+    fn xi2_button_label_to_mouse_button_or_scroll(detail: c_int, label: Option<XI2ButtonLabel>) -> (Option<MouseButton>, Option<Vec2<i32>>) {
+        match label {
+            None | Some(XI2ButtonLabel::Unknown ) => {
+                if detail >= 1 && detail <= 3 {
+                    Self::x11_button_to_mousebutton_or_scroll(detail as _)
+                } else {
+                    (Some(MouseButton::Other(detail)), None)
+                }
+            },
+            Some(XI2ButtonLabel::Extra          ) => (Some(MouseButton::Extra    ), None),
+            Some(XI2ButtonLabel::Left           ) => (Some(MouseButton::Left     ), None),
+            Some(XI2ButtonLabel::Middle         ) => (Some(MouseButton::Middle   ), None),
+            Some(XI2ButtonLabel::Right          ) => (Some(MouseButton::Right    ), None),
+            Some(XI2ButtonLabel::Side           ) => (Some(MouseButton::Side     ), None),
+            Some(XI2ButtonLabel::Forward        ) => (Some(MouseButton::Forward  ), None),
+            Some(XI2ButtonLabel::Back           ) => (Some(MouseButton::Back     ), None),
+            Some(XI2ButtonLabel::Task           ) => (Some(MouseButton::Task     ), None),
+            Some(XI2ButtonLabel::Other(other)   ) => (Some(MouseButton::Other(other as _)), None),
+            Some(XI2ButtonLabel::WheelUp        ) => (None, Some(Vec2::new( 0,  1))),
+            Some(XI2ButtonLabel::WheelDown      ) => (None, Some(Vec2::new( 0, -1))),
+            Some(XI2ButtonLabel::HorizWheelLeft ) => (None, Some(Vec2::new(-1,  0))),
+            Some(XI2ButtonLabel::HorizWheelRight) => (None, Some(Vec2::new( 1,  0))),
+        }
+    }
+
     fn pump_x_button_event(&self, e: &mut x::XButtonEvent) {
         let &mut x::XButtonEvent {
             type_, serial: _, send_event: _, display: _, window, root: _, subwindow: _,
@@ -657,17 +689,102 @@ impl X11SharedContext {
     fn pump_xi_device_changed_event(&self, e: &mut xi2::XIDeviceChangedEvent) {
         let &mut xi2::XIDeviceChangedEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
-            time, deviceid, sourceid, reason, num_classes, classes,
+            time: _, deviceid, sourceid,
+            reason, // SlaveSwitch, DeviceChange
+            num_classes, classes,
         } = e;
-        self.push_unhandled_xi2_event(*e);
+
+        match reason {
+            xi2::XISlaveSwitch => {
+                // deviceid is a master, sourceid is the new slave
+                self.xi2_devices.borrow_mut().get_mut(&deviceid).unwrap().info.attachment = sourceid;
+            },
+            xi2::XIDeviceChange => {
+                // Use sourceid; deviceid is undefined
+                // Also don't bother trying to only update the classes. We still lack info such as
+                // the name, the role and even properties (we don't get PropertyAdded events).
+                // Seriously, let's re-query everything and call it a day.
+                let dev = unsafe {
+                    super::device::refresh_xi2_device_cache(*self.lock_x_display(), sourceid, &self.atoms)
+                };
+                if let Ok(dev) = dev {
+                    self.xi2_devices.borrow_mut().insert(sourceid, dev);
+                }
+            },
+            _ => unreachable!(),
+        }
+
+        self.push_handled_xi2_event(*e, 0);
     }
+    fn pump_xi_property_event(&self, e: &mut xi2::XIPropertyEvent) {
+        let &mut xi2::XIPropertyEvent {
+            _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
+            time: _, 
+            deviceid,
+            property, // Atom
+            what, // PropertyCreated, PropertyDeleted, PropertyModified
+        } = e;
+
+        match what {
+            xi2::XIPropertyDeleted => {
+                self.xi2_devices.borrow_mut().get_mut(&deviceid).unwrap().props.remove(&property);
+            },
+            xi2::XIPropertyCreated | xi2::XIPropertyModified => {
+                if self.atoms.is_interesting_xi2_prop(property) {
+                    let value = unsafe {
+                        super::device::xi2_get_device_property(*self.lock_x_display(), deviceid, property)
+                    };
+                    if let Ok(Some(value)) = value {
+                        self.xi2_devices.borrow_mut().get_mut(&deviceid).unwrap().props.insert(property, value);
+                    }
+                }
+            },
+            _ => unreachable!{},
+        };
+
+        self.push_handled_xi2_event(*e, 0);
+    }
+
     fn pump_xi_hierarchy_event(&self, e: &mut xi2::XIHierarchyEvent) {
         let &mut xi2::XIHierarchyEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
-            time, flags, num_info, info,
+            time: _,
+            flags: _, // Combination of MasterAdded, MasterRemoved, SlaveAttached, SlaveDetached, SlaveAdded, SlaveRemoved, DeviceEnabled, DeviceDisabled
+            num_info,
+            info,
         } = e;
+
+        let info = unsafe { slice::from_raw_parts(info, num_info as _) };
+
+        let mut xi2_devices = self.xi2_devices.borrow_mut();
+
+        for info in info {
+            let &xi2::XIHierarchyInfo {
+                deviceid, attachment, _use, enabled: _, flags,
+            } = info;
+            // - if type is MasterPointer or MasterKeyboard, attachment decribes the pairing of this device.
+            // - if type is SlavePointer or SlaveKeyboard, attachment describes the master device this device is attached to.
+            // - if type is FloatingSlave device, attachment is undefined.
+            if let Some(dev) = xi2_devices.get_mut(&deviceid) {
+                dev.info.role = XI2DeviceRole::try_from_xi2_use(_use);
+            }
+
+            let refresh_xi2_device_cache = || unsafe {
+                super::device::refresh_xi2_device_cache(*self.lock_x_display(), deviceid, &self.atoms).unwrap()
+            };
+            if (flags & xi2::XIMasterAdded   ) != 0 { xi2_devices.insert(deviceid, refresh_xi2_device_cache()); }
+            if (flags & xi2::XISlaveAdded    ) != 0 { xi2_devices.insert(deviceid, refresh_xi2_device_cache()); }
+            if (flags & xi2::XISlaveAttached ) != 0 { xi2_devices.get_mut(&deviceid).unwrap().info.attachment = attachment; }
+            if (flags & xi2::XISlaveDetached ) != 0 { xi2_devices.get_mut(&deviceid).unwrap().info.attachment = -1; }
+            if (flags & xi2::XIDeviceEnabled ) != 0 { xi2_devices.get_mut(&deviceid).unwrap().info.is_enabled = true; }
+            if (flags & xi2::XIDeviceDisabled) != 0 { xi2_devices.get_mut(&deviceid).unwrap().info.is_enabled = false; }
+            if (flags & xi2::XIMasterRemoved ) != 0 { xi2_devices.remove(&deviceid); }
+            if (flags & xi2::XISlaveRemoved  ) != 0 { xi2_devices.remove(&deviceid); }
+        }
+
         self.push_unhandled_xi2_event(*e);
     }
+
     fn pump_xi_enter_event(&self, e: &mut xi2::XIEnterEvent) {
         let &mut xi2::XIEnterEvent {
             _type: _, serial: _, send_event: _, display: _, extension: _, evtype,
@@ -678,8 +795,7 @@ impl X11SharedContext {
         } = e;
 
         if deviceid == sourceid { // Ignore master device events; To us, they're duplicates of slave device events
-            self.push_unhandled_xi2_event(*e);
-            return;
+            return self.push_handled_xi2_event(*e, 0);
         }
 
         let keyboard = DeviceID(X11DeviceID::XISlave(sourceid).into());
@@ -709,13 +825,6 @@ impl X11SharedContext {
         self.push_event(motion);
         self.push_event(ev);
     }
-    fn pump_xi_property_event(&self, e: &mut xi2::XIPropertyEvent) {
-        let &mut xi2::XIPropertyEvent {
-            _type: _, serial: _, send_event: _, display: _, extension: _, evtype: _,
-            time, deviceid, property, what,
-        } = e;
-        self.push_unhandled_xi2_event(*e);
-    }
 
     fn pump_xi_device_event(&self, e: &mut xi2::XIDeviceEvent) {
         let &mut xi2::XIDeviceEvent {
@@ -728,9 +837,10 @@ impl X11SharedContext {
             mods, group, // XKB group and modifiers state
         } = e;
 
-        if deviceid == sourceid { // Ignore master device events; To us, they're duplicates of slave device events
-            self.push_unhandled_xi2_event(*e);
-            return;
+        // Ignore master device events; To us, they're duplicates of slave device events.
+        // Also ignore emulated legacy events, otherwise we'll have redundancy.
+        if deviceid == sourceid || (flags & xi2::XIPointerEmulated) != 0 {          
+            return self.push_handled_xi2_event(*e, 0);
         }
 
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
@@ -738,59 +848,119 @@ impl X11SharedContext {
         let root_position = Vec2::new(root_x, root_y);
         let window = WindowHandle(x_window);
         let slave_device_id = DeviceID(X11DeviceID::XISlave(sourceid).into());
+        let motion_ev = if Some(position) == self.previous_mouse_position.replace(Some(position)) {
+            None
+        } else {
+            Some(Event::MouseMotion { mouse: slave_device_id, instant, window, position, root_position })
+        };
+
+        let valuators_mask = unsafe {
+            slice::from_raw_parts(valuators.mask, valuators.mask_len as _)
+        };
+        let nb_values = {
+            let mut nb_values = 0;
+            for i in 0..valuators.mask_len*8 {
+                if xi2::XIMaskIsSet(valuators_mask, i) {
+                    nb_values = i+1;
+                }
+            }
+            nb_values as usize
+        };
+        let valuators_values = unsafe {
+            slice::from_raw_parts(valuators.values, nb_values)
+        };
+
+        let mut xi2_devices = self.xi2_devices.borrow_mut();
 
         match evtype {
-            xi2::XI_Motion => {
-                let ev = Event::MouseMotion {
-                    mouse: slave_device_id,
-                    instant,
-                    window,
-                    position,
-                    root_position,
-                };
-                self.previous_mouse_position.set(Some(position));
-                self.push_handled_xi2_event(*e, 1);
-                self.push_event(ev);
-            },
             // Ignore XI Key events. See src/x11/xi.rs for a rationale.
             xi2::XI_KeyPress | xi2::XI_KeyRelease => self.push_unhandled_xi2_event(*e),
-            // ----
+            xi2::XI_Motion => {
+                let mut prev_abs_scroll = Vec2::new(None, None);
+                let mut cur_abs_scroll = Vec2::new(None, None);
+
+                let dev = xi2_devices.get_mut(&sourceid).unwrap();
+                let mut valuator_i = 0;
+
+                for i in 0..nb_values {
+                    if !xi2::XIMaskIsSet(valuators_mask, i as _) {
+                        continue;
+                    }
+                    let value = valuators_values[valuator_i];
+
+                    let &mut XI2ValuatorClassInfo {
+                        label, axis_info: _, value: ref mut previous_value,
+                    } = dev.info.valuator_classes.get_mut(&i).unwrap();
+
+                    let scroll_delta = dev.info.scroll_classes.get(&i).map(|x| value / x.increment as f64);
+
+                    match label {
+                        None => (),
+                        // Scroll motion
+                        Some(XI2AxisLabel::RelHorizScroll ) => {
+                            cur_abs_scroll.x = Some(scroll_delta.unwrap());
+                            prev_abs_scroll.x = Some(*previous_value);
+                            *previous_value = cur_abs_scroll.x.unwrap();
+                        },
+                        Some(XI2AxisLabel::RelVertScroll  ) => {
+                            cur_abs_scroll.y = Some(scroll_delta.unwrap());
+                            prev_abs_scroll.y = Some(*previous_value);
+                            *previous_value = cur_abs_scroll.y.unwrap();
+                        },
+                        // (Normally) regular mouse events, in which case the MouseMotion event is pushed anyway.
+                        Some(XI2AxisLabel::AbsX           ) => (),
+                        Some(XI2AxisLabel::AbsY           ) => (),
+                        Some(XI2AxisLabel::RelX           ) => (),
+                        Some(XI2AxisLabel::RelY           ) => (),
+                        // I'm not handling these yet
+                        Some(XI2AxisLabel::AbsMTTouchMajor) => (),
+                        Some(XI2AxisLabel::AbsMTPressure  ) => (),
+                        Some(XI2AxisLabel::AbsPressure    ) => (),
+                        Some(XI2AxisLabel::AbsTiltX       ) => (),
+                        Some(XI2AxisLabel::AbsTiltY       ) => (),
+                        Some(XI2AxisLabel::AbsWheel       ) => (),
+                        Some(XI2AxisLabel::Other(_)       ) => (),
+                    }
+
+                    valuator_i += 1;
+                }
+
+                let has_scroll_event = cur_abs_scroll.x.is_some() || cur_abs_scroll.y.is_some();
+                let nb_events = motion_ev.is_some() as usize + has_scroll_event as usize;
+
+                self.push_handled_xi2_event(*e, nb_events);
+                if let Some(motion_ev) = motion_ev {
+                    self.push_event(motion_ev);
+                }
+                if has_scroll_event {
+                    let  cur_abs_scroll =  cur_abs_scroll.map(|x| x.unwrap_or(0.));
+                    let prev_abs_scroll = prev_abs_scroll.map(|x| x.unwrap_or(0.));
+                    let mut scroll = cur_abs_scroll - prev_abs_scroll;
+                    scroll.y *= -1.;
+                    self.push_event(Event::MouseScroll { mouse: slave_device_id, window, instant, scroll });
+                }
+            },
             xi2::XI_ButtonPress | xi2::XI_ButtonRelease => {
                 self.set_net_wm_user_time_for_x_window(x_window, time);
 
-                let mouse = slave_device_id;
-                let (button, scroll) = Self::x11_button_to_mousebutton_or_scroll(detail as _);
-                let motion = if self.previous_mouse_position.replace(Some(position)) == Some(position) {
-                    None
-                } else {
-                    Some(Event::MouseMotion { mouse, window, instant, position, root_position })
-                };
-
-                let ev = match scroll {
-                    Some(scroll) => match evtype {
-                        xi2::XI_ButtonPress => Some(Event::MouseScroll { mouse, window, instant, scroll: scroll.map(|x| x as _), }),
-                        xi2::XI_ButtonRelease => None, // Ignore button release events when it's a scroll button
-                        _ => unreachable!{},
-                    },
-                    None => {
-                        let button = button.unwrap();
-                        let ev = match evtype {
-                            xi2::XI_ButtonPress => Event::MouseButtonPressed { mouse, window, instant, button, clicks: None },
-                            xi2::XI_ButtonRelease => Event::MouseButtonReleased { mouse, window, instant, button },
-                            _ => unreachable!{},
-                        };
-                        Some(ev)
-                    },
-                };
-                let nb_events = motion.is_some() as usize + ev.is_some() as usize;
-                if nb_events > 0 {
-                    self.push_handled_xi2_event(*e, nb_events);
-                    if let Some(motion) = motion {
-                        self.push_event(motion);
-                    }
-                    if let Some(ev) = ev {
-                        self.push_event(ev);
-                    }
+                assert!(detail > 0);
+                let label = xi2_devices[&sourceid].info.button_class.as_ref().unwrap().button_labels[detail as usize - 1];
+                let (button, scroll) = Self::xi2_button_label_to_mouse_button_or_scroll(detail, label);
+                let nb_events = motion_ev.is_some() as usize + button.is_some() as usize + scroll.is_some() as usize;
+                self.push_handled_xi2_event(*e, nb_events);
+                if let Some(motion_ev) = motion_ev {
+                    self.push_event(motion_ev);
+                }
+                if let Some(button) = button {
+                    let button_ev = match evtype {
+                        xi2::XI_ButtonPress   => Event::MouseButtonPressed  { mouse: slave_device_id, window, instant, button, clicks: None, },
+                        xi2::XI_ButtonRelease => Event::MouseButtonReleased { mouse: slave_device_id, window, instant, button },
+                        _ => unreachable!(),
+                    };
+                    self.push_event(button_ev);
+                }
+                if let Some(scroll) = scroll {
+                    self.push_event(Event::MouseScroll { mouse: slave_device_id, window, instant, scroll: scroll.map(|x| x as f64) });
                 }
             },
             // These are to be done
@@ -809,9 +979,10 @@ impl X11SharedContext {
             raw_values, // Unaccelerated values
         } = e;
 
-        if deviceid == sourceid { // Ignore master device events; To us, they're duplicates of slave device events
-            self.push_unhandled_xi2_event(*e);
-            return;
+        // Ignore master device events; To us, they're duplicates of slave device events.
+        // Also ignore emulated legacy events, otherwise we'll have redundancy.
+        if deviceid == sourceid || (flags & xi2::XIPointerEmulated) != 0 {
+            return self.push_handled_xi2_event(*e, 0);
         }
 
         let instant = EventInstant(OsEventInstant::X11EventTimeMillis(time));
@@ -827,29 +998,19 @@ impl X11SharedContext {
             }
             nb_values as usize
         };
-        let raw_values = unsafe {
-            slice::from_raw_parts(raw_values, nb_values)
-        };
         let valuators_values = unsafe {
             slice::from_raw_parts(valuators.values, nb_values)
         };
+        let raw_values = unsafe {
+            slice::from_raw_parts(raw_values, nb_values)
+        };
+
+        let slave_device_id = DeviceID(X11DeviceID::XISlave(sourceid).into());
+        let xi2_devices = self.xi2_devices.borrow();
 
         match evtype {
-            xi2::XI_RawMotion => {
-                let has_x = xi2::XIMaskIsSet(valuators_mask, 0);
-                let has_y = xi2::XIMaskIsSet(valuators_mask, 1);
-                if has_x && has_y {
-                    let mouse = DeviceID(X11DeviceID::XISlave(sourceid).into());
-                    let displacement = Vec2::new(valuators_values[0], valuators_values[1]);
-                    let ev = Event::MouseMotionRaw { mouse, instant, displacement };
-                    self.push_handled_xi2_event(*e, 1);
-                    self.push_event(ev);
-                } else {
-                    self.push_unhandled_xi2_event(*e);
-                }
-            },
             xi2::XI_RawKeyPress | xi2::XI_RawKeyRelease => {
-                let keyboard = DeviceID(X11DeviceID::XISlave(sourceid).into());
+                let keyboard = slave_device_id;
                 let keycode = detail as x::KeyCode;
                 let key = Key {
                     code: Keycode(keycode),
@@ -866,7 +1027,82 @@ impl X11SharedContext {
                 self.push_event(ev);
                 self.previous_xi_raw_key_event.set((sourceid, time, keycode));
             },
-            xi2::XI_RawButtonPress | xi2::XI_RawButtonRelease => self.push_unhandled_xi2_event(*e),
+            xi2::XI_RawMotion => {
+                let mouse = slave_device_id;
+                let mut scroll = Vec2::new(None, None);
+                let mut displacement = Vec2::new(None, None);
+
+                let dev = &xi2_devices[&sourceid];
+                let mut valuator_i = 0;
+
+                for i in 0..nb_values {
+                    if !xi2::XIMaskIsSet(valuators_mask, i as _) {
+                        continue;
+                    }
+                    let value = valuators_values[valuator_i];
+
+                    let &XI2ValuatorClassInfo {
+                        label, axis_info: _, value: _,
+                    } = &dev.info.valuator_classes[&i];
+
+                    let scroll_delta = dev.info.scroll_classes.get(&i).map(|x| value / x.increment as f64);
+
+                    match label {
+                        None => (),
+                        // Scroll motion
+                        Some(XI2AxisLabel::RelHorizScroll ) => scroll.x = Some(scroll_delta.unwrap()),
+                        Some(XI2AxisLabel::RelVertScroll  ) => scroll.y = Some(-scroll_delta.unwrap()),
+                        // Relative mouse motion
+                        Some(XI2AxisLabel::RelX           ) => displacement.x = Some(value),
+                        Some(XI2AxisLabel::RelY           ) => displacement.y = Some(value),
+                        // I'm not handling these yet
+                        Some(XI2AxisLabel::AbsX           ) => (),
+                        Some(XI2AxisLabel::AbsY           ) => (),
+                        Some(XI2AxisLabel::AbsMTTouchMajor) => (),
+                        Some(XI2AxisLabel::AbsMTPressure  ) => (),
+                        Some(XI2AxisLabel::AbsPressure    ) => (),
+                        Some(XI2AxisLabel::AbsTiltX       ) => (),
+                        Some(XI2AxisLabel::AbsTiltY       ) => (),
+                        Some(XI2AxisLabel::AbsWheel       ) => (),
+                        Some(XI2AxisLabel::Other(_)       ) => (),
+                    }
+
+                    valuator_i += 1;
+                }
+
+                let has_scroll_event = scroll.x.is_some() || scroll.y.is_some();
+                let has_displacement_event = displacement.x.is_some() || displacement.y.is_some();
+                let nb_events = has_displacement_event as usize + has_scroll_event as usize;
+
+                self.push_handled_xi2_event(*e, nb_events);
+                if has_displacement_event {
+                    let displacement = displacement.map(|x| x.unwrap_or(0.));
+                    self.push_event(Event::MouseMotionRaw { mouse, instant, displacement });
+                }
+                if has_scroll_event {
+                    let scroll = scroll.map(|x| x.unwrap_or(0.));
+                    self.push_event(Event::MouseScrollRaw { mouse, instant, scroll });
+                }
+            },
+            xi2::XI_RawButtonPress | xi2::XI_RawButtonRelease => {
+                let mouse = slave_device_id;
+                assert!(detail > 0);
+                let label = xi2_devices[&sourceid].info.button_class.as_ref().unwrap().button_labels[detail as usize - 1];
+                let (button, scroll) = Self::xi2_button_label_to_mouse_button_or_scroll(detail, label);
+                let nb_events = button.is_some() as usize + scroll.is_some() as usize;
+                self.push_handled_xi2_event(*e, nb_events);
+                if let Some(button) = button {
+                    let button_ev = match evtype {
+                        xi2::XI_RawButtonPress   => Event::MouseButtonPressedRaw  { mouse, instant, button, },
+                        xi2::XI_RawButtonRelease => Event::MouseButtonReleasedRaw { mouse, instant, button },
+                        _ => unreachable!(),
+                    };
+                    self.push_event(button_ev);
+                }
+                if let Some(scroll) = scroll {
+                    self.push_event(Event::MouseScrollRaw { mouse, instant, scroll: scroll.map(|x| x as f64) });
+                }
+            },
             xi2::XI_RawTouchBegin => self.push_unhandled_xi2_event(*e),
             xi2::XI_RawTouchUpdate => self.push_unhandled_xi2_event(*e),
             xi2::XI_RawTouchEnd => self.push_unhandled_xi2_event(*e),

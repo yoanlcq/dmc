@@ -339,7 +339,7 @@ impl Glx {
             return Ok(glx);
         }
 
-        glx.ext = unsafe {
+        glx.ext = {
             let screen_num = x::XDefaultScreen(x_display);
             let client_vendor  = glXGetClientString(  x_display, GLX_VENDOR);
             let client_version = glXGetClientString(  x_display, GLX_VERSION);

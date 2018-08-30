@@ -1,11 +1,11 @@
 use std::ptr;
 use std::rc::Rc;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ops::Deref;
 use std::mem;
 use error::{Result, failed};
 use window::{Window, WindowSettings, WindowHandle, WindowStyleHint, WindowTypeHint, TitleBarFeatures, Borders};
-use super::{OsContext, OsSharedContext, winapi_utils::*};
+use super::{OsContext, OsSharedContext, HCursor, winapi_utils::*};
 use {Vec2, Extent2, Rect, Rgba};
 
 
@@ -31,6 +31,8 @@ pub struct OsSharedWindow {
     pub max_size: Cell<Option<Extent2<u32>>>,
     pub is_movable: Cell<bool>,
     pub is_mouse_outside: Cell<bool>,
+    pub cursor: RefCell<Rc<HCursor>>,
+    pub is_cursor_visible: Cell<bool>,
 }
 
 #[derive(Debug)]
@@ -50,6 +52,7 @@ impl Drop for OsSharedWindow {
             own_dc: _, // Destroyed with the window. DO NOT destroy it manually because it will fail.
             ref hicon,
             min_size: _, max_size: _, is_movable: _, is_mouse_outside: _,
+            cursor: _, is_cursor_visible: _,
         } = self;
 
         match context.weak_windows.borrow_mut().remove(&hwnd) {
@@ -120,6 +123,8 @@ impl OsContext {
                 max_size: Cell::new(None),
                 is_movable: Cell::new(true),
                 is_mouse_outside: Cell::new(true), // XXX not correct?
+                cursor: RefCell::new(self.create_default_system_cursor().unwrap().0),
+                is_cursor_visible: Cell::new(true),
             };
             if let Some(opengl) = opengl.as_ref() {
                 let pf = os_window.choose_gl_pixel_format(*opengl)?;
@@ -160,6 +165,8 @@ impl OsContext {
                     max_size: Cell::new(max_size),
                     is_movable: Cell::new(is_movable),
                     is_mouse_outside: Cell::new(true),
+                    cursor: RefCell::new(self.create_default_system_cursor().unwrap().0),
+                    is_cursor_visible: Cell::new(true),
                 };
                 let _ = os_window.call_track_mouse_event();
                 Ok(OsWindow(Rc::new(os_window)))

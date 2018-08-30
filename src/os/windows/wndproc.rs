@@ -277,6 +277,17 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
             }
             0
         },
+        w32::WM_SETCURSOR => {
+            if w32::LOWORD(lparam as _) as isize == w32::HTCLIENT {
+                let window = retrieve_window(hwnd).unwrap();
+                unsafe { w32::ShowCursor(window.is_cursor_visible.get() as _); }
+                let cursor = window.cursor.borrow();
+                unsafe { w32::SetCursor(cursor.0); }
+                1
+            } else {
+                default_window_proc()
+            }
+        },
         w32::WM_ACTIVATEAPP
         | w32::WM_CANCELMODE
         | w32::WM_CHILDACTIVATE
@@ -321,7 +332,6 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LP
         | w32::WM_NCXBUTTONDOWN
         | w32::WM_NCXBUTTONUP
         | w32::WM_ACTIVATE
-        | w32::WM_SETCURSOR
         | _ => default_window_proc(),
     }
 }

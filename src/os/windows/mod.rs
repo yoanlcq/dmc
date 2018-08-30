@@ -8,7 +8,7 @@ pub mod window;
 pub use self::window::{OsWindow, OsSharedWindow, OsWindowHandle, OsWindowFromHandleParams};
 pub mod desktop;
 pub mod cursor;
-pub use self::cursor::OsCursor;
+pub use self::cursor::{OsCursor, HCursor};
 pub mod gl;
 pub use self::gl::{OsGLContext, OsGLPixelFormat};
 pub mod event_instant;

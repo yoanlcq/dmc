@@ -21,6 +21,7 @@ pub struct OsCursor(pub Rc<HCursor>);
 fn system_cursor_resid(s: SystemCursor) -> Option<LPCWSTR> {
     Some(match s {
         SystemCursor::Arrow => w32::IDC_ARROW,
+        SystemCursor::UpArrow => w32::IDC_UPARROW,
         SystemCursor::Hand => w32::IDC_HAND,
         SystemCursor::Ibeam => w32::IDC_IBEAM,
         SystemCursor::Wait => w32::IDC_WAIT,
@@ -28,9 +29,9 @@ fn system_cursor_resid(s: SystemCursor) -> Option<LPCWSTR> {
         SystemCursor::WaitArrow => w32::IDC_APPSTARTING,
         SystemCursor::ResizeNWToSE => w32::IDC_SIZENWSE,
         SystemCursor::ResizeNEToSW => w32::IDC_SIZENESW,
-        SystemCursor::ResizeV => w32::IDC_SIZEWE,
-        SystemCursor::ResizeH => w32::IDC_SIZENS,
-        SystemCursor::ResizeHV => w32::IDC_SIZEALL,
+        SystemCursor::ResizeWE => w32::IDC_SIZEWE,
+        SystemCursor::ResizeNS => w32::IDC_SIZENS,
+        SystemCursor::ResizeAll => w32::IDC_SIZEALL,
         SystemCursor::Deny => w32::IDC_NO,
         SystemCursor::Question => w32::IDC_HELP,
         _ => return None,
